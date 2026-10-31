@@ -81,6 +81,7 @@ public partial class MainWindow : Window
         {
             GameSummary.Text = "No installation selected.";
             LoaderSummary.Text = "";
+            DiagnosisText.Text = "";
             RunSummary.Text = "";
             DelayBox.Text = "";
             DelaySummary.Text = "";
@@ -115,6 +116,16 @@ public partial class MainWindow : Window
         DelaySummary.Text = config.Malformed
             ? $"{LoaderConfig.FileName} is malformed, so the proxy is using the default {LoaderConfig.DefaultDelayMs} ms."
             : config.Describe();
+
+        var report = RunReportReader.Read(_install.GamePath);
+        var diagnosis = RunDiagnosis.Describe(report, config, state.Installed);
+        DiagnosisText.Text = diagnosis.Text;
+        DiagnosisText.Foreground = diagnosis.Severity switch
+        {
+            DiagnosisSeverity.Ok => Avalonia.Media.Brushes.LightGreen,
+            DiagnosisSeverity.Warning => Avalonia.Media.Brushes.Goldenrod,
+            _ => Avalonia.Media.Brushes.OrangeRed,
+        };
     }
 
     private void SaveDelay()

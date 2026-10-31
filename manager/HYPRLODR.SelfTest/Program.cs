@@ -24,6 +24,10 @@ internal static class Program
         Register("loader_config_round_trip", LoaderConfigRoundTrips);
         Register("loader_config_clamps", LoaderConfigClamps);
         Register("loader_config_preserves_keys", LoaderConfigPreservesKeysAndFlagsGarbage);
+        Register("diagnosis_not_installed", DiagnosisNotInstalled);
+        Register("diagnosis_explains_the_delay", DiagnosisExplainsTheDelay);
+        Register("diagnosis_success_and_mismatch", DiagnosisReportsSuccessAndMismatch);
+        Register("diagnosis_reports_failures", DiagnosisReportsFailures);
         Register("discovery_manual_path", () => DiscoveryManualPath(sample));
         Register("loader_install_and_inspect", () => LoaderInstall(sample));
         Register("loader_refuses_double_install", () => LoaderDoubleInstall(sample));
@@ -64,6 +68,68 @@ internal static class Program
     }
 
     private static void Register(string name, Action body) => Scenarios.Add((name, body));
+
+    // ---------------------------------------------------------------- diagnosis
+
+    private static Diagnosis Diagnose(RunReport report, int delayMs, bool installed = true) =>
+        RunDiagnosis.Describe(report, new LoaderConfig { DelayMs = delayMs }, installed);
+
+    private static void DiagnosisNotInstalled()
+    {
+        var diagnosis = Diagnose(new RunReport(), 2500, installed: false);
+        Check(diagnosis.Severity == DiagnosisSeverity.Warning, $"severity was {diagnosis.Severity}");
+        Check(diagnosis.Text.Contains("not installed", StringComparison.Ordinal), diagnosis.Text);
+    }
+
+    private static void DiagnosisExplainsTheDelay()
+    {
+        // The failure that hid every mod result: the process died during the delay.
+        var stuck = new RunReport { AttachPresent = true, Stage = "attached" };
+        var withDelay = Diagnose(stuck, 2500);
+        Check(withDelay.Severity == DiagnosisSeverity.Warning, $"severity was {withDelay.Severity}");
+        Check(withDelay.Text.Contains("2500", StringComparison.Ordinal), withDelay.Text);
+        Check(withDelay.Text.Contains("delay to 0", StringComparison.OrdinalIgnoreCase), withDelay.Text);
+
+        // With no delay the cause is different and must not be blamed on the delay.
+        var noDelay = Diagnose(new RunReport { AttachPresent = true, Stage = "initializing" }, 0);
+        Check(!noDelay.Text.Contains("Set the delay", StringComparison.Ordinal), noDelay.Text);
+        Check(noDelay.Text.Contains("no delay", StringComparison.Ordinal), noDelay.Text);
+    }
+
+    private static void DiagnosisReportsSuccessAndMismatch()
+    {
+        var ok = Diagnose(new RunReport
+        {
+            AttachPresent = true, Stage = "mods_loaded", ModsInitialized = 5,
+            EventCount = 35, BuildMatches = true, AnchorsMatched = 8, AnchorsTotal = 8,
+        }, 0);
+        Check(ok.Severity == DiagnosisSeverity.Ok, $"severity was {ok.Severity}");
+        Check(ok.Text.Contains("5 mod", StringComparison.Ordinal), ok.Text);
+
+        var mismatched = Diagnose(new RunReport
+        {
+            AttachPresent = true, Stage = "mods_loaded", ModsInitialized = 5,
+            EventCount = 35, BuildMatches = false, AnchorsMatched = 0, AnchorsTotal = 8,
+        }, 0);
+        Check(mismatched.Severity == DiagnosisSeverity.Warning, "a different build must not read as success");
+        Check(mismatched.Text.Contains("0/8", StringComparison.Ordinal), mismatched.Text);
+    }
+
+    private static void DiagnosisReportsFailures()
+    {
+        var failed = Diagnose(new RunReport
+        {
+            AttachPresent = true, Stage = "mods_failed", ModsInitialized = 0,
+            EventCount = 3, LastError = "missing dependency: not.there",
+        }, 2500);
+        Check(failed.Severity == DiagnosisSeverity.Error, $"severity was {failed.Severity}");
+        Check(failed.Text.Contains("missing dependency", StringComparison.Ordinal), failed.Text);
+
+        // Loader ran fine but nothing was enabled: not an error, but not success either.
+        var empty = Diagnose(new RunReport { AttachPresent = true, Stage = "mods_loaded" }, 2500);
+        Check(empty.Severity == DiagnosisSeverity.Warning, $"severity was {empty.Severity}");
+        Check(empty.Text.Contains("no mods", StringComparison.OrdinalIgnoreCase), empty.Text);
+    }
 
     // ------------------------------------------------------------ loader config
 

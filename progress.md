@@ -41,3 +41,5 @@
 Details: `docs/TESTING.md` (what is and is not verified), `docs/ROADMAP.md` (next steps).
 
 **Start-up delay in the manager.** `LoaderConfig` reads and writes `<game>/hyprlodr-config.json`, preserving unknown keys and clamping to 0-60000; the Game tab exposes it next to the last-run panel, and a malformed file is reported rather than silently replaced by the proxy's default. Four headless scenarios cover the absent-file default, round-trip, clamping (on write and on read) and key preservation plus garbage handling.
+
+**Run diagnosis in the manager.** `RunDiagnosis` combines the attach record, event log, install state and delay into one sentence in the Game tab. The important case is the one that hid a working loader: process ended during the delay, zero events. It says so and points at the delay, and when the delay is already 0 it explicitly does **not** blame the delay. Four headless scenarios cover not-installed, delay-caused, success, build mismatch, loader error and "ran but enabled nothing".

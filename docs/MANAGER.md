@@ -60,3 +60,20 @@ The Game tab has a **Mod start-up delay (ms)** field next to the last-run panel.
 The proxy waits that long after attaching before it resolves mods. If the game's process lives only a couple of seconds in a given setup, the default delay can outlive it and no mod event is ever written — the panel then shows `stage: "attached"` or `"initializing"` with zero events, which looks like a broken loader. Setting `0` initializes mods immediately.
 
 The manager clamps the value to 0–60000, keeps any other keys already in the file, reports a malformed file instead of hiding it (the proxy silently falls back to 2500 ms in that case), and never creates the file until you press **Apply delay**.
+
+## Run diagnosis
+
+The Game tab shows one sentence above the last-run panel, derived from the attach record, the event log, the install state and the delay setting:
+
+| Situation | What it says |
+|---|---|
+| Not installed | "The loader is not installed. Install it, then launch the game once." |
+| Installed, never launched | "No run is recorded yet." |
+| Process ended inside the start-up delay | "The game process ended during the 2500 ms start-up delay, so no mod initialized. Set the delay to 0 and launch the game again." |
+| Process ended with no delay | Says the process ended anyway and points at the fingerprint and installed mods — it does **not** blame the delay. |
+| Mods initialized | "5 mod(s) initialized in the last run (35 event(s) recorded)." |
+| Mods initialized on a different build | Warning quoting the anchor count; address-dependent features must stay off. |
+| Loader ran, nothing enabled | "initialized no mods: none are enabled… or all of them failed to load." |
+| Loader reported an error | Error severity, quoting the loader's own message. |
+
+`RunDiagnosis` is a pure function over `RunReport` + `LoaderConfig` + the install flag, so all of it is covered by headless scenarios rather than needing a running game.
