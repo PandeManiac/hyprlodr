@@ -11,7 +11,7 @@ The original game files are never modified destructively: installing the loader 
 | Level | Description | Status |
 |---|---|---|
 | 1 | Five independently compiled mods load, respect dependency order, share state, shut down in reverse | **Verified** (Linux + Windows x64 under Wine) |
-| 2 | Diagnostic mod executes inside the real HYPER DEMON process | **Not verified** — loader attaches and runs mods in a stand-in process; the real game has not been launched |
+| 2 | Diagnostic mod executes inside the real HYPER DEMON process | **Verified 2026-10-31** — `hyperdemon.exe` launched through Steam/Proton initialized all five mods in-process; evidence in `docs/evidence/` |
 | 3 | Desktop mod manager | Not started (installer/uninstaller script exists) |
 | 4 | Mods change the game | Not started |
 | 5 | Asset replacement | Not started (asset pack documented, format unknown) |
@@ -27,6 +27,7 @@ Details and evidence: `docs/RESEARCH.md`, `docs/TESTING.md`, `docs/ROADMAP.md`.
 - **23-scenario test suite** driving the real host binary, including randomized discovery order.
 - **Windows x64 build** with no Windows SDK, mingw or CRT dependency: the loader ships its own minimal libc on kernel32 and generates its import library with `llvm-dlltool`.
 - **OpenAL32 proxy** with 175 generated PE forwarders to the renamed original, so audio behaviour is untouched.
+- **Real game integration**: with the proxy installed, HYPER DEMON starts normally and mods initialize inside the game process (29 s session, 5/5 mods, original library restored by uninstall).
 - **Read-only diagnostics** (`tools/hyprl_diagnose.py`) that locate Steam libraries on Linux/Windows, hash the shipped binaries, parse PE headers/imports/exports, detect Proton, and report existing HYPRLODR state.
 
 ## Build

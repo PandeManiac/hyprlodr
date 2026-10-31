@@ -1,0 +1,30 @@
+{"seq":1,"event":"discovery_complete","mod":"","message":""}
+{"seq":2,"event":"discovered","mod":"00.final","message":"S:\\steamapps\\common\\hyperdemon\\mods\\00.final.dll"}
+{"seq":3,"event":"discovered","mod":"a.palette","message":"S:\\steamapps\\common\\hyperdemon\\mods\\a.palette.dll"}
+{"seq":4,"event":"discovered","mod":"b.audio","message":"S:\\steamapps\\common\\hyperdemon\\mods\\b.audio.dll"}
+{"seq":5,"event":"discovered","mod":"m.overlay","message":"S:\\steamapps\\common\\hyperdemon\\mods\\m.overlay.dll"}
+{"seq":6,"event":"discovered","mod":"z.foundation","message":"S:\\steamapps\\common\\hyperdemon\\mods\\z.foundation.dll"}
+{"seq":7,"event":"resolved","mod":"z.foundation","message":"1.0.0"}
+{"seq":8,"event":"resolved","mod":"a.palette","message":"1.0.0"}
+{"seq":9,"event":"resolved","mod":"b.audio","message":"1.0.0"}
+{"seq":10,"event":"resolved","mod":"m.overlay","message":"1.0.0"}
+{"seq":11,"event":"resolved","mod":"00.final","message":"1.0.0"}
+{"seq":12,"event":"initialize_begin","mod":"z.foundation","message":"1.0.0"}
+{"seq":13,"event":"capability_registered","mod":"z.foundation","message":"test.foundation"}
+{"seq":14,"event":"log","mod":"z.foundation","message":"info: created shared test state and registered test.foundation"}
+{"seq":15,"event":"initialize_ok","mod":"z.foundation","message":""}
+{"seq":16,"event":"initialize_begin","mod":"a.palette","message":"1.0.0"}
+{"seq":17,"event":"capability_registered","mod":"a.palette","message":"test.palette"}
+{"seq":18,"event":"log","mod":"a.palette","message":"info: validated foundation state and applied palette"}
+{"seq":19,"event":"initialize_ok","mod":"a.palette","message":""}
+{"seq":20,"event":"initialize_begin","mod":"b.audio","message":"1.0.0"}
+{"seq":21,"event":"capability_registered","mod":"b.audio","message":"test.audio"}
+{"seq":22,"event":"log","mod":"b.audio","message":"info: registered independent audio test capability"}
+{"seq":23,"event":"initialize_ok","mod":"b.audio","message":""}
+{"seq":24,"event":"initialize_begin","mod":"m.overlay","message":"1.0.0"}
+{"seq":25,"event":"capability_registered","mod":"m.overlay","message":"test.overlay"}
+{"seq":26,"event":"log","mod":"m.overlay","message":"info: observed modified state and registered overlay capability"}
+{"seq":27,"event":"initialize_ok","mod":"m.overlay","message":""}
+{"seq":28,"event":"initialize_begin","mod":"00.final","message":"1.0.0"}
+{"seq":29,"event":"log","mod":"00.final","message":"info: confirmed all prerequisites and shared state"}
+{"seq":30,"event":"initialize_ok","mod":"00.final","message":""}

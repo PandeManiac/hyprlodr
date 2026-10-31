@@ -57,20 +57,42 @@ The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
-## Not verified (requires the real game)
+## Real game (verified 2026-10-31)
 
-- Launching HYPER DEMON with the proxy installed and confirming `hyprlodr-attach.json` names `hyperdemon.exe` with a matching PID.
-- Confirming audio still works through the forwarders inside the game.
-- Confirming the game does not object to the extra files.
-- Any claim about competitive scoring safety.
+HYPER DEMON was launched through Steam (Proton Experimental, Steam Runtime 4) with the loader installed. Recorded evidence, committed verbatim as `docs/evidence/`:
 
-Procedure to close that gap:
+`hyprlodr-attach.json`:
 
-1. `python3 tools/hyprl_install.py install --game-dir "<game>" --build build-win` (prompts before changing anything).
-2. Launch HYPER DEMON from Steam, play for a minute, exit.
-3. `cat "<game>/hyprlodr-attach.json"` — expect `"exe": "...\\hyperdemon.exe"`, a real `pid`, `"stage": "mods_loaded"`.
-4. `grep initialize_ok "<game>/hyprlodr-events.jsonl"` — expect the five sample ids.
-5. `python3 tools/hyprl_install.py uninstall --game-dir "<game>"`, then `tools/hyprl_diagnose.py` and confirm `OpenAL32.dll` hashes to `396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4`.
+```json
+{"stage":"mods_loaded","pid":316,"proxy_dir":"S:\\steamapps\\common\\hyperdemon","exe":"S:\\steamapps\\common\\hyperdemon\\hyperdemon.exe","loader_abi":2,"status":0,"status_text":"ok"}
+```
+
+`hyprlodr-events.jsonl` (30 events) contains the five `discovered` events from `S:\steamapps\common\hyperdemon\mods\*.dll`, the five `initialize_ok` events in dependency order, and the mods' own log lines — for example `z.foundation: "created shared test state and registered test.foundation"` and `00.final: "confirmed all prerequisites and shared state"`. Those strings can only be produced by the mod DLLs running inside the process that loaded them.
+
+Verified outcomes:
+
+- The replacement `OpenAL32.dll` is accepted by the Windows loader inside Proton: `hyperdemon.exe` has 26 static OpenAL imports, so the process cannot start at all unless every forwarded export resolves.
+- All five mods initialized in order `z.foundation, a.palette, b.audio, m.overlay, 00.final`; the game ran for 29 s without error.
+- `hyprl_install.py uninstall` restored `OpenAL32.dll` to `396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4`, byte-identical to the shipped file.
+
+## Still unverified
+
+- **Audio output quality**: the process proves the `al*`/`alc*` symbols resolve into the real library; nobody has listened to the game with the proxy installed.
+- **Game-level behaviour** beyond start-up: no gameplay, scoring or online feature was exercised.
+- **Windows native** (non-Proton) execution.
+- Any claim about competitive-scoring safety.
+- A `/proc/<pid>/maps` check for `OpenAL32_real.dll` was inconclusive: it targeted the Proton launcher pid rather than the game's Wine process. Symbol resolution is the stronger evidence anyway.
+
+Re-running the real-game check:
+
+```bash
+GAME=/path/to/steamapps/common/hyperdemon
+python3 tools/hyprl_install.py install --game-dir "$GAME" --build build-win --yes
+steam -applaunch 1743850          # wait ~20 s
+cat "$GAME/hyprlodr-attach.json"  # expect stage=mods_loaded, exe=...\hyperdemon.exe
+python3 tools/hyprl_install.py uninstall --game-dir "$GAME" --yes
+sha256sum "$GAME/OpenAL32.dll"    # expect 396f8873...420b4
+```
 
 ## Limitations
 

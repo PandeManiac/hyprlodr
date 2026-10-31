@@ -9,7 +9,7 @@
 | `hyperdemon.exe` SHA-256 | `7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611` |
 | `OpenAL32.dll` SHA-256 | `396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4` |
 | Executable | PE32+ x86-64, GUI subsystem, timestamp 2024-09-19 |
-| Runtime | Linux + Proton (`compatdata/1743850` present); Windows native path untested |
+| Runtime | Linux + Proton Experimental, exercised in the real game 2026-10-31; Windows native path untested |
 
 `python3 tools/hyprl_diagnose.py` reproduces this table for any installation.
 

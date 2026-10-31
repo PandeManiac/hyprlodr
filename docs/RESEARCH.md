@@ -68,6 +68,22 @@ hyperdemon/
 | Asset redirection | Asset container unanalysed | Deferred until the container format is understood. |
 | Steam API patching | Would touch DRM-adjacent surface | Rejected. Nothing in HYPRLODR patches Steam or integrity checks. |
 
+## Real-game execution evidence (2026-10-31)
+
+**Observed** with the proxy installed and HYPER DEMON launched through Steam/Proton Experimental (Steam Runtime 4):
+
+- `hyprlodr-attach.json` in the game directory reported `"stage": "mods_loaded"`, `"loader_abi": 2`, `"status": 0`, and `"exe": "S:\\steamapps\\common\\hyperdemon\\hyperdemon.exe"` — the Proton drive mapping of the game directory, i.e. the module that loaded the proxy is the game executable itself.
+- `hyprlodr-events.jsonl` contains 30 events: five `discovered` events with full `S:\...\mods\*.dll` paths, five `initialize_ok` events in the order `z.foundation, a.palette, b.audio, m.overlay, 00.final`, and five mod-authored `log` events including `z.foundation` "created shared test state and registered test.foundation" and `00.final` "confirmed all prerequisites and shared state".
+- The session lasted 29 seconds with the process alive and responsive; no crash, no loader error event.
+
+**Inferred:** because `hyperdemon.exe` imports 26 `al*`/`alc*` symbols statically, the Windows loader resolves all of them from this DLL table before the game's entry point runs. The game starting normally is therefore direct evidence that the 175-entry forwarder table resolves into `OpenAL32_real.dll` — a missing export would have aborted process start-up.
+
+**Inferred:** the loader bootstrap ran outside the loader lock: mods opened their own files and ran three capability registrations and multiple state writes without deadlock.
+
+**Not observed:** audio output quality, gameplay behaviour, and any scoring/online interaction. `steamuser.log` was created in the game directory by the run (game-authored, left in place).
+
+Raw files: `docs/evidence/2026-10-31-attach.json`, `docs/evidence/2026-10-31-events.jsonl`.
+
 ## Tooling available
 
 **Observed:** `clang 23.1.3`, `lld-link`, `llvm-dlltool`, `cmake`, `ninja`, `ghidra 12.1.2` (`/usr/bin/ghidra`), `rea` CLI 6.7.0, `wine 11.20 (Staging)`, `.NET SDK 10.0.113`.

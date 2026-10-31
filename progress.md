@@ -12,6 +12,8 @@
 
 **Tooling.** Read-only diagnostics with an independent PE parser (verified against the real installation), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers, full documentation set.
 
-**Not done.** The real game has not been launched with the proxy installed, so Level 2 remains unverified. No package format tooling, no desktop manager, no asset-format analysis.
+**Real game (Level 2 verified).** Installed the loader into the local Steam installation, launched HYPER DEMON through Steam/Proton, and confirmed from inside the process that all five mods initialized in dependency order (`hyprlodr-attach.json` named `hyperdemon.exe`, 30 lifecycle events, five mod-authored log lines). Uninstalled afterwards and verified `OpenAL32.dll` is byte-identical to the shipped file. Evidence committed in `docs/evidence/`.
+
+**Not done.** No package format tooling, no desktop manager, no asset-format analysis, no audio-quality or gameplay verification.
 
 Details: `docs/TESTING.md` (what is and is not verified), `docs/ROADMAP.md` (next steps).
