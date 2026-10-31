@@ -90,6 +90,25 @@ DWORD WINAPI GetCurrentProcessId(void);
 HANDLE WINAPI FindFirstFileA(LPCSTR pattern, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindNextFileA(HANDLE find, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindClose(HANDLE find);
+/* Minimal exception plumbing for the crash diagnostic. */
+typedef struct {
+    DWORD ExceptionCode;
+    DWORD ExceptionFlags;
+    void *ExceptionRecord;
+    void *ExceptionAddress;
+    DWORD NumberParameters;
+    ULONG_PTR ExceptionInformation[15];
+} HYPR_EXCEPTION_RECORD;
+
+typedef struct {
+    HYPR_EXCEPTION_RECORD *ExceptionRecord;
+    void *ContextRecord;
+} HYPR_EXCEPTION_POINTERS;
+
+typedef LONG (*LPTOP_LEVEL_EXCEPTION_FILTER)(HYPR_EXCEPTION_POINTERS *info);
+LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter(
+    LPTOP_LEVEL_EXCEPTION_FILTER filter);
+
 BOOL WINAPI CreateDirectoryA(LPCSTR path, void *security);
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, void *security,
                           DWORD disposition, DWORD flags, HANDLE template_file);

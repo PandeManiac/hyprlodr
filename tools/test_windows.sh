@@ -80,10 +80,14 @@ print(f"build fingerprint: {attach['anchors_matched']}/{attach['anchors_total']}
 # The stand-in host has no asset tables at those RVAs, so the dump must decline
 # rather than read past the image.
 assert attach["tables_dumped"] is False, attach
+# proxy_client.exe exits normally, so the crash filter must stay silent: it is
+# chained into the process and must never fire without an unhandled exception.
+assert not (base / "hyprlodr-crash.json").exists(), "crash filter fired on a clean exit"
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init
 print("proxy bootstrap: mods initialized inside the host process")
+print("crash filter: silent on a clean exit")
 PY
 else
   echo "skipped proxy runtime test: pass the original OpenAL32.dll path as the second argument"

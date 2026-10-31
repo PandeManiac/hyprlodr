@@ -133,6 +133,47 @@ static void put_hex(FILE *file, uint64_t value, unsigned digits) {
     }
 }
 
+/* --- crash diagnostics --------------------------------------------------------
+ * The game can die during start-up without recording anything, leaving Steam's
+ * crash handler with a dump that names no module. This filter only runs when an
+ * exception would otherwise be unhandled, writes the code and faulting address,
+ * and then always hands control back to whatever filter was installed before us
+ * (Steam installs one), so crash reporting behaviour is unchanged.
+ */
+static LPTOP_LEVEL_EXCEPTION_FILTER g_previous_filter;
+
+static LONG WINAPI hyprlodr_crash_filter(HYPR_EXCEPTION_POINTERS *info) {
+    uint32_t code = 0;
+    uint64_t address = 0;
+    if (info && info->ExceptionRecord) {
+        code = info->ExceptionRecord->ExceptionCode;
+        address = (uint64_t)(uintptr_t)info->ExceptionRecord->ExceptionAddress;
+    }
+
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-crash.json", g_game_dir);
+    FILE *file = fopen(path, "w");
+    if (file) {
+        fputs("{\"exception_code\":\"", file);
+        put_hex(file, (uint64_t)code, 8u);
+        fputs("\",\"exception_address\":\"", file);
+        put_hex(file, address, 16u);
+        fputs("\",\"module_base\":\"", file);
+        put_hex(file, (uint64_t)(uintptr_t)g_module.base, 16u);
+        fputs("\"", file);
+        if (g_module.parsed && address >= (uint64_t)(uintptr_t)g_module.base) {
+            fputs(",\"module_offset\":\"", file);
+            put_hex(file, address - (uint64_t)(uintptr_t)g_module.base, 8u);
+            fputs("\"", file);
+        }
+        fputs("}\n", file);
+        fclose(file);
+    }
+
+    /* 0 == EXCEPTION_CONTINUE_SEARCH: let the previous handler decide. */
+    return g_previous_filter ? g_previous_filter(info) : 0;
+}
+
 static void write_attach_record(const char *stage, int status) {
     if (!g_anchors_checked) inspect_main_module();
     FILE *file = fopen(g_evidence_path, "w");
@@ -239,6 +280,8 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         trim_filename(g_game_dir);
         snprintf(g_evidence_path, sizeof g_evidence_path, "%s\\hyprlodr-attach.json", g_game_dir);
         DisableThreadLibraryCalls((HMODULE)instance);
+        /* Chain, do not replace: Steam's crash handler stays in charge. */
+        g_previous_filter = SetUnhandledExceptionFilter(hyprlodr_crash_filter);
         /* Never run mod code or file I/O for mods under the loader lock. */
         CreateThread(NULL, 0, bootstrap, NULL, 0, NULL);
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {

@@ -149,6 +149,8 @@ Anchors for the shipped build (`docs/evidence/2026-10-31-anchors.json`): four st
 | Real game (`hyperdemon.exe` under Proton) | `module_base=0x140000000`, timestamp `0x66ecd8b5` matches, **8/8 anchors matched**, `build_matches=true` |
 | Live cipher tables (real game) | `tables_dumped=true`; the 512 bytes copied out of the running image are byte-identical to the file's `.rdata`, so no runtime transformation occurs |
 | Live cipher tables (Wine stand-in) | `tables_dumped=false` — the RVAs are outside that image, so the proxy declines instead of reading past it |
+| Crash filter (real game) | No `hyprlodr-crash.json` was written during the 2026-10-31 run, so the early exit raises no unhandled exception — it is not an in-process fault |
+| Crash filter (Wine stand-in) | A clean `proxy_client.exe` exit writes no crash record; asserting this proves the chained filter stays silent unless an exception is genuinely unhandled |
 
 `docs/evidence/2026-10-31-fingerprint.json` is the attach record written by the game process itself. It also shows `module_size=4214784`, matching the PE `SizeOfImage`, which is the range the anchors were verified against.
 
@@ -163,7 +165,7 @@ cat "$GAME/hyprlodr-attach.json"   # expect build_matches=true, anchors_matched 
 
 A mismatch is reported, never optimised away. Nothing is hooked today, so `build_matches=false` still loads mods; any future address-dependent hook must require it.
 
-Note on the 2026-10-31 re-run: the game process exited a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy). The attach record is therefore written before the mod start-up delay, which is why the fingerprint was captured; the five-mod initialization evidence remains the earlier `docs/evidence/2026-10-31-attach.json` run.
+Note on the 2026-10-31 re-run: the game process exited a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy). The attach record is therefore written before the mod start-up delay, which is why the fingerprint was captured and the crash record was not: that re-run wrote **no** `hyprlodr-crash.json`, so the exit is not an unhandled exception inside the game process. The five-mod initialization evidence remains the earlier `docs/evidence/2026-10-31-attach.json` run.
 
 ## Still unverified
 
