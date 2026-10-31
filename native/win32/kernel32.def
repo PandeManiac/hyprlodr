@@ -1,0 +1,26 @@
+; Import library definition for the kernel32 entry points HYPRLODR uses.
+; Converted to a .lib by llvm-dlltool in tools/build_windows.sh.
+LIBRARY KERNEL32.dll
+EXPORTS
+CreateFileA
+CreateThread
+DisableThreadLibraryCalls
+FindClose
+FindFirstFileA
+FindNextFileA
+FreeLibrary
+GetCommandLineA
+GetCurrentProcessId
+GetProcessHeap
+GetModuleFileNameA
+GetModuleHandleA
+GetProcAddress
+GetStdHandle
+HeapAlloc
+HeapFree
+HeapReAlloc
+LoadLibraryA
+ReadFile
+Sleep
+WriteFile
+CloseHandle

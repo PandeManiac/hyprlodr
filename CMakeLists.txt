@@ -1,22 +1,25 @@
 cmake_minimum_required(VERSION 3.20)
-project(hyprlodr VERSION 0.1.0 LANGUAGES C)
+project(hyprlodr VERSION 0.2.0 LANGUAGES C)
 
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 include(CTest)
 
+set(HYPRLODR_WARNINGS -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion)
+
 add_library(hyprlodr_loader STATIC native/src/loader.c)
 target_include_directories(hyprlodr_loader PUBLIC native/include)
-target_compile_options(hyprlodr_loader PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(hyprlodr_loader PRIVATE ${HYPRLODR_WARNINGS})
 if(UNIX AND NOT APPLE)
   target_link_libraries(hyprlodr_loader PUBLIC dl)
 endif()
 
 add_executable(hyprlodr-host native/src/host.c)
 target_link_libraries(hyprlodr-host PRIVATE hyprlodr_loader)
-target_compile_options(hyprlodr-host PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(hyprlodr-host PRIVATE ${HYPRLODR_WARNINGS})
 
+# --- Mandatory sample mod suite ------------------------------------------------
 set(MOD_IDS z.foundation a.palette b.audio m.overlay 00.final)
 set(MOD_SOURCES foundation palette audio overlay final)
 list(LENGTH MOD_IDS MOD_COUNT)
@@ -26,13 +29,67 @@ foreach(I RANGE ${MOD_LAST})
   list(GET MOD_SOURCES ${I} MOD_SOURCE)
   add_library(mod_${MOD_SOURCE} SHARED samples/${MOD_SOURCE}.c)
   target_include_directories(mod_${MOD_SOURCE} PRIVATE native/include)
-  target_compile_options(mod_${MOD_SOURCE} PRIVATE -Wall -Wextra -Wpedantic -Werror)
-  set_target_properties(mod_${MOD_SOURCE} PROPERTIES PREFIX "" OUTPUT_NAME "${MOD_ID}")
+  target_compile_options(mod_${MOD_SOURCE} PRIVATE ${HYPRLODR_WARNINGS})
+  set_target_properties(mod_${MOD_SOURCE} PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "${MOD_ID}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mods")
 endforeach()
+
+# --- Error-case fixtures -------------------------------------------------------
+# Each fixture is the same source compiled with different identity macros.
+function(hyprlodr_fixture name)
+  add_library(fix_${name} SHARED native/tests/fixtures/plugin.c)
+  target_include_directories(fix_${name} PRIVATE native/include)
+  target_compile_options(fix_${name} PRIVATE ${HYPRLODR_WARNINGS})
+  target_compile_definitions(fix_${name} PRIVATE ${ARGN})
+  set_target_properties(fix_${name} PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "${name}"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/fixtures")
+endfunction()
+
+# Dependency ordering and environment errors
+hyprlodr_fixture(tie_alpha FIX_ID="tie.alpha")
+hyprlodr_fixture(tie_beta FIX_ID="tie.beta")
+hyprlodr_fixture(tie_gamma FIX_ID="tie.gamma")
+
+hyprlodr_fixture(diamond_bottom FIX_ID="d.bottom" FIX_CAP="test.d.bottom")
+hyprlodr_fixture(diamond_left FIX_ID="d.left" FIX_DEP1="d.bottom" FIX_CAP="test.d.left")
+hyprlodr_fixture(diamond_right FIX_ID="d.right" FIX_DEP1="d.bottom" FIX_CAP="test.d.right")
+hyprlodr_fixture(diamond_top FIX_ID="d.top" FIX_DEP1="d.left" FIX_DEP2="d.right" FIX_REQUIRE_CAP="test.d.left")
+
+hyprlodr_fixture(state_writer FIX_ID="k.writer" FIX_STATE_KEY="fixture.state" FIX_STATE_VALUE="written")
+hyprlodr_fixture(state_reader FIX_ID="k.reader" FIX_DEP1="k.writer" FIX_REQUIRE_STATE="fixture.state" FIX_REQUIRE_VALUE="written")
+
+hyprlodr_fixture(missing_dep FIX_ID="needs.missing" FIX_DEP1="not.there")
+hyprlodr_fixture(cycle_a FIX_ID="cycle.a" FIX_DEP1="cycle.b")
+hyprlodr_fixture(cycle_b FIX_ID="cycle.b" FIX_DEP1="cycle.a")
+hyprlodr_fixture(self_dep FIX_ID="self.dep" FIX_DEP1="self.dep")
+hyprlodr_fixture(dup_one FIX_ID="dup.id" FIX_CAP="test.dup.one")
+hyprlodr_fixture(dup_two FIX_ID="dup.id" FIX_CAP="test.dup.two")
+
+hyprlodr_fixture(ver_ok FIX_ID="ver.ok" FIX_DEP1="z.foundation@^1.0.0")
+hyprlodr_fixture(ver_old FIX_ID="ver.old" FIX_DEP1="z.foundation@>=2.0.0")
+hyprlodr_fixture(conflict_a FIX_ID="conflict.a" FIX_CONFLICT1="conflict.b")
+hyprlodr_fixture(conflict_b FIX_ID="conflict.b")
+
+hyprlodr_fixture(abi_old FIX_ID="abi.old" FIX_DESC_ABI=1 FIX_ALWAYS_ANSWER=1)
+hyprlodr_fixture(tiny_descriptor FIX_ID="tiny.descriptor" FIX_DESC_SIZE=16)
+hyprlodr_fixture(bad_descriptor FIX_ID="bad.descriptor" FIX_BAD_DESCRIPTOR=1)
+hyprlodr_fixture(no_entry FIX_ID="no.entry" FIX_NO_ENTRY=1)
+
+hyprlodr_fixture(early_ok FIX_ID="a.early")
+hyprlodr_fixture(failer FIX_ID="g.failer" FIX_FAIL=1 FIX_STATE_KEY="fixture.leak" FIX_STATE_VALUE="leaked" FIX_CAP="test.failer")
+hyprlodr_fixture(dependent_of_failer FIX_ID="a.dependent" FIX_DEP1="g.failer" FIX_REQUIRE_CAP="test.failer")
+hyprlodr_fixture(residue_check FIX_ID="z.residue" FIX_DEP1="g.failer")
+hyprlodr_fixture(plain_a FIX_ID="plain.a")
 
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
-  add_test(NAME five_mod_lifecycle
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/native/tests/assert_lifecycle.py
-      $<TARGET_FILE:hyprlodr-host> $<TARGET_FILE_DIR:mod_foundation>)
+  add_test(NAME loader_suite
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/native/tests/loader_suite.py
+      $<TARGET_FILE:hyprlodr-host>
+      ${CMAKE_BINARY_DIR}/mods
+      ${CMAKE_BINARY_DIR}/fixtures)
 endif()
