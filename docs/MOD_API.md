@@ -149,4 +149,4 @@ Validation is defensive: absolute paths, `..` segments, backslashes, symlinks, d
 
 ## Compatibility
 
-ABI 2 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
+ABI 3 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.

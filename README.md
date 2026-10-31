@@ -86,7 +86,7 @@ native/include/hyprlodr/plugin.h   public mod ABI
 native/src/loader.{c,h}            loader library
 native/src/host.c                  synthetic host (JSON summary + event log)
 native/win32/                      Windows target layer (minimal libc, proxy, entry shim)
-native/tests/loader_suite.py       23-scenario loader suite
+native/tests/loader_suite.py       25-scenario loader suite
 native/tests/fixtures/plugin.c     configurable error-case fixture mod
 samples/                           the five mandatory sample mods
 tools/                             diagnostics, installer, package tooling, proxy .def generator, builds

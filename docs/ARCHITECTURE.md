@@ -10,7 +10,7 @@
                       +---------------------------+
                                  |
                                  v
-                        mods/*.dll (ABI 2)
+                        mods/*.dll (ABI 3)
 ```
 
 1. **Public ABI** (`native/include/hyprlodr/plugin.h`) — the only contract between loader and mods. A mod exports one symbol, `hyprlodr_plugin_query`, returning a static descriptor.
