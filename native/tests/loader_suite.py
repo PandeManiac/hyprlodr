@@ -46,11 +46,13 @@ class Runner:
         path.write_text(text)
         return path
 
-    def run(self, seed=None, disable=(), disabled_file=None):
+    def run(self, seed=None, disable=(), disabled_file=None, state_root=None):
         log = self.tmp / "events.jsonl"
         if log.exists():
             log.unlink()
         args = [str(HOST), "--log", str(log), str(self.mods)]
+        if state_root:
+            args += ["--state-root", str(state_root)]
         if seed is not None:
             args += ["--seed", str(seed)]
         for mod_id in disable:
@@ -428,6 +430,43 @@ def rollback_leaves_no_residue():
         check(proc.returncode != 0, "expected failure")
         check("z.residue" not in events_of(events, "initialize_ok"),
               "mod initialized after a failure")
+    finally:
+        runner.close()
+
+
+@scenario("state_dirs_are_per_mod")
+def state_dirs_are_per_mod():
+    runner = Runner()
+    try:
+        runner.add("dir_writer_a", "dir_writer_b")
+        root = runner.tmp / "state"
+        proc, events, _ = runner.run(state_root=root)
+        check(proc.returncode == 0, f"host failed: {proc.stderr}")
+        first = root / "p.writer" / "probe.txt"
+        second = root / "p.writer2" / "probe.txt"
+        check(first.exists(), f"missing per-mod state file {first}")
+        check(second.exists(), f"missing per-mod state file {second}")
+        check(first.read_text() == "p.writer", f"unexpected content: {first.read_text()!r}")
+        check(second.read_text() == "p.writer2", f"unexpected content: {second.read_text()!r}")
+        announced = [e["message"] for e in events if e["event"] == "state_dir"]
+        check(len(announced) == 2, f"expected two state_dir events, saw {announced}")
+        check(announced[0] != announced[1], f"mods shared a state directory: {announced}")
+    finally:
+        runner.close()
+
+
+@scenario("state_dir_absent_without_root")
+def state_dir_absent_without_root():
+    runner = Runner()
+    try:
+        runner.add("dir_writer_a")
+        proc, events, _ = runner.run()
+        check(proc.returncode != 0, "a mod requiring state_dir must fail without a root")
+        messages = [e["message"] for e in events if e["event"] == "log"]
+        check(any("state_dir unavailable" in m for m in messages),
+              f"mod did not report the missing state dir: {messages}")
+        check(not any(e["event"] == "state_dir" for e in events),
+              "a state directory was announced without a root")
     finally:
         runner.close()
 

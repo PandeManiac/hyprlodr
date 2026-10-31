@@ -5,6 +5,7 @@
  */
 #include "hyprlodr/plugin.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #ifndef FIX_ID
@@ -54,6 +55,26 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
 
 #ifdef FIX_STATE_KEY
     if (host->state_set(host->context, FIX_STATE_KEY, FIX_STATE_VALUE) != 0) return -1;
+#endif
+#ifdef FIX_STATE_FILE
+    /* ABI 3: write a real file into the directory the host reserved for us. */
+    const char *directory = HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir
+                                ? host->state_dir(host->context)
+                                : NULL;
+    if (!directory || !*directory) {
+        host->log(host->context, "error", FIX_ID, "state_dir unavailable");
+        return -1;
+    }
+    char state_path[1024];
+    snprintf(state_path, sizeof state_path, "%s/%s", directory, FIX_STATE_FILE);
+    FILE *state_file = fopen(state_path, "w");
+    if (!state_file) {
+        host->log(host->context, "error", FIX_ID, "cannot create state file");
+        return -1;
+    }
+    fputs(FIX_ID, state_file);
+    fclose(state_file);
+    host->log(host->context, "info", FIX_ID, state_path);
 #endif
 #ifdef FIX_REQUIRE_STATE
     const char *value = host->state_get(host->context, FIX_REQUIRE_STATE);

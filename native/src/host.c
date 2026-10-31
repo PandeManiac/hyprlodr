@@ -25,6 +25,7 @@ static void usage(const char *argv0) {
             "  --log PATH           event log destination (JSON Lines)\n"
             "  --disable ID         mark a mod installed-but-disabled (repeatable)\n"
             "  --disabled-file PATH mod ids to disable, one per line\n"
+            "  --state-root DIR     per-mod state directory root (default: none)\n"
             "  --seed N             randomize in-memory discovery order\n"
             "  --describe           print descriptors and exit without initializing\n"
             "  -h, --help           show this help\n",
@@ -103,6 +104,7 @@ static void print_summary(const hyprlodr_loader *loader, int status) {
 int main(int argc, char **argv) {
     const char *log_path = "hyprlodr-events.jsonl";
     const char *disabled_file = NULL;
+    const char *state_root = NULL;
     unsigned seed = 0;
     int describe = 0;
     int ok = 1;
@@ -120,7 +122,8 @@ int main(int argc, char **argv) {
             if (hyprlodr_loader_add_dir(loader, argv[++i]) != HYPRLODR_OK) ok = 0;
         } else if (!strcmp(arg, "--disable") && i + 1 < argc) {
             if (hyprlodr_loader_disable(loader, argv[++i]) != HYPRLODR_OK) ok = 0;
-        } else if (!strcmp(arg, "--disabled-file") && i + 1 < argc) disabled_file = argv[++i];
+        }        else if (!strcmp(arg, "--disabled-file") && i + 1 < argc) disabled_file = argv[++i];
+        else if (!strcmp(arg, "--state-root") && i + 1 < argc) state_root = argv[++i];
         else if (!strcmp(arg, "--seed") && i + 1 < argc) seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(arg, "--describe")) describe = 1;
         else if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
@@ -145,6 +148,8 @@ int main(int argc, char **argv) {
 
     hyprlodr_loader_set_seed(loader, seed);
     int status = hyprlodr_loader_set_log(loader, log_path);
+    if (status == HYPRLODR_OK && state_root)
+        status = hyprlodr_loader_set_state_root(loader, state_root);
     if (status == HYPRLODR_OK && disabled_file)
         status = hyprlodr_loader_disable_file(loader, disabled_file);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_resolve(loader);

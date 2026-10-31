@@ -24,9 +24,9 @@
 #  define HYPR_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Bumped to 2: descriptor gained conflicts/display_name/description/author/flags,
- * host API gained state_remove/is_loaded. ABI 1 mods are rejected. */
-#define HYPRLODR_ABI_VERSION 2u
+/* Bumped to 3: the host API gained state_dir(), so a mod can persist its own
+ * files. Earlier ABIs are rejected: mods are recompiled against this header. */
+#define HYPRLODR_ABI_VERSION 3u
 #define HYPRLODR_PLUGIN_ENTRY "hyprlodr_plugin_query"
 
 /* True when the descriptor is large enough to contain `field`. */
@@ -45,7 +45,16 @@ typedef struct hyprlodr_host_api {
     /* --- ABI 2 additions --- */
     int (*state_remove)(void *context, const char *key);
     int (*is_loaded)(void *context, const char *mod_id);
+    /* --- ABI 3 additions --- */
+    /* Absolute path to a directory reserved for this mod, created before
+     * initialize() runs. NULL when the host was started without a state root,
+     * so check before writing. The path stays valid until shutdown(). */
+    const char *(*state_dir)(void *context);
 } hyprlodr_host_api;
+
+/* True when the host API is large enough to contain `field`. */
+#define HYPRLODR_HOST_API_HAS(api, field) \
+    ((api)->struct_size >= offsetof(hyprlodr_host_api, field) + sizeof((api)->field))
 
 /* Dependency strings may carry a version constraint after '@':
  *   "z.foundation"          any version

@@ -161,9 +161,11 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     char mods_dir[1024];
     char disabled_file[1024];
     char log_path[1024];
+    char state_root[1024];
     snprintf(mods_dir, sizeof mods_dir, "%s\\mods", g_game_dir);
     snprintf(disabled_file, sizeof disabled_file, "%s\\mods\\disabled.txt", g_game_dir);
     snprintf(log_path, sizeof log_path, "%s\\hyprlodr-events.jsonl", g_game_dir);
+    snprintf(state_root, sizeof state_root, "%s\\hyprlodr-state", g_game_dir);
 
     g_loader = hyprlodr_loader_create();
     if (!g_loader) {
@@ -178,6 +180,8 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     }
     hyprlodr_loader_add_dir(g_loader, mods_dir);
     hyprlodr_loader_disable_file(g_loader, disabled_file);
+    /* Per-mod writable directories live beside the loader's own files. */
+    hyprlodr_loader_set_state_root(g_loader, state_root);
 
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);

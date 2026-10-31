@@ -1,4 +1,4 @@
-# Mod API (ABI 2)
+# Mod API (ABI 3)
 
 A HYPRLODR mod is a native shared library (`mods/<name>.dll` on Windows, `.so` on Linux) exporting exactly one symbol.
 
@@ -33,6 +33,24 @@ hyprlodr_plugin_query(uint32_t host_abi_version) {
 ```
 
 Build with the header on the include path and no extra libraries; the samples in `samples/` are complete working examples.
+
+## Persistent state (ABI 3)
+
+`state_dir()` returns an absolute directory reserved for the calling mod. The host creates it **before** `initialize()` runs, so a mod can read its settings on first startup without any setup step:
+
+```c
+if (HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir) {
+    const char *dir = host->state_dir(host->context);
+    if (dir && *dir) {
+        /* read/write <dir>/settings.txt */
+    }
+}
+```
+
+- The path is `<state root>/<mod-id>`. In the game the proxy uses `<game>/hyprlodr-state`, so a mod sees e.g. `S:\steamapps\common\hyperdemon\hyprlodr-state\my.mod`.
+- It is `NULL` when the host was started without a state root, and for ABI 2 hosts. Always check.
+- The directory is user data: it survives uninstall and upgrades. Never delete files you did not create.
+- `state_set`/`state_get` remain the in-memory channel for cross-mod coordination during one session; they are not persisted. The loader emits a `state_dir` event when it reserves a directory, and `state_dir_failed` if it cannot.
 
 ## Rules
 

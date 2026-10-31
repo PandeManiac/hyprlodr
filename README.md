@@ -20,11 +20,11 @@ Details and evidence: `docs/RESEARCH.md`, `docs/TESTING.md`, `docs/ROADMAP.md`.
 
 ## What works today
 
-- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 2)** with a single export per mod.
+- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 3)** with a single export per mod, plus a per-mod persistent data directory created before initialization.
 - **Deterministic loader**: discovery, descriptor validation, semantic-version constraints, conflicts, disabled mods, lexicographic tie-breaks, cycle/missing-dependency detection, partial-failure rollback, reverse-order shutdown.
 - **Structured event log** (JSON Lines) with sequential event numbers, plus a JSON summary from the host.
 - **Five mandatory sample mods** compiled independently through the public header.
-- **23-scenario test suite** driving the real host binary, including randomized discovery order.
+- **25-scenario test suite** driving the real host binary, including randomized discovery order and per-mod state directories.
 - **Windows x64 build** with no Windows SDK, mingw or CRT dependency: the loader ships its own minimal libc on kernel32 and generates its import library with `llvm-dlltool`.
 - **OpenAL32 proxy** with 175 generated PE forwarders to the renamed original, so audio behaviour is untouched.
 - **Desktop manager** (Avalonia): Steam discovery, loader install/remove with hash verification, mod list with enable/disable, package import, load-order preview, validation problems, log viewer.

@@ -85,6 +85,10 @@ hyprlodr_fixture(dependent_of_failer FIX_ID="a.dependent" FIX_DEP1="g.failer" FI
 hyprlodr_fixture(residue_check FIX_ID="z.residue" FIX_DEP1="g.failer")
 hyprlodr_fixture(plain_a FIX_ID="plain.a")
 
+# ABI 3 per-mod state directories
+hyprlodr_fixture(dir_writer_a FIX_ID="p.writer" FIX_STATE_FILE="probe.txt")
+hyprlodr_fixture(dir_writer_b FIX_ID="p.writer2" FIX_STATE_FILE="probe.txt")
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

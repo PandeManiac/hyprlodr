@@ -29,6 +29,8 @@
 #else
 #  include <dirent.h>
 #  include <dlfcn.h>
+#  include <errno.h>
+#  include <sys/stat.h>
 #  define PATH_SEP '/'
 #  ifdef __APPLE__
 #    define LIB_EXT ".dylib"
@@ -61,6 +63,7 @@ typedef struct {
     void *library;
     const hyprlodr_plugin_descriptor *descriptor;
     char path[HYPRLODR_PATH_MAX];
+    char state_dir[HYPRLODR_PATH_MAX];
     int initialized;
     int failed;
     int disabled;
@@ -88,6 +91,7 @@ struct hyprlodr_loader {
     size_t undo_count;
     char dirs[HYPRLODR_MAX_DIRS][HYPRLODR_PATH_MAX];
     size_t dir_count;
+    char state_root[HYPRLODR_PATH_MAX];
     char disabled[HYPRLODR_MAX_DISABLED][HYPRLODR_ID_MAX];
     size_t disabled_count;
     FILE *log;
@@ -372,6 +376,14 @@ static int api_capability_has(void *ctx, const char *name) {
     return 0;
 }
 
+/* ABI 3: the directory the current mod may use for its own files. */
+static const char *api_state_dir(void *ctx) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    int index = find_plugin(l, l->current_mod);
+    if (index < 0) return NULL;
+    return l->plugins[index].state_dir[0] ? l->plugins[index].state_dir : NULL;
+}
+
 static int api_is_loaded(void *ctx, const char *mod_id) {
     hyprlodr_loader *l = (hyprlodr_loader *)ctx;
     if (!mod_id) return 0;
@@ -392,6 +404,7 @@ static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     api.capability_has = api_capability_has;
     api.state_remove = api_state_remove;
     api.is_loaded = api_is_loaded;
+    api.state_dir = api_state_dir;
     return api;
 }
 
@@ -719,6 +732,12 @@ int hyprlodr_loader_disable_file(hyprlodr_loader *loader, const char *path) {
     return HYPRLODR_OK;
 }
 
+int hyprlodr_loader_set_state_root(hyprlodr_loader *loader, const char *path) {
+    if (!loader || !path || !*path) return HYPRLODR_ERR_ARG;
+    snprintf(loader->state_root, sizeof loader->state_root, "%s", path);
+    return HYPRLODR_OK;
+}
+
 int hyprlodr_loader_set_log(hyprlodr_loader *loader, const char *path) {
     if (!loader || !path) return HYPRLODR_ERR_ARG;
     loader->log = fopen(path, "w");
@@ -920,6 +939,47 @@ static void shutdown_initialized(hyprlodr_loader *l) {
     }
 }
 
+/* Create one directory. An existing directory is success: mods may be enabled
+ * across several sessions and the loader must not care. */
+static int ensure_dir(const char *path) {
+#ifdef _WIN32
+    /* Fails with ERROR_ALREADY_EXISTS for an existing path, which is fine. The
+     * mod's own file operations are the real verification. */
+    CreateDirectoryA(path, NULL);
+    return 0;
+#else
+    if (mkdir(path, 0777) == 0) return 0;
+    return errno == EEXIST ? 0 : -1;
+#endif
+}
+
+/* Reserve <state_root>/<mod-id> before the mod can ask for it. A failure is
+ * reported and leaves state_dir() NULL; the mod decides whether it can cope. */
+static void prepare_state_dir(hyprlodr_loader *l, hyprlodr_loaded_plugin *p) {
+    const char *id = p->descriptor->id;
+    p->state_dir[0] = '\0';
+    if (!l->state_root[0]) return;
+    if (ensure_dir(l->state_root) != 0) {
+        event(l, "state_dir_failed", id, l->state_root);
+        return;
+    }
+    size_t root_length = strlen(l->state_root);
+    size_t id_length = strlen(id);
+    if (root_length + 1u + id_length + 1u > sizeof p->state_dir) {
+        event(l, "state_dir_failed", id, "path too long");
+        return;
+    }
+    memcpy(p->state_dir, l->state_root, root_length);
+    p->state_dir[root_length] = PATH_SEP;
+    memcpy(p->state_dir + root_length + 1u, id, id_length + 1u);
+    if (ensure_dir(p->state_dir) != 0) {
+        event(l, "state_dir_failed", id, p->state_dir);
+        p->state_dir[0] = '\0';
+        return;
+    }
+    event(l, "state_dir", id, p->state_dir);
+}
+
 int hyprlodr_loader_init(hyprlodr_loader *loader) {
     hyprlodr_loader *l = loader;
     if (!l) return HYPRLODR_ERR_ARG;
@@ -930,6 +990,7 @@ int hyprlodr_loader_init(hyprlodr_loader *loader) {
         hyprlodr_loaded_plugin *p = &l->plugins[l->order[i]];
         const hyprlodr_plugin_descriptor *d = p->descriptor;
         event(l, "initialize_begin", d->id, d->version);
+        prepare_state_dir(l, p);
         undo_clear(l);
         snprintf(l->current_mod, sizeof l->current_mod, "%s", d->id);
         int rc = d->initialize(&api);

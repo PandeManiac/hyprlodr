@@ -16,6 +16,8 @@
 
 **Level 4 groundwork — build fingerprints (verified 2026-10-31).** `tools/re/analyze_pe.py` derives RVA + FNV-1a 64 anchors from `hyperdemon.exe` (four string constants plus the four RIP-relative instructions that reference them) and emits a data-free header the proxy verifies at run time. 8/8 anchors matched inside the real game process (`module_base=0x140000000`, timestamp `0x66ecd8b5`); a Wine stand-in host reports `build_matches=false`. `anchor_test` covers the verifier in ctest.
 
+**Mod persistence (ABI 3).** The host API gained `state_dir()`: the loader reserves `<state root>/<mod-id>` before `initialize()` runs, the proxy points it at `<game>/hyprlodr-state`, and both new loader scenarios (per-mod isolation, and a clear failure when no root exists) pass on Linux and under Wine.
+
 **Tooling.** Read-only diagnostics (Steam discovery, multi-library, PE parsing, Proton detection), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers.
 
 ## Next, in order

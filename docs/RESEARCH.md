@@ -107,6 +107,22 @@ The reference sites were found by scanning `.text` (file offset `0x400`, RVA `0x
 
 **Not established:** which function owns each reference site, what `asset/asset` actually contains, and whether any of these sites is a safe place to intervene. The anchors are a compatibility gate, not a hook.
 
+## Asset container and loader path (2026-10-31)
+
+**Observed** about `asset/asset` (306,794,369 bytes, shipped unmodified):
+
+- Entropy is **8.00 bits/byte** in every 64 KiB block sampled across the first 512 KiB, and the file contains no printable strings of length 5 or more. There is no plaintext header, index or filename table at either end of the file.
+- It is not zlib, raw deflate, bzip2 or xz: all four decoders reject the first 64 KiB.
+
+**Observed** by decompiling the functions behind the anchors (`tools/re/ghidra/DumpFunctions.java`, output kept out of the repository):
+
+- `FUN_140212490` (RVA `0x212490`, 1164 bytes) constructs a `std::basic_iostream` over a custom `streambuf`, opens the string `"asset/asset"` through `FUN_140110570` (RVA `0x110570`, a filebuf-style open helper), and calls `setstate(failbit)` when that returns null. It then calls `FUN_140212c90` (RVA `0x212c90`) and loops over `FUN_140213b70` (RVA `0x213b70`) / `FUN_140213370` (RVA `0x213370`) with `memcmp` comparisons.
+- `FUN_140213cb0` (RVA `0x213cb0`, 433 bytes) is the missing-asset path: it composes `"Can't find asset "` with the requested name and routes it to a logger through `FUN_1401c4280`.
+
+**Inferred:** the game reads one large custom archive through a C++ stream, then resolves entries by name after reading an internal header. Because the whole file is high-entropy from byte zero, entry contents are compressed and/or encrypted, and the index is not readable without the loader's own code.
+
+**Not established:** the compression/encryption scheme, the directory layout, and therefore whether a mod can replace a single asset without rebuilding the entire 306 MB archive. Asset replacement stays blocked until the header reader `FUN_140212c90` is understood.
+
 ## Tooling available
 
 **Observed:** `clang 23.1.3`, `lld-link`, `llvm-dlltool`, `cmake`, `ninja`, `ghidra 12.1.2` (`/usr/bin/ghidra`), `rea` CLI 6.7.0, `wine 11.20 (Staging)`, `.NET SDK 10.0.113`.

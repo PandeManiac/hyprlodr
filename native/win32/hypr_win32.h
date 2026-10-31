@@ -90,6 +90,7 @@ DWORD WINAPI GetCurrentProcessId(void);
 HANDLE WINAPI FindFirstFileA(LPCSTR pattern, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindNextFileA(HANDLE find, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindClose(HANDLE find);
+BOOL WINAPI CreateDirectoryA(LPCSTR path, void *security);
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, void *security,
                           DWORD disposition, DWORD flags, HANDLE template_file);
 BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, void *overlapped);

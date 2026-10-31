@@ -2,6 +2,7 @@
 ; Converted to a .lib by llvm-dlltool in tools/build_windows.sh.
 LIBRARY KERNEL32.dll
 EXPORTS
+CreateDirectoryA
 CreateFileA
 CreateThread
 DisableThreadLibraryCalls

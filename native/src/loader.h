@@ -30,6 +30,11 @@ int hyprlodr_loader_disable_file(hyprlodr_loader *loader, const char *path);
 /* Event log destination (JSON Lines). Must be set before resolve. */
 int hyprlodr_loader_set_log(hyprlodr_loader *loader, const char *path);
 
+/* Root for per-mod persistent directories. Each initialized mod gets
+ * <root>/<mod-id>, created before its initialize() runs and exposed through
+ * host_api.state_dir(). Unset by default, in which case state_dir() is NULL. */
+int hyprlodr_loader_set_state_root(hyprlodr_loader *loader, const char *path);
+
 /* Non-zero seed randomizes the in-memory discovery order. Resolution order
  * must not depend on it; the test suite uses this to prove determinism. */
 void hyprlodr_loader_set_seed(hyprlodr_loader *loader, unsigned seed);
