@@ -18,7 +18,7 @@ HYPRLODR_GAME_DIR="/path/to/steamapps/common/hyperdemon" dotnet run --project ma
 
 ## Core services
 
-The UI is deliberately thin. Everything testable lives in `manager/HYPRLODR.Core` and is exercised headlessly by `manager/HYPRLODR.SelfTest` (15 scenarios, wired into ctest as `manager_suite`):
+The UI is deliberately thin. Everything testable lives in `manager/HYPRLODR.Core` and is exercised headlessly by `manager/HYPRLODR.SelfTest` (16 scenarios, wired into ctest as `manager_suite`):
 
 | Service | Responsibility |
 |---|---|
@@ -41,6 +41,6 @@ Ordering in the UI mirrors the native loader exactly: repeated selection of the 
 
 ## Verification status
 
-- Core services: 15/15 headless scenarios (`tools/test_manager.sh`).
+- Core services: 16/16 headless scenarios (`tools/test_manager.sh`).
 - UI: launched against a demo installation under Xvfb and captured in `docs/evidence/manager-ui.png`. The UI has not been exercised interactively by a human; the screenshot confirms it renders real data end to end.
 - Not yet implemented: mod profiles, asset/config browsing, remote catalogue. See `docs/ROADMAP.md`.

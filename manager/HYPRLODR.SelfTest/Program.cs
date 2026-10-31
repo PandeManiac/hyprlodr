@@ -30,6 +30,7 @@ internal static class Program
         Register("catalog_detects_missing_dependency", () => CatalogMissingDependency(sample));
         Register("catalog_detects_cycle", () => CatalogCycle(sample));
         Register("catalog_detects_version_mismatch", () => CatalogVersionMismatch(sample));
+        Register("catalog_blocked_dependency_is_not_a_cycle", () => CatalogBlockedNotCycle(sample));
         Register("version_constraints", VersionConstraints);
         Register("event_log_reader", EventLog);
         Register("package_validation", PackageValidation);
@@ -342,6 +343,35 @@ internal static class Program
             Check(!plan.Ok, "incompatible version should be reported");
             Check(plan.Problems.Any(problem => problem.Contains("does not satisfy", StringComparison.Ordinal)),
                 string.Join("; ", plan.Problems));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void CatalogBlockedNotCycle(string? _)
+    {
+        var root = NewTemp();
+        try
+        {
+            var mods = Path.Combine(root, "mods");
+            Directory.CreateDirectory(mods);
+            foreach (var id in new[] { "z.foundation", "b.audio", "00.final" })
+                File.WriteAllBytes(Path.Combine(mods, id + ".dll"), new byte[] { 0 });
+            WriteRegistry(mods,
+                ("z.foundation", "1.0.0", Array.Empty<string>()),
+                ("b.audio", "1.0.0", new[] { "z.foundation" }),
+                ("00.final", "1.0.0", new[] { "b.audio" }));
+            ModCatalog.SaveDisabled(mods, new[] { "b.audio" });
+
+            var catalog = ModCatalog.Load(mods);
+            var plan = catalog.BuildPlan();
+            Check(!plan.Ok, "a disabled dependency must be reported");
+            Check(plan.Problems.Any(problem =>
+                    problem.Contains("dependency is disabled: b.audio", StringComparison.Ordinal)),
+                string.Join("; ", plan.Problems));
+            Check(!plan.Problems.Any(problem => problem.Contains("cycle", StringComparison.Ordinal)),
+                "a blocked dependency must not be reported as a cycle: " + string.Join("; ", plan.Problems));
+            Check(plan.Order.SequenceEqual(new[] { "z.foundation" }),
+                "only the unblocked mod should be planned: " + string.Join(",", plan.Order));
         }
         finally { Directory.Delete(root, true); }
     }

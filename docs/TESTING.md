@@ -80,7 +80,7 @@ The cross-check tests call `hyprlodr-host --describe`, which loads the library a
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
-## Manager core (15/15 passing)
+## Manager core (16/16 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
 
@@ -97,6 +97,7 @@ This proves the Windows loader path, the forwarder table and the attach bootstra
 | `catalog_detects_missing_dependency` | Reported with status `dependency missing` |
 | `catalog_detects_cycle` | `cycle among` reported |
 | `catalog_detects_version_mismatch` | `@>=2.0.0` against 1.0.0 refused |
+| `catalog_blocked_dependency_is_not_a_cycle` | A disabled dependency is reported as blocked, never as a cycle |
 | `version_constraints` | `^`, `~`, `>=`, `>` semantics and spec splitting |
 | `event_log_reader` | Parses JSONL and tolerates a truncated final line |
 | `package_validation` | Valid package accepted; traversal and disallowed files refused |

@@ -12,7 +12,7 @@
 
 **Mod packaging (schema 1).** ZIP container with a validated `manifest.json`, defensive extraction guards (traversal, absolutes, backslashes, symlinks, duplicates, size/compression limits), a publishable install registry, and manifest-to-descriptor cross-checking via `hyprlodr-host --describe` so packaging never executes mod behaviour. Pack/validate/install/list/remove CLI with a 19-scenario suite.
 
-**Desktop manager (Milestone 3).** Avalonia application with Steam discovery (multiple libraries, manual override, Proton detection), loader install/remove with hash manifests and rollback, mod list with enable/disable, package import, exact load-order preview, validation problems and a log viewer. Core services covered by 15/15 headless scenarios; UI rendered against a demo installation and captured as evidence.
+**Desktop manager (Milestone 3).** Avalonia application with Steam discovery (multiple libraries, manual override, Proton detection), loader install/remove with hash manifests and rollback, mod list with enable/disable, package import, exact load-order preview, validation problems and a log viewer. Core services covered by 16/16 headless scenarios; UI rendered against a demo installation and captured as evidence.
 
 **Tooling.** Read-only diagnostics (Steam discovery, multi-library, PE parsing, Proton detection), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers.
 

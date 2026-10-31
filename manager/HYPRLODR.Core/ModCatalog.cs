@@ -139,11 +139,15 @@ public sealed partial class ModCatalog
 
         var enabled = Mods.Where(mod => mod.Enabled && mod.Status != "binary missing").ToList();
         var emitted = new HashSet<string>(StringComparer.Ordinal);
+        // A mod blocked by a dependency problem is not a cycle; keep the two apart so
+        // the preview matches how the native loader classifies failures.
+        var blocked = new HashSet<string>(StringComparer.Ordinal);
 
         while (plan.Order.Count < enabled.Count)
         {
             ModEntry? chosen = null;
-            foreach (var candidate in enabled.Where(mod => !emitted.Contains(mod.Id))
+            foreach (var candidate in enabled
+                         .Where(mod => !emitted.Contains(mod.Id) && !blocked.Contains(mod.Id))
                          .OrderBy(mod => mod.Id, StringComparer.Ordinal))
             {
                 var ready = true;
@@ -160,6 +164,7 @@ public sealed partial class ModCatalog
                     {
                         candidate.Status = "dependency missing";
                         plan.Problems.Add($"{candidate.Id}: missing dependency: {dependencyId}");
+                        blocked.Add(candidate.Id);
                         ready = false;
                         break;
                     }
@@ -167,6 +172,7 @@ public sealed partial class ModCatalog
                     {
                         candidate.Status = "dependency disabled";
                         plan.Problems.Add($"{candidate.Id}: dependency is disabled: {dependencyId}");
+                        blocked.Add(candidate.Id);
                         ready = false;
                         break;
                     }
@@ -175,6 +181,7 @@ public sealed partial class ModCatalog
                         candidate.Status = "version mismatch";
                         plan.Problems.Add(
                             $"{candidate.Id}: dependency {dependencyId} {dependency.Version} does not satisfy '{spec}'");
+                        blocked.Add(candidate.Id);
                         ready = false;
                         break;
                     }
@@ -191,10 +198,14 @@ public sealed partial class ModCatalog
 
             if (chosen is null)
             {
-                var stuck = enabled.Where(mod => !emitted.Contains(mod.Id))
-                    .Select(mod => mod.Id).OrderBy(id => id, StringComparer.Ordinal);
+                var stuck = enabled
+                    .Where(mod => !emitted.Contains(mod.Id) && !blocked.Contains(mod.Id))
+                    .Select(mod => mod.Id)
+                    .OrderBy(id => id, StringComparer.Ordinal)
+                    .ToList();
+                if (stuck.Count == 0) break; // everything left is blocked; already reported
                 plan.Problems.Add($"cycle among: {string.Join(", ", stuck)}");
-                foreach (var mod in enabled.Where(mod => !emitted.Contains(mod.Id)))
+                foreach (var mod in enabled.Where(mod => !emitted.Contains(mod.Id) && !blocked.Contains(mod.Id)))
                     if (mod.Status == "ok") mod.Status = "cycle";
                 break;
             }

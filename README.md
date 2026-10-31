@@ -12,7 +12,7 @@ The original game files are never modified destructively: installing the loader 
 |---|---|---|
 | 1 | Five independently compiled mods load, respect dependency order, share state, shut down in reverse | **Verified** (Linux + Windows x64 under Wine) |
 | 2 | Diagnostic mod executes inside the real HYPER DEMON process | **Verified 2026-10-31** — `hyperdemon.exe` launched through Steam/Proton initialized all five mods in-process; evidence in `docs/evidence/` |
-| 3 | Desktop mod manager | **Implemented** — Avalonia app; 15/15 headless core scenarios; UI captured in `docs/evidence/manager-ui.png` |
+| 3 | Desktop mod manager | **Implemented** — Avalonia app; 16/16 headless core scenarios; UI captured in `docs/evidence/manager-ui*.png` |
 | 4 | Mods change the game | Not started |
 | 5 | Asset replacement | Not started (asset pack documented, format unknown) |
 
