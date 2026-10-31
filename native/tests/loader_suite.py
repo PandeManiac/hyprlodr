@@ -455,6 +455,33 @@ def state_dirs_are_per_mod():
         runner.close()
 
 
+@scenario("state_dir_persists_across_runs")
+def state_dir_persists_across_runs():
+    runner = Runner()
+    try:
+        runner.add("state_counter")
+        root = runner.tmp / "state"
+        first_proc, first_events, _ = runner.run(state_root=root)
+        second_proc, second_events, _ = runner.run(state_root=root)
+        check(first_proc.returncode == 0, f"first run failed: {first_proc.stderr}")
+        check(second_proc.returncode == 0, f"second run failed: {second_proc.stderr}")
+
+        def counter(events):
+            # The loader prefixes mod log lines with the level, e.g. "info: ...".
+            return [e["message"].rsplit("state counter ", 1)[1] for e in events
+                    if e["event"] == "log" and "state counter " in e["message"]]
+
+        check(counter(first_events) == ["1"],
+              f"first run saw {counter(first_events)}")
+        check(counter(second_events) == ["2"],
+              f"second run saw {counter(second_events)}")
+        stored = root / "p.counter" / "counter.txt"
+        check(stored.exists(), f"missing {stored}")
+        check(stored.read_text() == "2", f"stored value {stored.read_text()!r}")
+    finally:
+        runner.close()
+
+
 @scenario("state_dir_absent_without_root")
 def state_dir_absent_without_root():
     runner = Runner()

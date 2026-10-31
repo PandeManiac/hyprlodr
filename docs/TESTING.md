@@ -20,7 +20,7 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
-## Loader scenarios (native, 25/25 passing)
+## Loader scenarios (native, 26/26 passing)
 
 | Scenario | Asserts |
 |---|---|
@@ -42,6 +42,7 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 | `native_abi_mismatch` | ABI 1 descriptor rejected by the current host |
 | `state_dirs_are_per_mod` | Two mods write to their own directories and see different paths |
 | `state_dir_absent_without_root` | No state root means `state_dir()` is NULL, and a mod relying on it fails cleanly |
+| `state_dir_persists_across_runs` | A counter written to `state_dir()` reads back as 2 on a second host process |
 | `descriptor_too_small` | Truncated `struct_size` rejected |
 | `null_descriptor` | NULL handshake result rejected |
 | `missing_entry_export` | Library without the entry symbol rejected |

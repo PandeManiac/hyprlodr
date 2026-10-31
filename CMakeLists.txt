@@ -88,6 +88,7 @@ hyprlodr_fixture(plain_a FIX_ID="plain.a")
 # ABI 3 per-mod state directories
 hyprlodr_fixture(dir_writer_a FIX_ID="p.writer" FIX_STATE_FILE="probe.txt")
 hyprlodr_fixture(dir_writer_b FIX_ID="p.writer2" FIX_STATE_FILE="probe.txt")
+hyprlodr_fixture(state_counter FIX_ID="p.counter" FIX_STATE_COUNTER="counter.txt")
 
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)

@@ -12,6 +12,10 @@
 
 **Tooling.** Read-only diagnostics with an independent PE parser (verified against the real installation), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers, full documentation set.
 
+**State persistence proven across processes.** A fixture increments a counter in its state directory; a new loader scenario runs the host twice against the same root and observes 1 then 2, so ABI 3 storage is verified as durable rather than merely writable.
+
+**Asset container (recorded dead end).** Exhaustive searches of all 65,536 cipher states over the header and over 400,000 possible index start offsets produced no valid entry record, which rules out the static S-boxes at RVAs `0x361710`/`0x361810` as the tables actually used. The archive stays undecoded and `asset_probe.py` keeps failing loudly.
+
 **Last-run report (manager).** `RunReportReader` turns the proxy's attach record and the loader's event log into one summary: stage, pid, whether the build fingerprint matched and at which anchor count, how many mods initialized, and the last error. The Game tab shows it, so in-game evidence is visible without opening JSON. Two scenarios cover the happy path and a corrupt/absent record.
 
 **Mod profiles (manager).** `ProfileStore` captures the enabled set by name into `<game>/hyprlodr-profiles.json` and re-applies it by rewriting `disabled.txt`, so the native loader and the UI agree. Removing a mod does not break a profile: applying it reports the ids that are no longer installed. Three headless scenarios cover round-trip, apply-with-rewrite and tolerance of a corrupt profile file.

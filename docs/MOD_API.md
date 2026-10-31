@@ -49,7 +49,7 @@ if (HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir) {
 
 - The path is `<state root>/<mod-id>`. In the game the proxy uses `<game>/hyprlodr-state`, so a mod sees e.g. `S:\steamapps\common\hyperdemon\hyprlodr-state\my.mod`.
 - It is `NULL` when the host was started without a state root, and for ABI 2 hosts. Always check.
-- The directory is user data: it survives uninstall and upgrades. Never delete files you did not create.
+- The directory is user data: it survives uninstall, upgrades and process restarts. Files written in one session are readable in the next (covered by the `state_dir_persists_across_runs` scenario). Never delete files you did not create.
 - `state_set`/`state_get` remain the in-memory channel for cross-mod coordination during one session; they are not persisted. The loader emits a `state_dir` event when it reserves a directory, and `state_dir_failed` if it cannot.
 
 ## Rules

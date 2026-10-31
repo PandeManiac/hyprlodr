@@ -56,6 +56,38 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
 #ifdef FIX_STATE_KEY
     if (host->state_set(host->context, FIX_STATE_KEY, FIX_STATE_VALUE) != 0) return -1;
 #endif
+#ifdef FIX_STATE_COUNTER
+    /* Persistence across processes: increment a counter kept in our own state
+     * directory. Two host runs must observe 1 then 2. */
+    const char *counter_dir = HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir
+                                  ? host->state_dir(host->context)
+                                  : NULL;
+    if (!counter_dir || !*counter_dir) {
+        host->log(host->context, "error", FIX_ID, "state_dir unavailable");
+        return -1;
+    }
+    char counter_path[1024];
+    snprintf(counter_path, sizeof counter_path, "%s/%s", counter_dir, FIX_STATE_COUNTER);
+    int counter_value = 0;
+    FILE *counter_file = fopen(counter_path, "r");
+    if (counter_file) {
+        if (fscanf(counter_file, "%d", &counter_value) != 1) counter_value = 0;
+        fclose(counter_file);
+    }
+    counter_value += 1;
+    counter_file = fopen(counter_path, "w");
+    if (!counter_file) {
+        host->log(host->context, "error", FIX_ID, "cannot write state counter");
+        return -1;
+    }
+    fprintf(counter_file, "%d", counter_value);
+    fclose(counter_file);
+    {
+        char counter_message[64];
+        snprintf(counter_message, sizeof counter_message, "state counter %d", counter_value);
+        host->log(host->context, "info", FIX_ID, counter_message);
+    }
+#endif
 #ifdef FIX_STATE_FILE
     /* ABI 3: write a real file into the directory the host reserved for us. */
     const char *directory = HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir
