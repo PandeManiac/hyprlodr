@@ -93,6 +93,8 @@ verifies them against the mapped main module and writes the result into
 "anchors_matched":8
 ```
 
+The proxy also copies the asset cipher's two 256-byte tables out of the running image into `<game>/hyprlodr-tables.bin` (reported as `tables_dumped`). Comparing that file with the executable's `.rdata` answers whether the tables are static or built at start-up: on the shipped build they are identical, so they are static.
+
 `build_matches=false` means the running executable is not the analysed build.
 Today mods still load in that case, because nothing depends on an address;
 any future address-dependent capability must refuse to install itself instead.

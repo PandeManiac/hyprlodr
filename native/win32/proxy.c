@@ -64,6 +64,7 @@ typedef struct {
 static module_identity g_module;
 static hyprlodr_anchor_report g_anchors;
 static int g_anchors_checked;
+static int g_tables_dumped;
 
 static uint16_t read_u16(const uint8_t *bytes) {
     uint16_t value;
@@ -97,6 +98,30 @@ static void inspect_main_module(void) {
     g_module.parsed = 1;
     hyprlodr_anchors_verify(base, (size_t)g_module.size_of_image, hyprlodr_game_anchors,
                             HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors);
+}
+
+/* Copy the asset cipher's tables out of the running image.
+ *
+ * The loader's own code indexes two 256-byte tables. Offline work could not
+ * reconcile the file's .rdata copy with the cipher, so capture what the process
+ * actually has: if the runtime bytes differ from the file, the tables are built
+ * at start-up and the offline copy is the wrong input. Written as two
+ * consecutive 256-byte blocks. */
+static void dump_asset_tables(void) {
+    if (g_tables_dumped || !g_module.parsed) return;
+    g_tables_dumped = 1;
+    uint32_t last = HYPRLODR_GAME_TABLE_T1_RVA + HYPRLODR_GAME_TABLE_BYTES;
+    if (last > g_module.size_of_image) return; /* not this binary */
+
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-tables.bin", g_game_dir);
+    FILE *file = fopen(path, "wb");
+    if (!file) return;
+    for (uint32_t offset = 0; offset < HYPRLODR_GAME_TABLE_BYTES; ++offset)
+        fputc((int)g_module.base[HYPRLODR_GAME_TABLE_T0_RVA + offset], file);
+    for (uint32_t offset = 0; offset < HYPRLODR_GAME_TABLE_BYTES; ++offset)
+        fputc((int)g_module.base[HYPRLODR_GAME_TABLE_T1_RVA + offset], file);
+    fclose(file);
 }
 
 static void put_hex(FILE *file, uint64_t value, unsigned digits) {
@@ -144,6 +169,22 @@ static void write_attach_record(const char *stage, int status) {
             (unsigned long)g_anchors.out_of_range);
     fputs(",\"anchor_mismatch\":\"", file);
     json_escape(file, g_anchors.first_mismatch ? g_anchors.first_mismatch : "");
+
+    dump_asset_tables();
+    fputs("\",\"tables_dumped\":", file);
+    fputs(g_tables_dumped && g_module.parsed &&
+                  HYPRLODR_GAME_TABLE_T1_RVA + HYPRLODR_GAME_TABLE_BYTES <= g_module.size_of_image
+              ? "true"
+              : "false",
+          file);
+    fputs(",\"table_t0_head\":\"", file);
+    if (g_module.parsed &&
+        HYPRLODR_GAME_TABLE_T1_RVA + HYPRLODR_GAME_TABLE_BYTES <= g_module.size_of_image) {
+        for (unsigned index = 0; index < 8u; ++index) {
+            fputc("0123456789abcdef"[(g_module.base[HYPRLODR_GAME_TABLE_T0_RVA + index] >> 4) & 0xf], file);
+            fputc("0123456789abcdef"[g_module.base[HYPRLODR_GAME_TABLE_T0_RVA + index] & 0xf], file);
+        }
+    }
     fputs("\"}\n", file);
     fclose(file);
 }

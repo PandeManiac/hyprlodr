@@ -261,6 +261,13 @@ def render_header(report: dict) -> str:
         f"#define HYPRLODR_GAME_BUILD_TIMESTAMP 0x{binary['timestamp']:08x}u",
         f"#define HYPRLODR_GAME_SIZE_OF_IMAGE 0x{binary['size_of_image']:x}u",
         "",
+        "/* Stream-cipher tables read by the asset loader (see docs/RESEARCH.md).",
+        " * The proxy copies them out of the running image so the live bytes can be",
+        " * compared with the file's .rdata copy. */",
+        "#define HYPRLODR_GAME_TABLE_T0_RVA 0x361710u",
+        "#define HYPRLODR_GAME_TABLE_T1_RVA 0x361810u",
+        "#define HYPRLODR_GAME_TABLE_BYTES 256u",
+        "",
         "static const hyprlodr_anchor hyprlodr_game_anchors[] = {",
     ]
     for anchor in report["anchors"]:

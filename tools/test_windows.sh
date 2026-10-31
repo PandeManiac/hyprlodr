@@ -77,6 +77,9 @@ assert attach["build_matches"] is False, attach
 assert attach["anchors_matched"] < attach["anchors_total"], attach
 print(f"build fingerprint: {attach['anchors_matched']}/{attach['anchors_total']} anchors, "
       f"build_matches={attach['build_matches']}." )
+# The stand-in host has no asset tables at those RVAs, so the dump must decline
+# rather than read past the image.
+assert attach["tables_dumped"] is False, attach
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init

@@ -150,9 +150,11 @@ s = (s + 1 + (int)(signed char)c) & 0xffff
 - the index at offset `0` and at `0x5f3` under **all 65,536 states**, across four field layouts (`u16`/`u32` id, `u8`/`u16` name length) — zero candidates with a printable name;
 - the index at the end of the file, and offsets read from the last 4 and 8 bytes as little- and big-endian.
 
-**Inferred:** the loader seeks (`seekg`) before reading, and the 1523-byte block does not decode to a plaintext table, so the index is itself compressed and needs the same decoder the entry payloads use — not just the cipher. The cipher is solved; the compression is not.
+**Observed in the real game (2026-10-31):** the proxy copies both tables out of the running image (`docs/evidence/2026-10-31-tables.bin`, 512 bytes, with `tables_dumped: true` in the attach record). They are **byte-identical** to the file's `.rdata` copy. The "tables are transformed at start-up" hypothesis is therefore rejected: the cipher key material is exactly what is in the file.
 
-**Conclusion:** the container is **not decoded**. `tools/re/asset_probe.py` reproduces every observation above, and its self-test proves the cipher implementation round-trips a synthetic archive built the way the decompiled code describes — so the failure is in the compression model, not the cipher transcription.
+**Inferred:** what remains wrong is not the cipher but the framing — which bytes are fed to it, and how the decoded block is structured. The loader does `seekg` before reading (`FUN_140212490`), so a region other than offset 0 may be the one it reads.
+
+**Conclusion:** the container is **not decoded**, and the cipher is no longer the obstacle. `tools/re/asset_probe.py` reproduces every observation above, and its self-test proves the cipher implementation round-trips a synthetic archive built the way the decompiled code describes. The next step is not more cryptanalysis but correctly identifying the region the loader reads.
 
 ## Tooling available
 

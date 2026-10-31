@@ -15,6 +15,13 @@
 #define HYPRLODR_GAME_BUILD_TIMESTAMP 0x66ecd8b5u
 #define HYPRLODR_GAME_SIZE_OF_IMAGE 0x405000u
 
+/* Stream-cipher tables read by the asset loader (see docs/RESEARCH.md).
+ * The proxy copies them out of the running image so the live bytes can be
+ * compared with the file's .rdata copy. */
+#define HYPRLODR_GAME_TABLE_T0_RVA 0x361710u
+#define HYPRLODR_GAME_TABLE_T1_RVA 0x361810u
+#define HYPRLODR_GAME_TABLE_BYTES 256u
+
 static const hyprlodr_anchor hyprlodr_game_anchors[] = {
     {"string:resource_path", 0x0036f640u, 12u, 0x935e7de761104fdcull},
     {"string:missing_resource_message", 0x0036f650u, 18u, 0xc41b2b350da55b41ull},

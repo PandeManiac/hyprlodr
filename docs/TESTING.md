@@ -147,6 +147,8 @@ Anchors for the shipped build (`docs/evidence/2026-10-31-anchors.json`): four st
 | `analyze_pe.py --verify` against the shipped binary | 8/8 anchors verified |
 | Wine stand-in host (`proxy_client.exe`) | 0/8 anchors, `build_matches=false` — an unknown build is rejected, not assumed |
 | Real game (`hyperdemon.exe` under Proton) | `module_base=0x140000000`, timestamp `0x66ecd8b5` matches, **8/8 anchors matched**, `build_matches=true` |
+| Live cipher tables (real game) | `tables_dumped=true`; the 512 bytes copied out of the running image are byte-identical to the file's `.rdata`, so no runtime transformation occurs |
+| Live cipher tables (Wine stand-in) | `tables_dumped=false` — the RVAs are outside that image, so the proxy declines instead of reading past it |
 
 `docs/evidence/2026-10-31-fingerprint.json` is the attach record written by the game process itself. It also shows `module_size=4214784`, matching the PE `SizeOfImage`, which is the range the anchors were verified against.
 

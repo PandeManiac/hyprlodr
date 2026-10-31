@@ -12,6 +12,8 @@
 
 **Tooling.** Read-only diagnostics with an independent PE parser (verified against the real installation), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers, full documentation set.
 
+**Live cipher tables dumped from the real game.** The proxy copies the asset cipher's two 256-byte tables straight out of the running `hyperdemon.exe` image and writes them beside the attach record (`tables_dumped`, `table_t0_head` in the JSON; `docs/evidence/2026-10-31-tables.bin`). They are byte-identical to the file's `.rdata` copy, which rejects the "tables are built at start-up" hypothesis and proves the cipher key material is already known. The Wine stand-in reports `tables_dumped=false` because those RVAs lie outside its image.
+
 **State persistence proven across processes.** A fixture increments a counter in its state directory; a new loader scenario runs the host twice against the same root and observes 1 then 2, so ABI 3 storage is verified as durable rather than merely writable.
 
 **Asset container (recorded dead end).** Exhaustive searches of all 65,536 cipher states over the header and over 400,000 possible index start offsets produced no valid entry record, which rules out the static S-boxes at RVAs `0x361710`/`0x361810` as the tables actually used. The archive stays undecoded and `asset_probe.py` keeps failing loudly.
