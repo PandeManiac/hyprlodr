@@ -88,15 +88,46 @@ State set during `initialize` is journaled: if initialization fails, every chang
 
 ## Packaging
 
-A distributable mod is a directory (or ZIP, see `docs/TESTING.md`) containing:
+A distributable mod is a ZIP with `manifest.json` at the root (schema 1):
 
 ```text
-my-mod/
-  manifest.json      id, name, version, author, api, platform, dependencies, entry
-  native/<arch>/my-mod.dll
+manifest.json
+native/<platform>/<id>.dll      or .so on linux-x86_64
+assets/...                      optional payload (opaque to the loader today)
+config/...                      optional defaults
+README.md, LICENSE              optional
 ```
 
-The manifest is metadata for installers and humans; the **descriptor in the DLL is authoritative** at runtime. Do not ship a manifest that disagrees with the descriptor — the installer validates that they match.
+```json
+{
+  "schema": 1,
+  "id": "example.mod",
+  "name": "Example mod",
+  "version": "1.0.0",
+  "author": "you",
+  "description": "What it does",
+  "api": 2,
+  "platform": "windows-x86_64",
+  "entry": "native/windows-x86_64/example.mod.dll",
+  "dependencies": ["z.foundation@^1.0.0"],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "capabilities": ["example.overlay"]
+}
+```
+
+Build and install:
+
+```bash
+python3 tools/hyprl_package.py pack my-mod/ out/example.mod.zip
+python3 tools/hyprl_package.py validate out/example.mod.zip
+python3 tools/hyprl_package.py install out/example.mod.zip \
+    --mods-dir "<game>/mods" --host build-win/hyprlodr-host.exe
+```
+
+The manifest is metadata for installers and humans; the **descriptor in the binary is authoritative** at runtime. Pass `--host` and the installer loads the library through `hyprlodr-host --describe` (descriptor query only, no initialization) and refuses the package if id, version or dependency list disagree.
+
+Validation is defensive: absolute paths, `..` segments, backslashes, symlinks, duplicate or case-colliding names, files outside `native/`, `assets/` and `config/`, oversized entries and suspicious compression ratios are all rejected before anything is written.
 
 ## Compatibility
 

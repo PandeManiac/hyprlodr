@@ -92,4 +92,8 @@ if(BUILD_TESTING)
       $<TARGET_FILE:hyprlodr-host>
       ${CMAKE_BINARY_DIR}/mods
       ${CMAKE_BINARY_DIR}/fixtures)
+  add_test(NAME package_suite
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/test_package.py
+      $<TARGET_FILE:hyprlodr-host>
+      ${CMAKE_BINARY_DIR}/mods/z.foundation${CMAKE_SHARED_LIBRARY_SUFFIX})
 endif()

@@ -1,10 +1,16 @@
 /*
- * hyprlodr-host: synthetic game process used for automated loader tests and as
- * the reference host for the loader library.
+ * hyprlodr-host: synthetic game process used for automated loader tests, the
+ * reference host for the loader library, and the descriptor oracle used by
+ * packaging tools.
  *
- * It prints a single-line JSON summary on stdout so test harnesses can assert
- * on the real outcome instead of scraping human text. Events are also written
- * as JSON Lines to the configured log.
+ * Modes:
+ *   (default)  resolve, initialize, shut down; print a JSON summary
+ *   --describe load libraries, validate and print descriptors only; no mod
+ *              initialization runs, so packaging tools can cross-check a
+ *              manifest against the real ABI without executing mod code
+ *
+ * Both modes print one line of JSON on stdout so harnesses assert on the real
+ * outcome instead of scraping human text. Events go to the JSON Lines log.
  */
 #include "loader.h"
 
@@ -20,8 +26,61 @@ static void usage(const char *argv0) {
             "  --disable ID         mark a mod installed-but-disabled (repeatable)\n"
             "  --disabled-file PATH mod ids to disable, one per line\n"
             "  --seed N             randomize in-memory discovery order\n"
+            "  --describe           print descriptors and exit without initializing\n"
             "  -h, --help           show this help\n",
             argv0);
+}
+
+static void print_json_string(const char *text) {
+    char buffer[1400];
+    size_t used = 0;
+    buffer[used++] = '"';
+    for (const char *cursor = text ? text : ""; *cursor && used + 6 < sizeof buffer; ++cursor) {
+        unsigned char c = (unsigned char)*cursor;
+        if (c == '"' || c == '\\') {
+            buffer[used++] = '\\';
+            buffer[used++] = (char)c;
+        } else if (c < 0x20) {
+            int written = snprintf(buffer + used, sizeof buffer - used, "\\u%04x", (unsigned)c);
+            if (written > 0) used += (size_t)written;
+        } else {
+            buffer[used++] = (char)c;
+        }
+    }
+    buffer[used++] = '"';
+    buffer[used] = '\0';
+    printf("%s", buffer);
+}
+
+static void print_list(const char *const *items, size_t count) {
+    printf("[");
+    for (size_t i = 0; i < count; ++i) {
+        if (i) printf(",");
+        print_json_string(items && items[i] ? items[i] : "");
+    }
+    printf("]");
+}
+
+static void print_describe(const hyprlodr_loader *loader, int status) {
+    hyprlodr_mod_info mods[256];
+    size_t count = hyprlodr_loader_describe_all(loader, mods, sizeof mods / sizeof mods[0]);
+    printf("{\"host\":\"hyprlodr\",\"abi\":%u,\"mode\":\"describe\",\"status\":%d,\"mods\":[",
+           (unsigned)HYPRLODR_ABI_VERSION, status);
+    for (size_t i = 0; i < count; ++i) {
+        if (i) printf(",");
+        printf("{\"id\":");
+        print_json_string(mods[i].id);
+        printf(",\"version\":");
+        print_json_string(mods[i].version);
+        printf(",\"path\":");
+        print_json_string(mods[i].library_path);
+        printf(",\"dependencies\":");
+        print_list(mods[i].dependencies, mods[i].dependency_count);
+        printf(",\"conflicts\":");
+        print_list(mods[i].conflicts, mods[i].conflict_count);
+        printf(",\"flags\":%u,\"disabled\":%s}", mods[i].flags, mods[i].disabled ? "true" : "false");
+    }
+    printf("],\"errors\":%d}\n", hyprlodr_loader_error_count(loader));
 }
 
 static void print_summary(const hyprlodr_loader *loader, int status) {
@@ -32,14 +91,20 @@ static void print_summary(const hyprlodr_loader *loader, int status) {
            (unsigned)HYPRLODR_ABI_VERSION, status,
            (status == HYPRLODR_OK && !hyprlodr_loader_had_error(loader)) ? "true" : "false",
            hyprlodr_loader_mod_count(loader), hyprlodr_loader_error_count(loader));
-    for (size_t i = 0; i < count; ++i) printf("%s\"%s\"", i ? "," : "", ids[i]);
-    printf("],\"last_error\":\"%s\"}\n", hyprlodr_loader_last_error(loader));
+    for (size_t i = 0; i < count; ++i) {
+        if (i) printf(",");
+        print_json_string(ids[i]);
+    }
+    printf("],\"last_error\":");
+    print_json_string(hyprlodr_loader_last_error(loader));
+    printf("}\n");
 }
 
 int main(int argc, char **argv) {
     const char *log_path = "hyprlodr-events.jsonl";
     const char *disabled_file = NULL;
     unsigned seed = 0;
+    int describe = 0;
     int ok = 1;
 
     hyprlodr_loader *loader = hyprlodr_loader_create();
@@ -57,6 +122,7 @@ int main(int argc, char **argv) {
             if (hyprlodr_loader_disable(loader, argv[++i]) != HYPRLODR_OK) ok = 0;
         } else if (!strcmp(arg, "--disabled-file") && i + 1 < argc) disabled_file = argv[++i];
         else if (!strcmp(arg, "--seed") && i + 1 < argc) seed = (unsigned)strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(arg, "--describe")) describe = 1;
         else if (!strcmp(arg, "-h") || !strcmp(arg, "--help")) {
             usage(argv[0]);
             hyprlodr_loader_destroy(loader);
@@ -82,8 +148,15 @@ int main(int argc, char **argv) {
     if (status == HYPRLODR_OK && disabled_file)
         status = hyprlodr_loader_disable_file(loader, disabled_file);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_resolve(loader);
-    if (status == HYPRLODR_OK) status = hyprlodr_loader_init(loader);
 
+    if (describe) {
+        print_describe(loader, status);
+        int failed = status != HYPRLODR_OK || hyprlodr_loader_had_error(loader);
+        hyprlodr_loader_destroy(loader);
+        return failed ? 1 : 0;
+    }
+
+    if (status == HYPRLODR_OK) status = hyprlodr_loader_init(loader);
     hyprlodr_loader_shutdown(loader);
     print_summary(loader, status);
 

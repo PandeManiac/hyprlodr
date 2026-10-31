@@ -14,6 +14,8 @@
 
 **Real game (Level 2 verified).** Installed the loader into the local Steam installation, launched HYPER DEMON through Steam/Proton, and confirmed from inside the process that all five mods initialized in dependency order (`hyprlodr-attach.json` named `hyperdemon.exe`, 30 lifecycle events, five mod-authored log lines). Uninstalled afterwards and verified `OpenAL32.dll` is byte-identical to the shipped file. Evidence committed in `docs/evidence/`.
 
-**Not done.** No package format tooling, no desktop manager, no asset-format analysis, no audio-quality or gameplay verification.
+**Mod packaging (schema 1).** ZIP + `manifest.json` with defensive validation (traversal, absolute paths, backslashes, symlinks, duplicates, size and compression limits), an install registry for the future manager, and manifest/descriptor cross-checking through a new `hyprlodr-host --describe` mode that reads ABI descriptors without initializing mods. 19 package scenarios pass alongside the 23 loader scenarios.
+
+**Not done.** No desktop manager, no asset-format analysis, no audio-quality or gameplay verification, no remote catalogue.
 
 Details: `docs/TESTING.md` (what is and is not verified), `docs/ROADMAP.md` (next steps).

@@ -50,6 +50,29 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 
 The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`) applies to the loader, host, samples and fixtures.
 
+## Package format (19/19 passing)
+
+`tools/tests/test_package.py` exercises the real tooling against real binaries:
+
+| Scenario | Asserts |
+|---|---|
+| `pack_and_validate_roundtrip` | Pack then inspect reproduces the manifest and entries |
+| `rejects_traversal` / `rejects_absolute_path` / `rejects_backslash_path` | Unsafe names refused |
+| `rejects_unknown_root_file` | Files outside `native/`, `assets/`, `config/` refused |
+| `rejects_symlink_entry` | Non-regular entries refused |
+| `rejects_duplicate_entry` | Duplicate archive members refused |
+| `rejects_missing_entry_file` | Declared entry must exist |
+| `rejects_invalid_id` / `rejects_invalid_dependency` / `rejects_bad_api` | Manifest field validation |
+| `rejects_wrong_platform_suffix` | Entry extension must match platform |
+| `rejects_zip_bomb_ratio` / `rejects_oversized_entry` | Size and compression limits enforced |
+| `rejects_non_zip` | Garbage archives refused |
+| `install_list_remove` | Install, idempotent re-install, index, removal |
+| `install_refuses_different_content` | Same id with different bytes is refused |
+| `descriptor_cross_check_detects_mismatch` | Manifest/descriptor version mismatch refused |
+| `descriptor_cross_check_accepts_real_mod` | Real ABI descriptor accepts a correct manifest |
+
+The cross-check tests call `hyprlodr-host --describe`, which loads the library and calls the descriptor query only — no `initialize`, so packaging never executes mod behaviour.
+
 ## Windows artifacts under Wine (verified)
 
 - `hyprlodr-host.exe` loads the five sample **DLLs** in the same order and shuts them down in reverse.

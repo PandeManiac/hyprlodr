@@ -1001,6 +1001,38 @@ void hyprlodr_loader_destroy(hyprlodr_loader *l) {
     free(l);
 }
 
+size_t hyprlodr_loader_describe_all(const hyprlodr_loader *l, hyprlodr_mod_info *out,
+                                    size_t capacity) {
+    size_t sorted[HYPRLODR_MAX_PLUGINS];
+    size_t count;
+    if (!l || !out || capacity == 0) return 0;
+    count = l->plugin_count < capacity ? l->plugin_count : capacity;
+    for (size_t i = 0; i < l->plugin_count; ++i) sorted[i] = i;
+    for (size_t i = 1; i < l->plugin_count; ++i) {
+        size_t item = sorted[i], j = i;
+        while (j > 0 && strcmp(l->plugins[item].descriptor->id,
+                               l->plugins[sorted[j - 1]].descriptor->id) < 0) {
+            sorted[j] = sorted[j - 1];
+            --j;
+        }
+        sorted[j] = item;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const hyprlodr_loaded_plugin *p = &l->plugins[sorted[i]];
+        const hyprlodr_plugin_descriptor *d = p->descriptor;
+        out[i].id = d->id;
+        out[i].version = d->version;
+        out[i].library_path = p->path;
+        out[i].dependencies = d->dependencies;
+        out[i].dependency_count = d->dependency_count;
+        out[i].conflicts = HYPRLODR_DESCRIPTOR_HAS(d, conflicts) ? d->conflicts : NULL;
+        out[i].conflict_count = HYPRLODR_DESCRIPTOR_HAS(d, conflict_count) ? d->conflict_count : 0;
+        out[i].flags = HYPRLODR_DESCRIPTOR_HAS(d, flags) ? d->flags : 0u;
+        out[i].disabled = p->disabled;
+    }
+    return count;
+}
+
 size_t hyprlodr_loader_order(const hyprlodr_loader *l, const char **ids, size_t capacity) {
     if (!l) return 0;
     for (size_t i = 0; i < l->order_count && i < capacity; ++i)

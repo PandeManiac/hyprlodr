@@ -52,6 +52,23 @@ void hyprlodr_loader_shutdown(hyprlodr_loader *loader);
 /* Shutdown (if needed), unload libraries and release all memory. */
 void hyprlodr_loader_destroy(hyprlodr_loader *loader);
 
+/* Static metadata for one discovered mod, without running any mod code. */
+typedef struct {
+    const char *id;
+    const char *version;
+    const char *library_path;
+    const char *const *dependencies;
+    size_t dependency_count;
+    const char *const *conflicts;
+    size_t conflict_count;
+    uint32_t flags;
+    int disabled;
+} hyprlodr_mod_info;
+
+/* Fill `out` with descriptors in mod-id order. Returns the number written. */
+size_t hyprlodr_loader_describe_all(const hyprlodr_loader *loader, hyprlodr_mod_info *out,
+                                    size_t capacity);
+
 /* Introspection for hosts and tests. */
 size_t hyprlodr_loader_order(const hyprlodr_loader *loader, const char **ids, size_t capacity);
 size_t hyprlodr_loader_mod_count(const hyprlodr_loader *loader);
