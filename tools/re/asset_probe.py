@@ -48,7 +48,29 @@ HEADER_BLOCK = 0x5F3
 HEADER_STATE = 11
 TABLE_T0_RVA = 0x361710
 TABLE_T1_RVA = 0x361810
+CRC_TABLE_RVA = 0x36F700
 ENTRY_END = 0xFFFF
+
+
+def standard_crc_table() -> list[int]:
+    table = []
+    for index in range(256):
+        value = index
+        for _ in range(8):
+            value = (value >> 1) ^ 0xEDB88320 if value & 1 else value >> 1
+        table.append(value)
+    return table
+
+
+def entry_state(name: bytes) -> int:
+    """Per-entry cipher state.
+
+    FUN_140215280 is a reflected CRC-32 (initial value 0, final complement)
+    over the asset name; the loader passes its low 16 bits to the stream
+    cipher as the starting state. Verified against the binary's table, see
+    `verify_crc_table`.
+    """
+    return zlib.crc32(name) & 0xFFFF
 
 
 def entropy(block: bytes) -> float:
@@ -127,6 +149,11 @@ def selftest() -> int:
     t0 = bytes(((index * 37 + 11) & 0xFF) for index in range(256))
     t1 = bytes(((index * 91 + 7) & 0xFF) for index in range(256))
 
+    # Standard CRC-32 check value, then the 16-bit reduction the loader uses.
+    check(entry_state(b"123456789") == (0xCBF43926 & 0xFFFF),
+          "entry_state must reduce standard CRC-32 to 16 bits")
+    check(entry_state(b"") == 0, "empty name must give state 0")
+
     probe = bytes(range(256))
     encrypted = encrypt(probe, HEADER_STATE, t0, t1)
     decrypted, state = decrypt(encrypted, HEADER_STATE, t0, t1)
@@ -192,6 +219,13 @@ def probe(exe_path: pathlib.Path, asset_path: pathlib.Path) -> int:
           f"permutation={sorted(t0) == list(range(256))}")
     print(f"  table T1 @0x{TABLE_T1_RVA:x}: {len(set(t1))} distinct bytes, "
           f"permutation={sorted(t1) == list(range(256))}")
+
+    crc_offset = pe.rva_to_offset(CRC_TABLE_RVA)
+    found = list(struct.unpack_from("<256I", pe.data, crc_offset))
+    print(f"  crc table @0x{CRC_TABLE_RVA:x}: matches standard CRC-32 = "
+          f"{found == standard_crc_table()}")
+    print(f"  entry key    : state = crc32(name) & 0xffff, e.g. "
+          f"{entry_state(b'shaders/skull_giga.vert')}")
 
     header, state = decrypt(asset[:HEADER_BLOCK], HEADER_STATE, t0, t1)
     printable = sum(1 for byte in header if 32 <= byte < 127)

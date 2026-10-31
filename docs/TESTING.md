@@ -84,7 +84,7 @@ This proves the Windows loader path, the forwarder table and the attach bootstra
 
 ## Asset probe (`asset_probe_suite`)
 
-`tools/re/asset_probe.py --selftest` builds a synthetic archive with the cipher the decompiled loader implies, encrypts it, decrypts it, and asserts the entry table parses back to the original names, offsets and sizes — including a corrupt-byte case. This is a model check, not a claim about the real container: the tool's real-file mode reports `RESULT: decryption does not yield names` and exits non-zero, which is the current, honest state.
+`tools/re/asset_probe.py --selftest` builds a synthetic archive with the cipher the decompiled loader implies, encrypts it, decrypts it, and asserts the entry table parses back to the original names, offsets and sizes — including a corrupt-byte case. This is a model check, not a claim about the real container: the tool's real-file mode reports `RESULT: decryption does not yield names` and exits non-zero, which is the current, honest state. It also verifies that the binary's CRC table at RVA `0x36f700` equals the standard CRC-32 table (it does), which is what makes `crc32(name) & 0xffff` a confirmed per-entry key rather than a guess.
 
 ## Manager core (16/16 passing)
 

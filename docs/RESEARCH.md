@@ -140,10 +140,19 @@ s = (s + 1 + (int)(signed char)c) & 0xffff
 | Header block | `0x5f3` bytes read from initial state `11` |
 | Entry table | restarts at state `0`; `(u16 id, u8 name_len, name, u32 offset, u32 size)`, terminated by id `0xffff` |
 | Readers | only `FUN_140212c90` and `FUN_140213370`; **no function writes the tables**, so they are static data |
+| Instruction check | `movzbl 0x361710(%rdx,%r9)` (scale 1), `shr`/`add`/`xor`, state kept 16-bit by `movzwl %cx,%ebx` — the model matches the machine code |
+| Per-entry data key | `state = crc32(name) & 0xffff`; `FUN_140215280` is a reflected CRC-32 over the asset name and its table at RVA `0x36f700` is byte-identical to the standard CRC-32 table (verified by the probe) |
 
-**Observed, and limiting:** the tables as bytes are not permutations (168 and 162 distinct values), and decrypting the real archive with this formula produces noise, not names. Tried and rejected: both table orders, 256 initial states, state advanced on plaintext instead of ciphertext, and continuing the header stream into the body without a reset. Two explanations remain: the tables are wider than the byte arrays Ghidra's typing implies (so indexing is wrong), or the decrypted block is itself compressed.
+**Observed, and limiting:** the tables are not permutations (168 and 162 distinct bytes), and decrypting the real archive produces noise, not names. Rejected by experiment:
 
-**Conclusion:** the cipher is located and specified, but the container is **not decoded**. `tools/re/asset_probe.py` reproduces every observation above, and its self-test proves the implementation round-trips a synthetic archive built the way the decompiled code describes — so the failure is in the model, not the transcription.
+- both table orders, 256 initial states, and state advanced on plaintext instead of ciphertext;
+- the header stream continued into the body without a reset;
+- the index at offset `0` and at `0x5f3` under **all 65,536 states**, across four field layouts (`u16`/`u32` id, `u8`/`u16` name length) — zero candidates with a printable name;
+- the index at the end of the file, and offsets read from the last 4 and 8 bytes as little- and big-endian.
+
+**Inferred:** the loader seeks (`seekg`) before reading, and the 1523-byte block does not decode to a plaintext table, so the index is itself compressed and needs the same decoder the entry payloads use — not just the cipher. The cipher is solved; the compression is not.
+
+**Conclusion:** the container is **not decoded**. `tools/re/asset_probe.py` reproduces every observation above, and its self-test proves the cipher implementation round-trips a synthetic archive built the way the decompiled code describes — so the failure is in the compression model, not the cipher transcription.
 
 ## Tooling available
 
