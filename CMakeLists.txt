@@ -98,6 +98,12 @@ if(BUILD_TESTING)
   target_compile_options(anchor_test PRIVATE ${HYPRLODR_WARNINGS})
   add_test(NAME anchor_test COMMAND anchor_test)
 
+  # Asset container / cipher probe: proves the implementation round-trips a
+  # synthetic archive. The real archive check is a manual, evidence-producing
+  # run (python3 tools/re/asset_probe.py --exe ... --asset ...).
+  add_test(NAME asset_probe_suite
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/re/asset_probe.py --selftest)
+
   add_test(NAME loader_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/native/tests/loader_suite.py
       $<TARGET_FILE:hyprlodr-host>

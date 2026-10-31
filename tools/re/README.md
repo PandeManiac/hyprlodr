@@ -69,6 +69,15 @@ When a finding matters, record it in `docs/RESEARCH.md` as an observation with
 the RVA it came from, distinguishing what was **observed** from what was
 **inferred**.
 
+### 3. Probe the asset container
+
+```bash
+python3 tools/re/asset_probe.py --exe "$GAME/hyperdemon.exe" --asset "$GAME/asset/asset"
+python3 tools/re/asset_probe.py --selftest     # model check, runs in ctest
+```
+
+It reports entropy, standard framing probes, the cipher tables, and the outcome of decrypting the header. Today the real file prints `RESULT: decryption does not yield names` and exits non-zero. Do not treat the container as decoded until that line disappears.
+
 ## What the anchors mean
 
 An anchor is `RVA + length + FNV-1a 64` of the bytes expected there. The proxy

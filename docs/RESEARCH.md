@@ -123,6 +123,28 @@ The reference sites were found by scanning `.text` (file offset `0x400`, RVA `0x
 
 **Not established:** the compression/encryption scheme, the directory layout, and therefore whether a mod can replace a single asset without rebuilding the entire 306 MB archive. Asset replacement stays blocked until the header reader `FUN_140212c90` is understood.
 
+### The loader's stream cipher (2026-10-31)
+
+**Observed** in `FUN_140212c90` (`0x212c90`) and `FUN_140213370` (`0x213370`): every byte read from `asset/asset` is passed through a stateful XOR cipher before parsing.
+
+```text
+k = T0[((T1[(s >> 2) & 0xff] >> 1) + s) & 0xff] ^ T1[s & 0xff]
+p = c ^ k
+s = (s + 1 + (int)(signed char)c) & 0xffff
+```
+
+| Fact | Value |
+|---|---|
+| Tables | `T0` at RVA `0x361710`, `T1` at RVA `0x361810`, 256 bytes each |
+| State | 16-bit, advances on the **ciphertext** byte, so decryption is self-synchronising |
+| Header block | `0x5f3` bytes read from initial state `11` |
+| Entry table | restarts at state `0`; `(u16 id, u8 name_len, name, u32 offset, u32 size)`, terminated by id `0xffff` |
+| Readers | only `FUN_140212c90` and `FUN_140213370`; **no function writes the tables**, so they are static data |
+
+**Observed, and limiting:** the tables as bytes are not permutations (168 and 162 distinct values), and decrypting the real archive with this formula produces noise, not names. Tried and rejected: both table orders, 256 initial states, state advanced on plaintext instead of ciphertext, and continuing the header stream into the body without a reset. Two explanations remain: the tables are wider than the byte arrays Ghidra's typing implies (so indexing is wrong), or the decrypted block is itself compressed.
+
+**Conclusion:** the cipher is located and specified, but the container is **not decoded**. `tools/re/asset_probe.py` reproduces every observation above, and its self-test proves the implementation round-trips a synthetic archive built the way the decompiled code describes — so the failure is in the model, not the transcription.
+
 ## Tooling available
 
 **Observed:** `clang 23.1.3`, `lld-link`, `llvm-dlltool`, `cmake`, `ninja`, `ghidra 12.1.2` (`/usr/bin/ghidra`), `rea` CLI 6.7.0, `wine 11.20 (Staging)`, `.NET SDK 10.0.113`.

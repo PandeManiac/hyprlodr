@@ -14,7 +14,7 @@ The original game files are never modified destructively: installing the loader 
 | 2 | Diagnostic mod executes inside the real HYPER DEMON process | **Verified 2026-10-31** — `hyperdemon.exe` launched through Steam/Proton initialized all five mods in-process; evidence in `docs/evidence/` |
 | 3 | Desktop mod manager | **Implemented** — Avalonia app; 16/16 headless core scenarios; UI captured in `docs/evidence/manager-ui*.png` |
 | 4 | Mods change the game | Not started — groundwork verified: runtime build fingerprints match the real executable (8/8 anchors in-game) |
-| 5 | Asset replacement | Not started (asset pack documented, format unknown) |
+| 5 | Asset replacement | Not started — the container's stream cipher is located and specified, but the format is not decoded |
 
 Details and evidence: `docs/RESEARCH.md`, `docs/TESTING.md`, `docs/ROADMAP.md`.
 

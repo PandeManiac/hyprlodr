@@ -82,6 +82,10 @@ The cross-check tests call `hyprlodr-host --describe`, which loads the library a
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
+## Asset probe (`asset_probe_suite`)
+
+`tools/re/asset_probe.py --selftest` builds a synthetic archive with the cipher the decompiled loader implies, encrypts it, decrypts it, and asserts the entry table parses back to the original names, offsets and sizes — including a corrupt-byte case. This is a model check, not a claim about the real container: the tool's real-file mode reports `RESULT: decryption does not yield names` and exits non-zero, which is the current, honest state.
+
 ## Manager core (16/16 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
