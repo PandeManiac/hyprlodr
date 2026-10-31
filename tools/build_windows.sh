@@ -37,6 +37,7 @@ compile() { # compile <source> <object> [extra flags...]
 }
 
 compile "$ROOT/native/src/loader.c" "$OUT/obj/loader.obj"
+compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
 # -fno-builtin keeps the runtime's own memcpy/memset implementations from
@@ -74,7 +75,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   python3 "$ROOT/tools/gen_proxy_def.py" "$ORIGINAL_OPENAL" "$OUT/OpenAL32.def" OpenAL32_real
   lld-link /nologo /dll /nodefaultlib /entry:dll_main "/out:$OUT/OpenAL32.dll" \
     /def:"$OUT/OpenAL32.def" \
-    "$OUT/obj/proxy.obj" "$OUT/obj/loader.obj" "$CRT_OBJ" "$K32"
+    "$OUT/obj/proxy.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
 else
   echo "skipped proxy DLL: pass the game's OpenAL32.dll path as the second argument"

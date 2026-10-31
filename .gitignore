@@ -1,5 +1,6 @@
 /build/
 /build-win/
+/build-re/
 /build-recovery/
 /.freebuff/
 __pycache__/

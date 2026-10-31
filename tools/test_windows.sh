@@ -69,6 +69,14 @@ base = pathlib.Path(sys.argv[1])
 attach = json.loads((base / "hyprlodr-attach.json").read_text())
 assert attach["stage"] in ("mods_loaded", "mods_failed"), attach
 print(f"proxy attach: stage={attach['stage']} pid={attach['pid']} status_text={attach['status_text']}")
+# The test host is proxy_client.exe, not hyperdemon.exe. The fingerprint must
+# say so: an unknown build is reported, never assumed compatible.
+assert attach["module_parsed"] is True, attach
+assert attach["anchors_total"] > 0, attach
+assert attach["build_matches"] is False, attach
+assert attach["anchors_matched"] < attach["anchors_total"], attach
+print(f"build fingerprint: {attach['anchors_matched']}/{attach['anchors_total']} anchors, "
+      f"build_matches={attach['build_matches']}." )
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init

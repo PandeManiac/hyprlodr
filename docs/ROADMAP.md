@@ -14,11 +14,13 @@
 
 **Desktop manager (Milestone 3).** Avalonia application with Steam discovery (multiple libraries, manual override, Proton detection), loader install/remove with hash manifests and rollback, mod list with enable/disable, package import, exact load-order preview, validation problems and a log viewer. Core services covered by 16/16 headless scenarios; UI rendered against a demo installation and captured as evidence.
 
+**Level 4 groundwork — build fingerprints (verified 2026-10-31).** `tools/re/analyze_pe.py` derives RVA + FNV-1a 64 anchors from `hyperdemon.exe` (four string constants plus the four RIP-relative instructions that reference them) and emits a data-free header the proxy verifies at run time. 8/8 anchors matched inside the real game process (`module_base=0x140000000`, timestamp `0x66ecd8b5`); a Wine stand-in host reports `build_matches=false`. `anchor_test` covers the verifier in ctest.
+
 **Tooling.** Read-only diagnostics (Steam discovery, multi-library, PE parsing, Proton detection), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers.
 
 ## Next, in order
 
-1. **First game-facing capability.** Use Ghidra/REA on `hyperdemon.exe` and `asset/asset` to establish one narrow, evidence-backed extension point that a mod can actually change, with a compatibility gate and a documented failure mode.
+1. **First game-facing capability.** Use Ghidra/REA on `hyperdemon.exe` and `asset/asset` to establish one narrow, evidence-backed extension point that a mod can actually change. The compatibility gate now exists: the anchor manifest and `build_matches` check are the precondition any such hook must pass.
 2. **Mod profiles and asset management in the manager.**
 5. **Engine-facing API.** Only after 4, and only at a verified boundary (resource lookup or a narrowly fingerprinted hook with an explicit compatibility gate).
 

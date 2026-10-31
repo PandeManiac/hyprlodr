@@ -123,6 +123,34 @@ Verified outcomes:
 - All five mods initialized in order `z.foundation, a.palette, b.audio, m.overlay, 00.final`; the game ran for 29 s without error.
 - `hyprl_install.py uninstall` restored `OpenAL32.dll` to `396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4`, byte-identical to the shipped file.
 
+## Build fingerprints (verified in the real game, 2026-10-31)
+
+Before any address-dependent work, HYPRLODR proves the running executable is the build that was analysed. `tools/re/analyze_pe.py` locates short constants and the RIP-relative instructions that reference them, then records an RVA plus the FNV-1a 64 hash of the bytes that belong there. Only hashes are stored: neither the manifest nor `native/win32/game_anchors.h` contains game content.
+
+Anchors for the shipped build (`docs/evidence/2026-10-31-anchors.json`): four string constants and four reference sites.
+
+| Check | Result |
+| --- | --- |
+| `anchor_test` (ctest) | FNV-1a reference vectors, out-of-range anchors, single-byte corruption, NULL arguments — passing |
+| `analyze_pe.py --verify` against the shipped binary | 8/8 anchors verified |
+| Wine stand-in host (`proxy_client.exe`) | 0/8 anchors, `build_matches=false` — an unknown build is rejected, not assumed |
+| Real game (`hyperdemon.exe` under Proton) | `module_base=0x140000000`, timestamp `0x66ecd8b5` matches, **8/8 anchors matched**, `build_matches=true` |
+
+`docs/evidence/2026-10-31-fingerprint.json` is the attach record written by the game process itself. It also shows `module_size=4214784`, matching the PE `SizeOfImage`, which is the range the anchors were verified against.
+
+Re-running the fingerprint check:
+
+```bash
+GAME=/path/to/steamapps/common/hyperdemon
+python3 tools/re/analyze_pe.py "$GAME/hyperdemon.exe" --verify native/win32/game_anchors.h
+# inside the game, after installing the loader:
+cat "$GAME/hyprlodr-attach.json"   # expect build_matches=true, anchors_matched == anchors_total
+```
+
+A mismatch is reported, never optimised away. Nothing is hooked today, so `build_matches=false` still loads mods; any future address-dependent hook must require it.
+
+Note on the 2026-10-31 re-run: the game process exited a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy). The attach record is therefore written before the mod start-up delay, which is why the fingerprint was captured; the five-mod initialization evidence remains the earlier `docs/evidence/2026-10-31-attach.json` run.
+
 ## Still unverified
 
 - **Audio output quality**: the process proves the `al*`/`alc*` symbols resolve into the real library; nobody has listened to the game with the proxy installed.
@@ -146,4 +174,4 @@ sha256sum "$GAME/OpenAL32.dll"    # expect 396f8873...420b4
 
 - No CI runs the Windows build automatically; `tools/build_windows.sh` and `tools/test_windows.sh` are the entry points a runner should call.
 - Sanitizers are not wired into the Linux build yet.
-- The package validator/packer and the desktop manager do not exist yet, so no package-format tests are claimed.
+- The package validator/packer and the desktop manager now exist, with their own suites (`package_suite`, `manager_suite`); they are no longer unverified areas.

@@ -84,6 +84,29 @@ hyperdemon/
 
 Raw files: `docs/evidence/2026-10-31-attach.json`, `docs/evidence/2026-10-31-events.jsonl`.
 
+## Static anchors and runtime confirmation (2026-10-31)
+
+**Observed** by `tools/re/analyze_pe.py` against the shipped binary (`sha256 7612dd72…3611`, `SizeOfImage 4214784`, `TimeDateStamp 0x66ecd8b5`):
+
+| Anchor | RVA | Bytes hashed |
+|---|---|---|
+| `resource_path` constant | `0x36f640` | 12 |
+| `missing_resource_message` constant | `0x36f650` | 18 |
+| `shader_directory` constant | `0x3652f8` | 8 |
+| `shader_name` constant | `0x3689d0` | 16 |
+| reference to `shader_directory` | `0x19c8` | 16 |
+| reference to `shader_directory` | `0x7199d` | 16 |
+| reference to `resource_path` | `0x21257e` | 16 |
+| reference to `missing_resource_message` | `0x213ce6` | 16 |
+
+The reference sites were found by scanning `.text` (file offset `0x400`, RVA `0x1000`, 3.1 MB) for `REX.W 8D/8B` instructions with a RIP-relative `disp32` pointing at one of the constants. This is a linear encoding scan, not a disassembler: the sites are observed, the function boundaries around them are not yet established.
+
+**Verified in the real game:** with the proxy installed, the attach record written from inside `hyperdemon.exe` reported `module_base=0x140000000`, `module_size=4214784`, `build_timestamp=0x66ecd8b5` (equal to the expected value), and **8/8 anchors matched** with none out of range. `docs/evidence/2026-10-31-fingerprint.json` is that record.
+
+**Verified negatively:** the same proxy loaded into `proxy_client.exe` under Wine reports `module_parsed=true` but 0/8 anchors and `build_matches=false`. The check therefore distinguishes the game from another process rather than merely succeeding everywhere.
+
+**Not established:** which function owns each reference site, what `asset/asset` actually contains, and whether any of these sites is a safe place to intervene. The anchors are a compatibility gate, not a hook.
+
 ## Tooling available
 
 **Observed:** `clang 23.1.3`, `lld-link`, `llvm-dlltool`, `cmake`, `ninja`, `ghidra 12.1.2` (`/usr/bin/ghidra`), `rea` CLI 6.7.0, `wine 11.20 (Staging)`, `.NET SDK 10.0.113`.
@@ -92,6 +115,6 @@ Raw files: `docs/evidence/2026-10-31-attach.json`, `docs/evidence/2026-10-31-eve
 
 ## Known limitations
 
-- The real game has not been launched with HYPRLODR installed in this session; see `docs/TESTING.md`.
+- The real game has been launched with HYPRLODR installed and the fingerprint verified; what remains unobserved is gameplay, audio quality and any scoring/online behaviour. See `docs/TESTING.md`.
 - Nothing is known yet about shader, mesh or texture formats.
-- Address-dependent techniques are deliberately absent, so no compatibility fingerprint exists to check against future builds.
+- No address-dependent technique is implemented yet. The build fingerprint that must gate one now exists, but no extension point has been established.

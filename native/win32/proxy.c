@@ -16,6 +16,7 @@
 
 #include "hypr_win32.h"
 #include "loader.h"
+#include "game_anchors.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -43,7 +44,72 @@ static void json_escape(FILE *file, const char *text) {
     }
 }
 
+/* --- build fingerprint --------------------------------------------------------
+ * The proxy is the only HYPRLODR component that runs inside the game, so it is
+ * the only place that can prove which executable is actually running. It
+ * verifies the anchor table from native/win32/game_anchors.h against the mapped
+ * main module and reports the result in the attach record.
+ *
+ * Nothing is hooked today, so a mismatch is reported rather than fatal. Any
+ * address-dependent work must require build_matches. Nothing in the game is
+ * assumed to be where the analysis said it was without this proof.
+ */
+typedef struct {
+    const uint8_t *base;
+    uint32_t size_of_image;
+    uint32_t timestamp;
+    int parsed;
+} module_identity;
+
+static module_identity g_module;
+static hyprlodr_anchor_report g_anchors;
+static int g_anchors_checked;
+
+static uint16_t read_u16(const uint8_t *bytes) {
+    uint16_t value;
+    memcpy(&value, bytes, sizeof value);
+    return value;
+}
+
+static uint32_t read_u32(const uint8_t *bytes) {
+    uint32_t value;
+    memcpy(&value, bytes, sizeof value);
+    return value;
+}
+
+static void inspect_main_module(void) {
+    g_anchors_checked = 1;
+    HMODULE handle = GetModuleHandleA(NULL);
+    if (!handle) return;
+    const uint8_t *base = (const uint8_t *)handle;
+    if (base[0] != 'M' || base[1] != 'Z') return;
+    uint32_t pe_offset = read_u32(base + 0x3c);
+    if (pe_offset < 0x40 || pe_offset > 0x1000) return;
+    const uint8_t *pe = base + pe_offset;
+    if (!(pe[0] == 'P' && pe[1] == 'E' && pe[2] == 0 && pe[3] == 0)) return;
+    const uint8_t *coff = pe + 4;
+    const uint8_t *optional = coff + 20;
+    if (read_u16(optional) != 0x20b) return; /* PE32+ only */
+    g_module.timestamp = read_u32(coff + 4);
+    g_module.size_of_image = read_u32(optional + 56);
+    if (g_module.size_of_image < 0x1000) return;
+    g_module.base = base;
+    g_module.parsed = 1;
+    hyprlodr_anchors_verify(base, (size_t)g_module.size_of_image, hyprlodr_game_anchors,
+                            HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors);
+}
+
+static void put_hex(FILE *file, uint64_t value, unsigned digits) {
+    static const char alphabet[] = "0123456789abcdef";
+    fputs("0x", file);
+    for (unsigned shift = (digits - 1u) * 4u;; shift -= 4u) {
+        fputc(alphabet[(value >> shift) & 0xfu], file);
+        if (shift == 0) break;
+    }
+}
+
 static void write_attach_record(const char *stage, int status) {
+    if (!g_anchors_checked) inspect_main_module();
     FILE *file = fopen(g_evidence_path, "w");
     if (!file) return;
     char exe_path[1024];
@@ -57,12 +123,39 @@ static void write_attach_record(const char *stage, int status) {
     fprintf(file, "\",\"loader_abi\":%u,\"status\":%d,\"status_text\":\"",
             (unsigned)HYPRLODR_ABI_VERSION, status);
     json_escape(file, hyprlodr_loader_strerror(status));
+
+    fputs("\",\"module_parsed\":", file);
+    fputs(g_module.parsed ? "true" : "false", file);
+    fputs(",\"module_base\":\"", file);
+    put_hex(file, (uint64_t)(uintptr_t)g_module.base, 16u);
+    fprintf(file, "\",\"module_size\":%lu", (unsigned long)g_module.size_of_image);
+    fputs(",\"build_timestamp\":\"", file);
+    put_hex(file, (uint64_t)g_module.timestamp, 8u);
+    fputs("\",\"expected_timestamp\":\"", file);
+    put_hex(file, (uint64_t)HYPRLODR_GAME_BUILD_TIMESTAMP, 8u);
+
+    int build_matches = g_module.parsed != 0 &&
+                        g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
+                        g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    fputs("\",\"build_matches\":", file);
+    fputs(build_matches ? "true" : "false", file);
+    fprintf(file, ",\"anchors_total\":%lu,\"anchors_matched\":%lu,\"anchors_out_of_range\":%lu",
+            (unsigned long)g_anchors.total, (unsigned long)g_anchors.matched,
+            (unsigned long)g_anchors.out_of_range);
+    fputs(",\"anchor_mismatch\":\"", file);
+    json_escape(file, g_anchors.first_mismatch ? g_anchors.first_mismatch : "");
     fputs("\"}\n", file);
     fclose(file);
 }
 
 static DWORD WINAPI bootstrap(LPVOID unused) {
     (void)unused;
+
+    /* Evidence and build identity first. A game that exits during start-up can
+     * still prove which executable ran and whether it matches the analysis; the
+     * mod start-up delay below is about the game being ready, not about us. */
+    write_attach_record("attached", HYPRLODR_OK);
+
     Sleep(HYPRLODR_BOOTSTRAP_DELAY_MS);
 
     char mods_dir[1024];
@@ -71,8 +164,6 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     snprintf(mods_dir, sizeof mods_dir, "%s\\mods", g_game_dir);
     snprintf(disabled_file, sizeof disabled_file, "%s\\mods\\disabled.txt", g_game_dir);
     snprintf(log_path, sizeof log_path, "%s\\hyprlodr-events.jsonl", g_game_dir);
-
-    write_attach_record("attached", HYPRLODR_OK);
 
     g_loader = hyprlodr_loader_create();
     if (!g_loader) {

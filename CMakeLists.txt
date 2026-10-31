@@ -8,7 +8,7 @@ include(CTest)
 
 set(HYPRLODR_WARNINGS -Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion)
 
-add_library(hyprlodr_loader STATIC native/src/loader.c)
+add_library(hyprlodr_loader STATIC native/src/loader.c native/src/anchors.c)
 target_include_directories(hyprlodr_loader PUBLIC native/include)
 target_compile_options(hyprlodr_loader PRIVATE ${HYPRLODR_WARNINGS})
 if(UNIX AND NOT APPLE)
@@ -87,6 +87,13 @@ hyprlodr_fixture(plain_a FIX_ID="plain.a")
 
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+  # Runtime build fingerprints: the verifier that guards address-dependent work.
+  add_executable(anchor_test native/tests/anchor_test.c)
+  target_link_libraries(anchor_test PRIVATE hyprlodr_loader)
+  target_compile_options(anchor_test PRIVATE ${HYPRLODR_WARNINGS})
+  add_test(NAME anchor_test COMMAND anchor_test)
+
   add_test(NAME loader_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/native/tests/loader_suite.py
       $<TARGET_FILE:hyprlodr-host>
