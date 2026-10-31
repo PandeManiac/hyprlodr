@@ -70,6 +70,23 @@ link_mod "$ROOT/samples/audio.c" "b.audio"
 link_mod "$ROOT/samples/overlay.c" "m.overlay"
 link_mod "$ROOT/samples/final.c" "00.final"
 
+echo "== example mod =="
+mkdir -p "$OUT/examples"
+"$CC" "${CFLAGS[@]}" -c "$ROOT/examples/uptime.c" -o "$OUT/obj/example_uptime.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.uptime.dll" \
+  "$OUT/obj/example_uptime.obj" "$CRT_OBJ" "$K32"
+echo "  MOD example.uptime (in $OUT/examples, not copied into the game by default)"
+
+# Stage the example as a real package, so the documented authoring path is the
+# path that is actually exercised rather than described.
+if [ -f "$ROOT/examples/package/manifest.json" ]; then
+  rm -rf "$OUT/example-package"
+  mkdir -p "$OUT/example-package/native/windows-x86_64"
+  cp "$ROOT/examples/package/manifest.json" "$OUT/example-package/"
+  cp "$OUT/examples/example.uptime.dll" "$OUT/example-package/native/windows-x86_64/"
+  python3 "$ROOT/tools/hyprl_package.py" pack "$OUT/example-package" "$OUT/examples/example.uptime.zip"
+fi
+
 if [ -n "$ORIGINAL_OPENAL" ]; then
   echo "== OpenAL32 proxy =="
   python3 "$ROOT/tools/gen_proxy_def.py" "$ORIGINAL_OPENAL" "$OUT/OpenAL32.def" OpenAL32_real

@@ -150,3 +150,31 @@ Validation is defensive: absolute paths, `..` segments, backslashes, symlinks, d
 ## Compatibility
 
 ABI 3 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
+
+## Worked example: `example.uptime`
+
+`examples/uptime.c` is a complete mod rather than a test fixture. Copy it as a starting point. It shows the four things most mods need first:
+
+- a **versioned dependency** (`z.foundation@^1.0.0`) so the loader orders it correctly;
+- **persistent storage** through `state_dir()`, incrementing a launch counter and writing a last-run marker;
+- **a capability** (`example.uptime`) other mods can check with `capability_has`;
+- **logging**, which appears in `<game>/hyprlodr-events.jsonl`.
+
+It also carries two lessons that cost real time: the Windows target's minimal CRT has no `fscanf` (parse with `fgets`), and GCC's `-Wformat-truncation` rejects `%s` of an unbounded path into a small buffer, so log the number, not the path.
+
+```bash
+# Linux .so (compiled with the project's strict warnings)
+cmake -S . -B build -G Ninja && cmake --build build      # -> build/examples/example.uptime.so
+
+# Windows .dll plus a real package, built by the normal Windows build
+tools/build_windows.sh build-win "/path/to/game/OpenAL32.dll"
+#   -> build-win/examples/example.uptime.dll
+#   -> build-win/examples/example.uptime.zip   (manifest from examples/package/manifest.json)
+
+python3 tools/hyprl_package.py validate build-win/examples/example.uptime.zip
+python3 tools/hyprl_package.py install   build-win/examples/example.uptime.zip --mods-dir "/path/to/game/mods"
+```
+
+Verified in the real game on 2026-10-31 with `delay_ms: 0`: six mods initialized in order `z.foundation, a.palette, b.audio, example.uptime, m.overlay, 00.final`, the example logged `launch 1 of 1.0.0 recorded` and `dependency z.foundation is present`, and `<game>/hyprlodr-state/example.uptime/` contained `launches.txt` and `last-run.txt`. Evidence: `docs/evidence/2026-10-31-example-mod.json`.
+
+Note it is built into `build/examples/`, not `build/mods/`: the loader suite asserts exactly the five sample mods, so an extra library there would change those expectations.

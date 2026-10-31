@@ -1,0 +1,42 @@
+{
+  "what": "worked example mod loaded in the real game",
+  "date": "2026-10-31",
+  "initialize_ok": [
+    "z.foundation",
+    "a.palette",
+    "b.audio",
+    "example.uptime",
+    "m.overlay",
+    "00.final"
+  ],
+  "example_logs": [
+    "info: launch 1 of 1.0.0 recorded",
+    "info: dependency z.foundation is present"
+  ],
+  "state_files": [
+    "last-run.txt",
+    "launches.txt"
+  ],
+  "attach": {
+    "stage": "mods_loaded",
+    "pid": 316,
+    "proxy_dir": "S:\\steamapps\\common\\hyperdemon",
+    "exe": "S:\\steamapps\\common\\hyperdemon\\hyperdemon.exe",
+    "loader_abi": 3,
+    "status": 0,
+    "status_text": "ok",
+    "delay_ms": 0,
+    "module_parsed": true,
+    "module_base": "0x0000000140000000",
+    "module_size": 4214784,
+    "build_timestamp": "0x66ecd8b5",
+    "expected_timestamp": "0x66ecd8b5",
+    "build_matches": true,
+    "anchors_total": 8,
+    "anchors_matched": 8,
+    "anchors_out_of_range": 0,
+    "anchor_mismatch": "",
+    "tables_dumped": true,
+    "table_t0_head": "c5c55db9505e5882"
+  }
+}

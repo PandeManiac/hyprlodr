@@ -36,6 +36,17 @@ foreach(I RANGE ${MOD_LAST})
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mods")
 endforeach()
 
+# --- Worked example mod --------------------------------------------------------
+# Deliberately outside ${CMAKE_BINARY_DIR}/mods: the sample five are asserted by
+# the loader suite, and an extra library there would change those expectations.
+add_library(example_uptime SHARED examples/uptime.c)
+target_include_directories(example_uptime PRIVATE native/include)
+target_compile_options(example_uptime PRIVATE ${HYPRLODR_WARNINGS})
+set_target_properties(example_uptime PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "example.uptime"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/examples")
+
 # --- Error-case fixtures -------------------------------------------------------
 # Each fixture is the same source compiled with different identity macros.
 function(hyprlodr_fixture name)
