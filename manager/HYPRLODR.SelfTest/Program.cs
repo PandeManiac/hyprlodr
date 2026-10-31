@@ -35,6 +35,9 @@ internal static class Program
         Register("event_log_reader", EventLog);
         Register("package_validation", PackageValidation);
         Register("package_import_and_registry", () => PackageImport(sample));
+        Register("profiles_round_trip", ProfilesRoundTrip);
+        Register("profiles_apply_rewrites_disabled_list", ProfilesApply);
+        Register("profiles_tolerate_corrupt_file", ProfilesCorrupt);
 
         foreach (var (name, body) in Scenarios)
         {
@@ -55,6 +58,82 @@ internal static class Program
     }
 
     private static void Register(string name, Action body) => Scenarios.Add((name, body));
+
+    // ---------------------------------------------------------------- profiles
+
+    private static (string Root, string Mods, ModCatalog Catalog) ProfileFixture()
+    {
+        var root = NewTemp();
+        var mods = Path.Combine(root, "mods");
+        Directory.CreateDirectory(mods);
+        foreach (var id in new[] { "a.one", "b.two" })
+            File.WriteAllBytes(Path.Combine(mods, id + ".dll"), Encoding.ASCII.GetBytes("mod " + id));
+        WriteRegistry(mods, ("a.one", "1.0.0", Array.Empty<string>()),
+                            ("b.two", "1.0.0", Array.Empty<string>()));
+        return (root, mods, ModCatalog.Load(mods));
+    }
+
+    private static void ProfilesRoundTrip()
+    {
+        var (root, _, catalog) = ProfileFixture();
+        catalog.SetEnabled("b.two", false);
+
+        var captured = ProfileStore.Capture("  balanced  ", catalog);
+        Check(captured.Name == "balanced", $"name not normalised: '{captured.Name}'");
+        Check(captured.EnabledMods.SequenceEqual(new[] { "a.one" }),
+              $"capture recorded {string.Join(',', captured.EnabledMods)}");
+
+        ProfileStore.Save(root, new[] { captured });
+        var loaded = ProfileStore.Load(root);
+        Check(loaded.Count == 1, $"expected one profile, got {loaded.Count}");
+        Check(loaded[0].Name == "balanced", "profile name lost on save");
+        Check(loaded[0].EnabledMods.SequenceEqual(new[] { "a.one" }), "enabled set lost on save");
+    }
+
+    private static void ProfilesApply()
+    {
+        var (root, mods, catalog) = ProfileFixture();
+        var profile = ProfileStore.Capture("only-a", catalog);
+        profile.EnabledMods.Remove("b.two");
+        ProfileStore.Save(root, new[] { profile });
+
+        // Start from the opposite state, then apply the stored profile.
+        var reopened = ModCatalog.Load(mods);
+        reopened.SetEnabled("a.one", false);
+        reopened.SetEnabled("b.two", true);
+
+        var missing = ProfileStore.Apply(ProfileStore.Load(root)[0], reopened, mods);
+        Check(missing.Count == 0, $"unexpected missing mods: {string.Join(',', missing)}");
+        Check(reopened.Mods.Single(mod => mod.Id == "a.one").Enabled, "profile did not enable a.one");
+        Check(!reopened.Mods.Single(mod => mod.Id == "b.two").Enabled, "profile did not disable b.two");
+
+        var disabledLines = File.ReadAllLines(Path.Combine(mods, ModCatalog.DisabledListName));
+        Check(disabledLines.Any(line => line.Trim() == "b.two"), "disabled.txt missing b.two");
+        Check(!disabledLines.Any(line => line.Trim() == "a.one"), "disabled.txt still lists a.one");
+
+        // A profile naming a removed mod reports it instead of failing silently.
+        var ghost = new ModProfile { Name = "ghost" };
+        ghost.EnabledMods.AddRange(new[] { "a.one", "gone.mod" });
+        var ghostMissing = ProfileStore.Apply(ghost, reopened, mods);
+        Check(ghostMissing.SequenceEqual(new[] { "gone.mod" }),
+              $"missing list was {string.Join(',', ghostMissing)}");
+    }
+
+    private static void ProfilesCorrupt()
+    {
+        var (root, _, _) = ProfileFixture();
+        File.WriteAllText(ProfileStore.PathFor(root), "{ not json at all");
+        Check(ProfileStore.Load(root).Count == 0, "a corrupt profile file must load as empty");
+
+        ProfileStore.Save(root, new[] { new ModProfile { Name = "   " } });
+        Check(ProfileStore.Load(root).Count == 0, "blank profile names must not be persisted");
+
+        var longName = new string('x', 200);
+        ProfileStore.Save(root, new[] { new ModProfile { Name = longName } });
+        var stored = ProfileStore.Load(root);
+        Check(stored.Count == 1 && stored[0].Name.Length == ProfileStore.MaxNameLength,
+              $"long name not clamped: {stored.FirstOrDefault()?.Name.Length}");
+    }
 
     private static void Check(bool condition, string message)
     {

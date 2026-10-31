@@ -12,6 +12,7 @@ public partial class MainWindow : Window
     private GameInstall? _install;
     private ModCatalog? _catalog;
     private IReadOnlyList<LoaderEvent> _events = Array.Empty<LoaderEvent>();
+    private List<ModProfile> _profiles = new();
     private bool _removeArmed;
 
     public MainWindow()
@@ -31,6 +32,11 @@ public partial class MainWindow : Window
         RemoveModButton.Click += (_, _) => RemoveSelectedMod();
         RefreshLogsButton.Click += (_, _) => RefreshLogs();
         LogFilterBox.TextChanged += (_, _) => RenderEvents();
+        SaveProfileButton.Click += (_, _) => SaveProfile();
+        ApplyProfileButton.Click += (_, _) => ApplyProfile();
+        DeleteProfileButton.Click += (_, _) => DeleteProfile();
+        ProfileBox.SelectionChanged += (_, _) =>
+            ProfileNameBox.Text = ProfileBox.SelectedItem as string ?? ProfileNameBox.Text;
 
         var preset = Environment.GetEnvironmentVariable("HYPRLODR_GAME_DIR");
         Scan(string.IsNullOrWhiteSpace(preset) ? null : preset);
@@ -191,6 +197,71 @@ public partial class MainWindow : Window
         ProblemsText.Foreground = plan.Ok
             ? Avalonia.Media.Brushes.LightGreen
             : Avalonia.Media.Brushes.OrangeRed;
+
+        RefreshProfiles();
+    }
+
+    private void RefreshProfiles()
+    {
+        if (_install is null)
+        {
+            _profiles = new List<ModProfile>();
+            ProfileBox.ItemsSource = Array.Empty<string>();
+            ProfileStatusText.Text = "";
+            return;
+        }
+
+        _profiles = ProfileStore.Load(_install.GamePath);
+        var selected = ProfileBox.SelectedItem as string;
+        ProfileBox.ItemsSource = _profiles.Select(profile => profile.Name).ToList();
+        if (selected is not null && _profiles.Any(profile => profile.Name == selected))
+            ProfileBox.SelectedItem = selected;
+        ProfileStatusText.Text = _profiles.Count == 0
+            ? "No profiles saved yet."
+            : $"{_profiles.Count} profile(s) stored in {ProfileStore.FileName}.";
+    }
+
+    private void SaveProfile()
+    {
+        if (_install is null || _catalog is null) { SetStatus("Select a game folder first."); return; }
+        var name = ProfileStore.NormaliseName(ProfileNameBox.Text ?? "");
+        var profile = ProfileStore.Capture(name, _catalog);
+        _profiles.RemoveAll(existing => existing.Name == name);
+        _profiles.Add(profile);
+        ProfileStore.Save(_install.GamePath, _profiles);
+        ProfileNameBox.Text = name;
+        RefreshProfiles();
+        ProfileBox.SelectedItem = name;
+        SetStatus($"Saved profile '{name}' with {profile.EnabledMods.Count} enabled mod(s).");
+    }
+
+    private void ApplyProfile()
+    {
+        if (_install is null || _catalog is null) { SetStatus("Select a game folder first."); return; }
+        var name = ProfileBox.SelectedItem as string ?? ProfileNameBox.Text;
+        var profile = _profiles.FirstOrDefault(candidate => candidate.Name == name);
+        if (profile is null) { SetStatus("Select a saved profile to apply."); return; }
+
+        var missing = ProfileStore.Apply(profile, _catalog, Path.Combine(_install.GamePath, "mods"));
+        RefreshMods();
+        SetStatus(missing.Count == 0
+            ? $"Applied profile '{profile.Name}'."
+            : $"Applied profile '{profile.Name}'; not installed: {string.Join(", ", missing)}.");
+    }
+
+    private void DeleteProfile()
+    {
+        if (_install is null) { SetStatus("Select a game folder first."); return; }
+        var name = ProfileBox.SelectedItem as string ?? ProfileNameBox.Text;
+        if (string.IsNullOrWhiteSpace(name) || _profiles.All(profile => profile.Name != name))
+        {
+            SetStatus("Select a saved profile to delete.");
+            return;
+        }
+        _profiles.RemoveAll(profile => profile.Name == name);
+        ProfileStore.Save(_install.GamePath, _profiles);
+        RefreshProfiles();
+        SetStatus($"Deleted profile '{name}'.");
     }
 
     private ModEntry? SelectedMod()

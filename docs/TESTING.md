@@ -86,7 +86,7 @@ This proves the Windows loader path, the forwarder table and the attach bootstra
 
 `tools/re/asset_probe.py --selftest` builds a synthetic archive with the cipher the decompiled loader implies, encrypts it, decrypts it, and asserts the entry table parses back to the original names, offsets and sizes — including a corrupt-byte case. This is a model check, not a claim about the real container: the tool's real-file mode reports `RESULT: decryption does not yield names` and exits non-zero, which is the current, honest state. It also verifies that the binary's CRC table at RVA `0x36f700` equals the standard CRC-32 table (it does), which is what makes `crc32(name) & 0xffff` a confirmed per-entry key rather than a guess.
 
-## Manager core (16/16 passing)
+## Manager core (19/19 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
 
@@ -108,6 +108,9 @@ This proves the Windows loader path, the forwarder table and the attach bootstra
 | `event_log_reader` | Parses JSONL and tolerates a truncated final line |
 | `package_validation` | Valid package accepted; traversal and disallowed files refused |
 | `package_import_and_registry` | Import writes the binary and a registry entry the catalog can read |
+| `profiles_round_trip` | Capture, save and reload a profile; name normalised, enabled set preserved |
+| `profiles_apply_rewrites_disabled_list` | Applying a profile flips mod states, rewrites `disabled.txt`, and reports removed ids |
+| `profiles_tolerate_corrupt_file` | Corrupt JSON loads as empty; blank names dropped; long names clamped |
 
 UI verification: the app was launched under Xvfb against `build-win/demo-game` (fake install with five mods, one disabled) and captured to `docs/evidence/manager-ui.png`. That confirms rendering and data binding; it is not an interactive user test.
 

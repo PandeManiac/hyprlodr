@@ -72,6 +72,18 @@
               <TextBlock x:Name="LoadOrderText" TextWrapping="Wrap" FontFamily="monospace" />
               <TextBlock Text="Validation" FontWeight="SemiBold" />
               <TextBlock x:Name="ProblemsText" TextWrapping="Wrap" />
+              <Separator />
+              <TextBlock Text="Profiles" FontWeight="SemiBold" />
+              <TextBlock Text="Save the current enabled set, then re-apply it in one step."
+                         FontSize="12" Foreground="#8D817B" />
+              <ComboBox x:Name="ProfileBox" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBox x:Name="ProfileNameBox" Width="180" Watermark="profile name" />
+                <Button x:Name="SaveProfileButton" Content="Save" />
+                <Button x:Name="ApplyProfileButton" Content="Apply" />
+                <Button x:Name="DeleteProfileButton" Content="Delete" />
+              </StackPanel>
+              <TextBlock x:Name="ProfileStatusText" FontSize="12" Foreground="#8D817B" TextWrapping="Wrap" />
             </StackPanel>
           </ScrollViewer>
         </Grid>
