@@ -12,6 +12,8 @@
 
 **Tooling.** Read-only diagnostics with an independent PE parser (verified against the real installation), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers, full documentation set.
 
+**Last-run report (manager).** `RunReportReader` turns the proxy's attach record and the loader's event log into one summary: stage, pid, whether the build fingerprint matched and at which anchor count, how many mods initialized, and the last error. The Game tab shows it, so in-game evidence is visible without opening JSON. Two scenarios cover the happy path and a corrupt/absent record.
+
 **Mod profiles (manager).** `ProfileStore` captures the enabled set by name into `<game>/hyprlodr-profiles.json` and re-applies it by rewriting `disabled.txt`, so the native loader and the UI agree. Removing a mod does not break a profile: applying it reports the ids that are no longer installed. Three headless scenarios cover round-trip, apply-with-rewrite and tolerance of a corrupt profile file.
 
 **Mod persistence (ABI 3).** `host_api.state_dir()` gives each mod a writable directory, reserved before `initialize()` and rooted at `<game>/hyprlodr-state` in the game. Two loader scenarios cover per-mod isolation and the no-root failure; the Windows host (ABI 3) and the Wine proxy path both pass. Uninstall leaves the directory alone: it is user data.

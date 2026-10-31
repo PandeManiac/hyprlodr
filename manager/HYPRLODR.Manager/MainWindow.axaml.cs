@@ -79,6 +79,7 @@ public partial class MainWindow : Window
         {
             GameSummary.Text = "No installation selected.";
             LoaderSummary.Text = "";
+            RunSummary.Text = "";
             return;
         }
 
@@ -102,6 +103,8 @@ public partial class MainWindow : Window
               $"Preserved original sha256: {Short(state.OriginalSha256)}"
             : "Not installed. Installing copies the original OpenAL32.dll to OpenAL32_real.dll, " +
               "then places the HYPRLODR proxy in its place.";
+
+        RunSummary.Text = RunReportReader.Read(_install.GamePath).Describe();
     }
 
     private static string Short(string? hash) =>

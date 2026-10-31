@@ -42,6 +42,7 @@ Ordering in the UI mirrors the native loader exactly: repeated selection of the 
 ## Verification status
 
 - Mod profiles: capture the current enabled set under a name, then re-apply it later. Applying rewrites `disabled.txt` so the native loader agrees with the UI, and any profile id that is no longer installed is reported rather than silently ignored. Profiles live in `<game>/hyprlodr-profiles.json`.
-- Core services: 19/19 headless scenarios (`tools/test_manager.sh`).
+- Last-run report: the Game tab summarises `hyprlodr-attach.json` and the event log — stage, pid, whether the build fingerprint matched (with the anchor count and module base), how many mods initialized, and the last error. A corrupt or truncated attach record still shows the log instead of failing.
+- Core services: 21/21 headless scenarios (`tools/test_manager.sh`).
 - UI: launched against a demo installation under Xvfb and captured in `docs/evidence/manager-ui.png`. The UI has not been exercised interactively by a human; the screenshot confirms it renders real data end to end.
 - Not yet implemented: mod profiles, asset/config browsing, remote catalogue. See `docs/ROADMAP.md`.

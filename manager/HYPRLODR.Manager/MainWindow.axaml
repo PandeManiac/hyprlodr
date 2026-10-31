@@ -34,6 +34,8 @@
               <Separator />
               <TextBlock Text="Loader" FontSize="16" FontWeight="SemiBold" />
               <TextBlock x:Name="LoaderSummary" TextWrapping="Wrap" />
+              <TextBlock Text="Last in-game run" FontWeight="SemiBold" Margin="0,10,0,0" />
+              <TextBlock x:Name="RunSummary" TextWrapping="Wrap" FontSize="12" />
               <TextBlock Text="Build output folder (proxy + sample mods)" />
               <TextBox x:Name="BuildBox" Text="build-win" />
               <StackPanel Orientation="Horizontal" Spacing="8">

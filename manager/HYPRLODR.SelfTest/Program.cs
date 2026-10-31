@@ -38,6 +38,8 @@ internal static class Program
         Register("profiles_round_trip", ProfilesRoundTrip);
         Register("profiles_apply_rewrites_disabled_list", ProfilesApply);
         Register("profiles_tolerate_corrupt_file", ProfilesCorrupt);
+        Register("run_report_reads_evidence", RunReportReadsEvidence);
+        Register("run_report_tolerates_absence", RunReportToleratesAbsence);
 
         foreach (var (name, body) in Scenarios)
         {
@@ -58,6 +60,51 @@ internal static class Program
     }
 
     private static void Register(string name, Action body) => Scenarios.Add((name, body));
+
+    // --------------------------------------------------------------- run report
+
+    private static void RunReportReadsEvidence()
+    {
+        var root = NewTemp();
+        File.WriteAllText(Path.Combine(root, LoaderInstaller.AttachRecord),
+            "{\"stage\":\"mods_loaded\",\"pid\":4242,\"status_text\":\"ok\"," +
+            "\"build_matches\":true,\"anchors_total\":8,\"anchors_matched\":8," +
+            "\"module_base\":\"0x140000000\",\"build_timestamp\":\"0x66ecd8b5\"}");
+        File.WriteAllLines(Path.Combine(root, LoaderInstaller.EventLog), new[]
+        {
+            "{\"seq\":1,\"event\":\"initialize_ok\",\"mod\":\"a.one\",\"message\":\"\"}",
+            "{\"seq\":2,\"event\":\"initialize_ok\",\"mod\":\"b.two\",\"message\":\"\"}",
+            "{\"seq\":3,\"event\":\"error\",\"mod\":\"c.three\",\"message\":\"missing dependency\"}",
+        });
+
+        var report = RunReportReader.Read(root);
+        Check(report.AttachPresent, "attach record not detected");
+        Check(report.Stage == "mods_loaded", $"stage was {report.Stage}");
+        Check(report.Pid == 4242, $"pid was {report.Pid}");
+        Check(report.BuildMatches == true, "build_matches not parsed");
+        Check(report.AnchorsMatched == 8 && report.AnchorsTotal == 8,
+              $"anchor counts were {report.AnchorsMatched}/{report.AnchorsTotal}");
+        Check(report.ModsInitialized == 2, $"initialized count was {report.ModsInitialized}");
+        Check(report.LastError == "missing dependency", $"last error was {report.LastError}");
+        Check(report.Describe().Contains("8/8", StringComparison.Ordinal),
+              "summary omits the anchor match count");
+    }
+
+    private static void RunReportToleratesAbsence()
+    {
+        var root = NewTemp();
+        var empty = RunReportReader.Read(root);
+        Check(!empty.AttachPresent && empty.EventCount == 0, "empty folder must report no run");
+        Check(empty.Describe().Contains("No run recorded", StringComparison.Ordinal),
+              "summary should say there is no run");
+
+        File.WriteAllText(Path.Combine(root, LoaderInstaller.AttachRecord), "{ broken");
+        File.WriteAllText(Path.Combine(root, LoaderInstaller.EventLog),
+            "{\"seq\":1,\"event\":\"initialize_ok\",\"mod\":\"a\",\"message\":\"\"}\nnot json\n");
+        var partial = RunReportReader.Read(root);
+        Check(!partial.AttachPresent, "a corrupt attach record must not count as a run");
+        Check(partial.ModsInitialized == 1, $"events should still parse, got {partial.ModsInitialized}");
+    }
 
     // ---------------------------------------------------------------- profiles
 
