@@ -46,3 +46,17 @@ Ordering in the UI mirrors the native loader exactly: repeated selection of the 
 - Core services: 21/21 headless scenarios (`tools/test_manager.sh`).
 - UI: launched against a demo installation under Xvfb and captured in `docs/evidence/manager-ui.png`. The UI has not been exercised interactively by a human; the screenshot confirms it renders real data end to end.
 - Not yet implemented: mod profiles, asset/config browsing, remote catalogue. See `docs/ROADMAP.md`.
+
+## Mod start-up delay
+
+The Game tab has a **Mod start-up delay (ms)** field next to the last-run panel. It reads and writes `<game>/hyprlodr-config.json`, the file the proxy reads on attach:
+
+```json
+{
+  "delay_ms": 2500
+}
+```
+
+The proxy waits that long after attaching before it resolves mods. If the game's process lives only a couple of seconds in a given setup, the default delay can outlive it and no mod event is ever written — the panel then shows `stage: "attached"` or `"initializing"` with zero events, which looks like a broken loader. Setting `0` initializes mods immediately.
+
+The manager clamps the value to 0–60000, keeps any other keys already in the file, reports a malformed file instead of hiding it (the proxy silently falls back to 2500 ms in that case), and never creates the file until you press **Apply delay**.

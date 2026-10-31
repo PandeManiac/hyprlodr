@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using HyprLodr.Core;
@@ -24,6 +25,7 @@ public partial class MainWindow : Window
         InstallButton.Click += (_, _) => InstallLoader();
         RemoveButton.Click += async (_, _) => await RemoveLoaderAsync();
         LaunchButton.Click += (_, _) => LaunchGame();
+        SaveDelayButton.Click += (_, _) => SaveDelay();
         RefreshModsButton.Click += (_, _) => RefreshMods();
         ImportButton.Click += async (_, _) => await ImportPackageAsync();
         ModList.SelectionChanged += (_, _) => ShowSelectedMod();
@@ -80,6 +82,8 @@ public partial class MainWindow : Window
             GameSummary.Text = "No installation selected.";
             LoaderSummary.Text = "";
             RunSummary.Text = "";
+            DelayBox.Text = "";
+            DelaySummary.Text = "";
             return;
         }
 
@@ -105,6 +109,29 @@ public partial class MainWindow : Window
               "then places the HYPRLODR proxy in its place.";
 
         RunSummary.Text = RunReportReader.Read(_install.GamePath).Describe();
+
+        var config = LoaderConfig.Load(_install.GamePath);
+        DelayBox.Text = config.DelayMs.ToString(CultureInfo.InvariantCulture);
+        DelaySummary.Text = config.Malformed
+            ? $"{LoaderConfig.FileName} is malformed, so the proxy is using the default {LoaderConfig.DefaultDelayMs} ms."
+            : config.Describe();
+    }
+
+    private void SaveDelay()
+    {
+        if (_install is null) { SetStatus("Select a game folder first."); return; }
+        var text = (DelayBox.Text ?? "").Trim();
+        if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var delayMs))
+        {
+            SetStatus("Enter the start-up delay in milliseconds (0-60000).");
+            return;
+        }
+
+        var saved = LoaderConfig.Save(_install.GamePath, delayMs);
+        RenderGame();
+        SetStatus(delayMs == saved.DelayMs
+            ? $"Mod start-up delay set to {saved.DelayMs} ms."
+            : $"Delay clamped to {saved.DelayMs} ms; allowed range is {LoaderConfig.MinDelayMs}-{LoaderConfig.MaxDelayMs}.");
     }
 
     private static string Short(string? hash) =>

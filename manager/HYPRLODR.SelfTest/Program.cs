@@ -20,6 +20,10 @@ internal static class Program
     {
         var sample = args.Length > 0 ? args[0] : null;
         Register("steam_discovery", () => SteamDiscovery(sample));
+        Register("loader_config_defaults_when_absent", LoaderConfigDefaultsWhenAbsent);
+        Register("loader_config_round_trip", LoaderConfigRoundTrips);
+        Register("loader_config_clamps", LoaderConfigClamps);
+        Register("loader_config_preserves_keys", LoaderConfigPreservesKeysAndFlagsGarbage);
         Register("discovery_manual_path", () => DiscoveryManualPath(sample));
         Register("loader_install_and_inspect", () => LoaderInstall(sample));
         Register("loader_refuses_double_install", () => LoaderDoubleInstall(sample));
@@ -60,6 +64,65 @@ internal static class Program
     }
 
     private static void Register(string name, Action body) => Scenarios.Add((name, body));
+
+    // ------------------------------------------------------------ loader config
+
+    private static void LoaderConfigDefaultsWhenAbsent()
+    {
+        var root = NewTemp();
+        var config = LoaderConfig.Load(root);
+        Check(config.DelayMs == LoaderConfig.DefaultDelayMs,
+              $"absent file should mean {LoaderConfig.DefaultDelayMs} ms, got {config.DelayMs}");
+        Check(!config.Malformed, "absent file is not a malformed file");
+        Check(config.Describe().Contains("2500", StringComparison.Ordinal),
+              "description omits the effective delay");
+        Check(!File.Exists(LoaderConfig.PathFor(root)), "Load must not create the file");
+    }
+
+    private static void LoaderConfigRoundTrips()
+    {
+        var root = NewTemp();
+        var saved = LoaderConfig.Save(root, 0);
+        Check(saved.DelayMs == 0, $"saved delay was {saved.DelayMs}");
+
+        var reloaded = LoaderConfig.Load(root);
+        Check(reloaded.DelayMs == 0, $"reloaded delay was {reloaded.DelayMs}");
+        Check(!reloaded.Malformed, "a file written by Save must parse");
+        Check(reloaded.Describe().Contains("attaches", StringComparison.OrdinalIgnoreCase),
+              "delay 0 should describe immediate initialization");
+    }
+
+    private static void LoaderConfigClamps()
+    {
+        var root = NewTemp();
+        Check(LoaderConfig.Save(root, 999_999).DelayMs == LoaderConfig.MaxDelayMs,
+              "large delay not clamped");
+        Check(LoaderConfig.Save(root, -5).DelayMs == LoaderConfig.MinDelayMs,
+              "negative delay not clamped");
+
+        // A hand-written out-of-range value is clamped on read too, so the UI
+        // never shows a number the proxy would not honour.
+        File.WriteAllText(LoaderConfig.PathFor(root), "{\"delay_ms\": 700000}");
+        Check(LoaderConfig.Load(root).DelayMs == LoaderConfig.MaxDelayMs,
+              "out-of-range value not clamped on read");
+    }
+
+    private static void LoaderConfigPreservesKeysAndFlagsGarbage()
+    {
+        var root = NewTemp();
+        File.WriteAllText(LoaderConfig.PathFor(root),
+            "{\"delay_ms\": 100, \"future_option\": \"keep me\"}");
+        LoaderConfig.Save(root, 300);
+        var text = File.ReadAllText(LoaderConfig.PathFor(root));
+        Check(text.Contains("future_option", StringComparison.Ordinal),
+              "Save dropped an unknown key");
+        Check(LoaderConfig.Load(root).DelayMs == 300, "Save did not persist the new delay");
+
+        File.WriteAllText(LoaderConfig.PathFor(root), "{ not json");
+        var broken = LoaderConfig.Load(root);
+        Check(broken.Malformed && broken.DelayMs == LoaderConfig.DefaultDelayMs,
+              "a malformed config must be flagged as such and fall back to the default");
+    }
 
     // --------------------------------------------------------------- run report
 

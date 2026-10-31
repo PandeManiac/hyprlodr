@@ -39,3 +39,5 @@
 **Not done.** No game-facing capability yet (needs Ghidra/REA work on the executable and asset pack), no mod profiles or asset browsing, no audio-quality or gameplay verification, no remote catalogue.
 
 Details: `docs/TESTING.md` (what is and is not verified), `docs/ROADMAP.md` (next steps).
+
+**Start-up delay in the manager.** `LoaderConfig` reads and writes `<game>/hyprlodr-config.json`, preserving unknown keys and clamping to 0-60000; the Game tab exposes it next to the last-run panel, and a malformed file is reported rather than silently replaced by the proxy's default. Four headless scenarios cover the absent-file default, round-trip, clamping (on write and on read) and key preservation plus garbage handling.
