@@ -26,7 +26,11 @@
 #  define HYPRLODR_BOOTSTRAP_DELAY_MS 2500
 #endif
 
+/* Upper bound for a configured delay, so a typo cannot park the thread forever. */
+#define HYPRLODR_MAX_BOOTSTRAP_DELAY_MS 60000
+
 static hyprlodr_loader *g_loader;
+static DWORD g_delay_ms = HYPRLODR_BOOTSTRAP_DELAY_MS;
 static char g_game_dir[1024];
 static char g_evidence_path[1024];
 
@@ -174,6 +178,59 @@ static LONG WINAPI hyprlodr_crash_filter(HYPR_EXCEPTION_POINTERS *info) {
     return g_previous_filter ? g_previous_filter(info) : 0;
 }
 
+/* --- start-up delay configuration -------------------------------------------
+ * <game>\hyprlodr-config.json may override the mod start-up delay:
+ *
+ *     { "delay_ms": 0 }
+ *
+ * A machine that reaches its first frame faster than the built-in 2500 ms is
+ * common, and a process that exits before the delay elapses never reports mod
+ * initialization at all. The parser is deliberately tiny (no allocator, no
+ * locale, line oriented) and any problem falls back to the default instead of
+ * failing to attach: a malformed config must never stop mods from loading.
+ */
+static const char *find_literal(const char *text, const char *needle) {
+    size_t length = strlen(needle);
+    if (length == 0) return text;
+    for (; *text; ++text) {
+        if (*text == *needle && strncmp(text, needle, length) == 0) return text;
+    }
+    return NULL;
+}
+
+static DWORD bootstrap_delay_ms(void) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-config.json", g_game_dir);
+    FILE *file = fopen(path, "rb");
+    if (!file) return (DWORD)HYPRLODR_BOOTSTRAP_DELAY_MS;
+
+    DWORD result = (DWORD)HYPRLODR_BOOTSTRAP_DELAY_MS;
+    char line[512];
+    while (fgets(line, (int)sizeof line, file)) {
+        const char *key = find_literal(line, "\"delay_ms\"");
+        if (!key) continue;
+        const char *cursor = key + strlen("\"delay_ms\"");
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+        if (*cursor != ':') continue;
+        ++cursor;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor < '0' || *cursor > '9') continue;
+        unsigned long value = 0;
+        while (*cursor >= '0' && *cursor <= '9') {
+            value = value * 10ul + (unsigned long)(*cursor - '0');
+            if (value > HYPRLODR_MAX_BOOTSTRAP_DELAY_MS) {
+                value = HYPRLODR_MAX_BOOTSTRAP_DELAY_MS;
+                break;
+            }
+            ++cursor;
+        }
+        result = (DWORD)value;
+        break;
+    }
+    fclose(file);
+    return result;
+}
+
 static void write_attach_record(const char *stage, int status) {
     if (!g_anchors_checked) inspect_main_module();
     FILE *file = fopen(g_evidence_path, "w");
@@ -190,7 +247,7 @@ static void write_attach_record(const char *stage, int status) {
             (unsigned)HYPRLODR_ABI_VERSION, status);
     json_escape(file, hyprlodr_loader_strerror(status));
 
-    fputs("\",\"module_parsed\":", file);
+    fprintf(file, "\",\"delay_ms\":%lu,\"module_parsed\":", (unsigned long)g_delay_ms);
     fputs(g_module.parsed ? "true" : "false", file);
     fputs(",\"module_base\":\"", file);
     put_hex(file, (uint64_t)(uintptr_t)g_module.base, 16u);
@@ -236,9 +293,14 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     /* Evidence and build identity first. A game that exits during start-up can
      * still prove which executable ran and whether it matches the analysis; the
      * mod start-up delay below is about the game being ready, not about us. */
+    g_delay_ms = bootstrap_delay_ms();
     write_attach_record("attached", HYPRLODR_OK);
 
-    Sleep(HYPRLODR_BOOTSTRAP_DELAY_MS);
+    if (g_delay_ms) Sleep(g_delay_ms);
+
+    /* Rewriting the record with this stage proves the process outlived the
+     * delay; a record still reading "attached" means it did not. */
+    write_attach_record("initializing", HYPRLODR_OK);
 
     char mods_dir[1024];
     char disabled_file[1024];

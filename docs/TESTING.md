@@ -151,6 +151,8 @@ Anchors for the shipped build (`docs/evidence/2026-10-31-anchors.json`): four st
 | Live cipher tables (Wine stand-in) | `tables_dumped=false` — the RVAs are outside that image, so the proxy declines instead of reading past it |
 | Crash filter (real game) | No `hyprlodr-crash.json` was written during the 2026-10-31 run, so the early exit raises no unhandled exception — it is not an in-process fault |
 | Crash filter (Wine stand-in) | A clean `proxy_client.exe` exit writes no crash record; asserting this proves the chained filter stays silent unless an exception is genuinely unhandled |
+| Start-up delay (Wine stand-in) | Absent config reports the built-in `delay_ms: 2500`; `hyprlodr-config.json` with `delay_ms: 0` is honoured and all five mods still initialize |
+| In-game initialization (real game, `delay_ms: 0`) | 35 events, **5/5 `initialize_ok`** in dependency order (`z.foundation, a.palette, b.audio, m.overlay, 00.final`), zero failures, and `state_dir` resolved inside `<game>\hyprlodr-state\00.final` |
 
 `docs/evidence/2026-10-31-fingerprint.json` is the attach record written by the game process itself. It also shows `module_size=4214784`, matching the PE `SizeOfImage`, which is the range the anchors were verified against.
 
@@ -165,7 +167,7 @@ cat "$GAME/hyprlodr-attach.json"   # expect build_matches=true, anchors_matched 
 
 A mismatch is reported, never optimised away. Nothing is hooked today, so `build_matches=false` still loads mods; any future address-dependent hook must require it.
 
-Note on the 2026-10-31 re-run: the game process exited a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy). The attach record is therefore written before the mod start-up delay, which is why the fingerprint was captured and the crash record was not: that re-run wrote **no** `hyprlodr-crash.json`, so the exit is not an unhandled exception inside the game process. The five-mod initialization evidence remains the earlier `docs/evidence/2026-10-31-attach.json` run.
+Note on the 2026-10-31 re-runs: the game process exits a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy), and it writes **no** `hyprlodr-crash.json`, so the exit is not an unhandled exception inside the game process. With the default 2500 ms delay that exit arrives first and no mod ever starts; the attach record then still reads `stage: "initializing"` or `"attached"`. Setting `delay_ms: 0` closes the gap: `docs/evidence/2026-10-31-initializing.json` records 35 events and all five mods initialized, in order, inside `hyperdemon.exe` with `build_matches=true`. Shutdown events are absent by design — process termination runs no mod code.
 
 ## Still unverified
 

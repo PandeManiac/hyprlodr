@@ -1,0 +1,247 @@
+{
+  "what": "in-game mod initialization with delay_ms=0",
+  "date": "2026-10-31",
+  "attach": {
+    "stage": "mods_loaded",
+    "pid": 312,
+    "proxy_dir": "S:\\steamapps\\common\\hyperdemon",
+    "exe": "S:\\steamapps\\common\\hyperdemon\\hyperdemon.exe",
+    "loader_abi": 3,
+    "status": 0,
+    "status_text": "ok",
+    "delay_ms": 0,
+    "module_parsed": true,
+    "module_base": "0x0000000140000000",
+    "module_size": 4214784,
+    "build_timestamp": "0x66ecd8b5",
+    "expected_timestamp": "0x66ecd8b5",
+    "build_matches": true,
+    "anchors_total": 8,
+    "anchors_matched": 8,
+    "anchors_out_of_range": 0,
+    "anchor_mismatch": "",
+    "tables_dumped": true,
+    "table_t0_head": "c5c55db9505e5882"
+  },
+  "event_count": 35,
+  "initialize_ok": [
+    "z.foundation",
+    "a.palette",
+    "b.audio",
+    "m.overlay",
+    "00.final"
+  ],
+  "shutdown": [],
+  "events": [
+    {
+      "seq": 1,
+      "event": "discovery_complete",
+      "mod": "",
+      "message": ""
+    },
+    {
+      "seq": 2,
+      "event": "discovered",
+      "mod": "00.final",
+      "message": "S:\\steamapps\\common\\hyperdemon\\mods\\00.final.dll"
+    },
+    {
+      "seq": 3,
+      "event": "discovered",
+      "mod": "a.palette",
+      "message": "S:\\steamapps\\common\\hyperdemon\\mods\\a.palette.dll"
+    },
+    {
+      "seq": 4,
+      "event": "discovered",
+      "mod": "b.audio",
+      "message": "S:\\steamapps\\common\\hyperdemon\\mods\\b.audio.dll"
+    },
+    {
+      "seq": 5,
+      "event": "discovered",
+      "mod": "m.overlay",
+      "message": "S:\\steamapps\\common\\hyperdemon\\mods\\m.overlay.dll"
+    },
+    {
+      "seq": 6,
+      "event": "discovered",
+      "mod": "z.foundation",
+      "message": "S:\\steamapps\\common\\hyperdemon\\mods\\z.foundation.dll"
+    },
+    {
+      "seq": 7,
+      "event": "resolved",
+      "mod": "z.foundation",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 8,
+      "event": "resolved",
+      "mod": "a.palette",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 9,
+      "event": "resolved",
+      "mod": "b.audio",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 10,
+      "event": "resolved",
+      "mod": "m.overlay",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 11,
+      "event": "resolved",
+      "mod": "00.final",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 12,
+      "event": "initialize_begin",
+      "mod": "z.foundation",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 13,
+      "event": "state_dir",
+      "mod": "z.foundation",
+      "message": "S:\\steamapps\\common\\hyperdemon\\hyprlodr-state\\z.foundation"
+    },
+    {
+      "seq": 14,
+      "event": "capability_registered",
+      "mod": "z.foundation",
+      "message": "test.foundation"
+    },
+    {
+      "seq": 15,
+      "event": "log",
+      "mod": "z.foundation",
+      "message": "info: created shared test state and registered test.foundation"
+    },
+    {
+      "seq": 16,
+      "event": "initialize_ok",
+      "mod": "z.foundation",
+      "message": ""
+    },
+    {
+      "seq": 17,
+      "event": "initialize_begin",
+      "mod": "a.palette",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 18,
+      "event": "state_dir",
+      "mod": "a.palette",
+      "message": "S:\\steamapps\\common\\hyperdemon\\hyprlodr-state\\a.palette"
+    },
+    {
+      "seq": 19,
+      "event": "capability_registered",
+      "mod": "a.palette",
+      "message": "test.palette"
+    },
+    {
+      "seq": 20,
+      "event": "log",
+      "mod": "a.palette",
+      "message": "info: validated foundation state and applied palette"
+    },
+    {
+      "seq": 21,
+      "event": "initialize_ok",
+      "mod": "a.palette",
+      "message": ""
+    },
+    {
+      "seq": 22,
+      "event": "initialize_begin",
+      "mod": "b.audio",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 23,
+      "event": "state_dir",
+      "mod": "b.audio",
+      "message": "S:\\steamapps\\common\\hyperdemon\\hyprlodr-state\\b.audio"
+    },
+    {
+      "seq": 24,
+      "event": "capability_registered",
+      "mod": "b.audio",
+      "message": "test.audio"
+    },
+    {
+      "seq": 25,
+      "event": "log",
+      "mod": "b.audio",
+      "message": "info: registered independent audio test capability"
+    },
+    {
+      "seq": 26,
+      "event": "initialize_ok",
+      "mod": "b.audio",
+      "message": ""
+    },
+    {
+      "seq": 27,
+      "event": "initialize_begin",
+      "mod": "m.overlay",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 28,
+      "event": "state_dir",
+      "mod": "m.overlay",
+      "message": "S:\\steamapps\\common\\hyperdemon\\hyprlodr-state\\m.overlay"
+    },
+    {
+      "seq": 29,
+      "event": "capability_registered",
+      "mod": "m.overlay",
+      "message": "test.overlay"
+    },
+    {
+      "seq": 30,
+      "event": "log",
+      "mod": "m.overlay",
+      "message": "info: observed modified state and registered overlay capability"
+    },
+    {
+      "seq": 31,
+      "event": "initialize_ok",
+      "mod": "m.overlay",
+      "message": ""
+    },
+    {
+      "seq": 32,
+      "event": "initialize_begin",
+      "mod": "00.final",
+      "message": "1.0.0"
+    },
+    {
+      "seq": 33,
+      "event": "state_dir",
+      "mod": "00.final",
+      "message": "S:\\steamapps\\common\\hyperdemon\\hyprlodr-state\\00.final"
+    },
+    {
+      "seq": 34,
+      "event": "log",
+      "mod": "00.final",
+      "message": "info: confirmed all prerequisites and shared state"
+    },
+    {
+      "seq": 35,
+      "event": "initialize_ok",
+      "mod": "00.final",
+      "message": ""
+    }
+  ]
+}

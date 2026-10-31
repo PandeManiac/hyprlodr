@@ -61,9 +61,10 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     "$OUT/obj/proxy_client.obj" "$OUT/obj/entry.obj" "$OUT/obj/crt_impl.obj" \
     "$OUT/lib/kernel32.lib"
 
+  rm -f "$WORK/proxy/hyprlodr-config.json"
   ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) || status=1
 
-  python3 - "$WORK/proxy" <<'PY' || status=1
+  python3 - "$WORK/proxy" 2500 <<'PY' || status=1
 import json, pathlib, sys
 base = pathlib.Path(sys.argv[1])
 attach = json.loads((base / "hyprlodr-attach.json").read_text())
@@ -80,6 +81,8 @@ print(f"build fingerprint: {attach['anchors_matched']}/{attach['anchors_total']}
 # The stand-in host has no asset tables at those RVAs, so the dump must decline
 # rather than read past the image.
 assert attach["tables_dumped"] is False, attach
+# No config file is present for this run, so the built-in delay applies.
+assert attach["delay_ms"] == 2500, attach
 # proxy_client.exe exits normally, so the crash filter must stay silent: it is
 # chained into the process and must never fire without an unhandled exception.
 assert not (base / "hyprlodr-crash.json").exists(), "crash filter fired on a clean exit"
@@ -88,6 +91,22 @@ init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init
 print("proxy bootstrap: mods initialized inside the host process")
 print("crash filter: silent on a clean exit")
+PY
+  echo "== wine proxy: hyprlodr-config.json overrides the delay =="
+  printf '{\n  "delay_ms": 0\n}\n' > "$WORK/proxy/hyprlodr-config.json"
+  rm -f "$WORK/proxy/hyprlodr-attach.json" "$WORK/proxy/hyprlodr-events.jsonl"
+  ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) || status=1
+
+  python3 - "$WORK/proxy" <<'PY' || status=1
+import json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+attach = json.loads((base / "hyprlodr-attach.json").read_text())
+assert attach["delay_ms"] == 0, attach
+assert attach["stage"] == "mods_loaded", attach
+events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
+init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
+assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init
+print("config: delay_ms=0 honoured, all five mods still initialized")
 PY
 else
   echo "skipped proxy runtime test: pass the original OpenAL32.dll path as the second argument"
