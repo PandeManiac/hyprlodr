@@ -1,0 +1,92 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="HyprLodr.Manager.MainWindow"
+        Title="HYPRLODR — HYPER DEMON mod manager"
+        Width="1040" Height="700"
+        Background="#131110">
+  <Grid RowDefinitions="Auto,*">
+    <Border Grid.Row="0" Background="#1C1917" Padding="20,14">
+      <StackPanel Orientation="Horizontal" Spacing="14">
+        <TextBlock Text="HYPRLODR" FontSize="22" FontWeight="Bold" Foreground="#F4EAE4"
+                   VerticalAlignment="Center" />
+        <TextBlock Text="HYPER DEMON mod manager" FontSize="13" Foreground="#8D817B"
+                   VerticalAlignment="Center" />
+      </StackPanel>
+    </Border>
+
+    <TabControl Grid.Row="1" Margin="12">
+      <TabItem Header="Game">
+        <Grid ColumnDefinitions="340,*">
+          <StackPanel Grid.Column="0" Margin="10" Spacing="8">
+            <TextBlock Text="Detected installations" FontWeight="SemiBold" />
+            <ListBox x:Name="InstallList" Height="150" />
+            <TextBlock Text="Game folder (manual override)" FontWeight="SemiBold" Margin="0,10,0,0" />
+            <TextBox x:Name="PathBox" Watermark="/path/to/steamapps/common/hyperdemon" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+              <Button x:Name="ScanButton" Content="Scan Steam" />
+              <Button x:Name="UsePathButton" Content="Use this folder" />
+            </StackPanel>
+          </StackPanel>
+
+          <ScrollViewer Grid.Column="1" Margin="10">
+            <StackPanel Spacing="10">
+              <TextBlock x:Name="GameSummary" TextWrapping="Wrap" />
+              <Separator />
+              <TextBlock Text="Loader" FontSize="16" FontWeight="SemiBold" />
+              <TextBlock x:Name="LoaderSummary" TextWrapping="Wrap" />
+              <TextBlock Text="Build output folder (proxy + sample mods)" />
+              <TextBox x:Name="BuildBox" Text="build-win" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="InstallButton" Content="Install loader" />
+                <Button x:Name="RemoveButton" Content="Remove loader" />
+                <Button x:Name="LaunchButton" Content="Launch game" />
+              </StackPanel>
+              <TextBlock x:Name="StatusText" TextWrapping="Wrap" Foreground="#9AD3A2" />
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Mods">
+        <Grid ColumnDefinitions="420,*">
+          <DockPanel Grid.Column="0" Margin="10">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+              <Button x:Name="RefreshModsButton" Content="Refresh" />
+              <Button x:Name="ImportButton" Content="Import package..." />
+            </StackPanel>
+            <ListBox x:Name="ModList" />
+          </DockPanel>
+
+          <ScrollViewer Grid.Column="1" Margin="10">
+            <StackPanel Spacing="10">
+              <TextBlock x:Name="ModDetails" TextWrapping="Wrap" />
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="EnableButton" Content="Enable" />
+                <Button x:Name="DisableButton" Content="Disable" />
+                <Button x:Name="RemoveModButton" Content="Remove" />
+              </StackPanel>
+              <Separator />
+              <TextBlock Text="Load order preview" FontWeight="SemiBold" />
+              <TextBlock Text="What the native loader will do with the current enabled set."
+                         FontSize="12" Foreground="#8D817B" />
+              <TextBlock x:Name="LoadOrderText" TextWrapping="Wrap" FontFamily="monospace" />
+              <TextBlock Text="Validation" FontWeight="SemiBold" />
+              <TextBlock x:Name="ProblemsText" TextWrapping="Wrap" />
+            </StackPanel>
+          </ScrollViewer>
+        </Grid>
+      </TabItem>
+
+      <TabItem Header="Logs">
+        <DockPanel Margin="10">
+          <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="0,0,0,8">
+            <Button x:Name="RefreshLogsButton" Content="Refresh" />
+            <TextBox x:Name="LogFilterBox" Width="260" Watermark="filter" />
+            <TextBlock x:Name="LogSummary" VerticalAlignment="Center" Foreground="#8D817B" />
+          </StackPanel>
+          <ListBox x:Name="EventList" FontFamily="monospace" />
+        </DockPanel>
+      </TabItem>
+    </TabControl>
+  </Grid>
+</Window>

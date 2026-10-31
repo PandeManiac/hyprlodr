@@ -3,3 +3,5 @@
 /build-recovery/
 /.freebuff/
 __pycache__/
+manager/**/bin/
+manager/**/obj/

@@ -12,12 +12,14 @@
 
 **Mod packaging (schema 1).** ZIP container with a validated `manifest.json`, defensive extraction guards (traversal, absolutes, backslashes, symlinks, duplicates, size/compression limits), a publishable install registry, and manifest-to-descriptor cross-checking via `hyprlodr-host --describe` so packaging never executes mod behaviour. Pack/validate/install/list/remove CLI with a 19-scenario suite.
 
+**Desktop manager (Milestone 3).** Avalonia application with Steam discovery (multiple libraries, manual override, Proton detection), loader install/remove with hash manifests and rollback, mod list with enable/disable, package import, exact load-order preview, validation problems and a log viewer. Core services covered by 15/15 headless scenarios; UI rendered against a demo installation and captured as evidence.
+
 **Tooling.** Read-only diagnostics (Steam discovery, multi-library, PE parsing, Proton detection), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers.
 
 ## Next, in order
 
-1. **Desktop manager (Milestone 3).** Avalonia application: game discovery, loader install/remove through the same manifest logic, mod list with enable/disable, dependency view, log viewer, rollback.
-4. **Asset reconnaissance (Milestone 5 groundwork).** Analyse `asset/asset` with Ghidra/REA: container header, table layout, resource ids, then the lookup function. No replacement code before the format is documented as observed.
+1. **First game-facing capability.** Use Ghidra/REA on `hyperdemon.exe` and `asset/asset` to establish one narrow, evidence-backed extension point that a mod can actually change, with a compatibility gate and a documented failure mode.
+2. **Mod profiles and asset management in the manager.**
 5. **Engine-facing API.** Only after 4, and only at a verified boundary (resource lookup or a narrowly fingerprinted hook with an explicit compatibility gate).
 
 ## Explicitly deferred
@@ -30,6 +32,8 @@
 ## Known gaps
 
 - The real-game check still only exercises start-up; audio quality and gameplay behaviour were not observed.
+- The manager UI has been rendered headlessly and screenshotted, but not driven interactively by a person.
+- Mod profiles and asset/config browsing are not implemented.
 - No CI pipeline is configured; the build and test scripts are ready to be wired into one.
 - No sanitizer build.
 - Packages hold assets and config that the loader does not yet consume; only the native binary is installed today.

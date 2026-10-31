@@ -96,4 +96,12 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/test_package.py
       $<TARGET_FILE:hyprlodr-host>
       ${CMAKE_BINARY_DIR}/mods/z.foundation${CMAKE_SHARED_LIBRARY_SUFFIX})
+
+  # Desktop manager core services (headless; skipped when the .NET SDK is absent).
+  find_program(DOTNET_EXECUTABLE dotnet)
+  if(DOTNET_EXECUTABLE)
+    add_test(NAME manager_suite
+      COMMAND ${CMAKE_SOURCE_DIR}/tools/test_manager.sh
+        $<TARGET_FILE_DIR:mod_foundation>/z.foundation${CMAKE_SHARED_LIBRARY_SUFFIX})
+  endif()
 endif()

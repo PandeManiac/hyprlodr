@@ -16,6 +16,8 @@
 
 **Mod packaging (schema 1).** ZIP + `manifest.json` with defensive validation (traversal, absolute paths, backslashes, symlinks, duplicates, size and compression limits), an install registry for the future manager, and manifest/descriptor cross-checking through a new `hyprlodr-host --describe` mode that reads ABI descriptors without initializing mods. 19 package scenarios pass alongside the 23 loader scenarios.
 
-**Not done.** No desktop manager, no asset-format analysis, no audio-quality or gameplay verification, no remote catalogue.
+**Desktop manager (Milestone 3).** Avalonia application over a tested core: Steam discovery (multiple libraries, manual override, Proton detection), loader install/remove with hash manifests and rollback, mod catalog with enable/disable and removal, package import, the exact load order the native loader will use, validation problems, and the event log viewer. Core services covered by 15/15 headless scenarios; the UI was launched under Xvfb against a demo installation and captured in `docs/evidence/manager-ui*.png`.
+
+**Not done.** No game-facing capability yet (needs Ghidra/REA work on the executable and asset pack), no mod profiles or asset browsing, no audio-quality or gameplay verification, no remote catalogue.
 
 Details: `docs/TESTING.md` (what is and is not verified), `docs/ROADMAP.md` (next steps).

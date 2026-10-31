@@ -80,6 +80,30 @@ The cross-check tests call `hyprlodr-host --describe`, which loads the library a
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
+## Manager core (15/15 passing)
+
+`tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
+
+| Scenario | Asserts |
+|---|---|
+| `steam_discovery` | Synthetic Steam tree: library, appmanifest, build id, Proton prefix and version |
+| `discovery_manual_path` | Manual folder override resolves an installation |
+| `loader_install_and_inspect` | Backup hash, proxy placement, mods copied, manifest hashes match |
+| `loader_refuses_double_install` | Interrupted/duplicate install is refused |
+| `loader_uninstall_restores_original` | Original bytes restored, manifest and evidence removed, empty mods dir cleaned up |
+| `loader_refuses_changed_proxy` | Tampered proxy blocks removal and the original is kept |
+| `catalog_reads_registry_and_disabled` | Registry metadata and `disabled.txt` applied |
+| `catalog_order_matches_loader` | Manager order equals `z.foundation, a.palette, b.audio, m.overlay, 00.final` |
+| `catalog_detects_missing_dependency` | Reported with status `dependency missing` |
+| `catalog_detects_cycle` | `cycle among` reported |
+| `catalog_detects_version_mismatch` | `@>=2.0.0` against 1.0.0 refused |
+| `version_constraints` | `^`, `~`, `>=`, `>` semantics and spec splitting |
+| `event_log_reader` | Parses JSONL and tolerates a truncated final line |
+| `package_validation` | Valid package accepted; traversal and disallowed files refused |
+| `package_import_and_registry` | Import writes the binary and a registry entry the catalog can read |
+
+UI verification: the app was launched under Xvfb against `build-win/demo-game` (fake install with five mods, one disabled) and captured to `docs/evidence/manager-ui.png`. That confirms rendering and data binding; it is not an interactive user test.
+
 ## Real game (verified 2026-10-31)
 
 HYPER DEMON was launched through Steam (Proton Experimental, Steam Runtime 4) with the loader installed. Recorded evidence, committed verbatim as `docs/evidence/`:
