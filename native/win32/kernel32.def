@@ -4,6 +4,7 @@ LIBRARY KERNEL32.dll
 EXPORTS
 CreateDirectoryA
 CreateFileA
+CreateFileW
 CreateThread
 CreateToolhelp32Snapshot
 DisableThreadLibraryCalls

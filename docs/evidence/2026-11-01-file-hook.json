@@ -39,6 +39,14 @@
       "mods_initialized": 5
     },
     {
+      "note": "CreateFileW added as a fifth target and patched across 14 modules in-game; removed afterwards (see attempts)",
+      "stage": "mods_loaded",
+      "build_matches": true,
+      "file_hook_detail": "CreateFileA=patched(8) CreateFileW=patched(14) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) _wfopen_s=absent modules=39",
+      "file_opens_logged": 0,
+      "mods_initialized": 5
+    },
+    {
       "note": "all four targets in every loaded module (Toolhelp walk), delay_ms 0, ~22 s",
       "stage": "mods_loaded",
       "build_matches": true,
@@ -57,6 +65,14 @@
     "KERNEL32.dll": ["CreateFileA", "ReadFile"],
     "api-ms-win-crt-stdio-l1-1-0.dll": ["fopen", "fopen_s", "_wfopen"]
   },
+  "attempts": [
+    {
+      "what": "WINAPI CreateFileW shim patched into every module's import slot",
+      "outcome": "removed",
+      "why": "In the Wine stand-in, a second module (wprobe.dll) calling through its patched KERNEL32!CreateFileW slot terminated the process with no crash record and no file-log entry. The shim is therefore unproven and possibly unsafe, so the target and its probe harness were deleted rather than shipped.",
+      "in_game": "It did patch 14 modules in the real game without breaking start-up, but was never observed being called there either."
+    }
+  ],
   "conclusion": "All four targets (CreateFileA, fopen, fopen_s, _wfopen) are patched in 39 loaded modules of the real game, and the shim is proven live in-process: it captured a CreateFileA open of \\\\.\\pipe\\wine_plugplay. No asset open was observed in 22-35 s of game time, so HYPER DEMON's asset reads do not use any of these import slots. hyperdemon.exe imports only CreateFileA/ReadFile from KERNEL32 and fopen/fopen_s/_wfopen from the UCRT API set, so the remaining candidates are the kernelbase/NtCreateFile path (no import slot to patch) or the Steam API file layer. No in-game asset replacement has been achieved yet.",
   "restored": {
     "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4",

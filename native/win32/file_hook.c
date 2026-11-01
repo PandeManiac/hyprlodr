@@ -11,6 +11,13 @@
  *   api-ms-win-crt-stdio-l1-1-0.dll  fopen        (narrow CRT opens)
  *   api-ms-win-crt-stdio-l1-1-0.dll  fopen_s
  *   api-ms-win-crt-stdio-l1-1-0.dll  _wfopen      (wide CRT opens)
+ *   api-ms-win-crt-stdio-l1-1-0.dll  _wfopen_s
+ *
+ * CreateFileW was attempted and removed: patching a second module's
+ * KERNEL32!CreateFileW slot (wprobe.dll) terminated the stand-in process with
+ * no crash record and no file-log entry, so the wide Win32 shim is unproven and
+ * not shipped. The same wide conversion is proven for _wfopen over the CRT
+ * entry points, which is the form the game actually imports.
  *
  * Measured gap that motivated the CRT targets: a real run patched CreateFileA
  * and observed zero opens while five mods initialized - the game's asset I/O
@@ -49,6 +56,7 @@ typedef HANDLE(WINAPI *create_file_fn)(LPCSTR name, DWORD access, DWORD share, v
 typedef FILE *(*fopen_fn)(const char *name, const char *mode);
 typedef int (*fopen_s_fn)(FILE **out, const char *name, const char *mode);
 typedef FILE *(*wfopen_fn)(const wchar_t *name, const wchar_t *mode);
+typedef int (*wfopen_s_fn)(FILE **out, const wchar_t *name, const wchar_t *mode);
 
 typedef struct {
     const uint8_t *base;
@@ -61,13 +69,14 @@ static create_file_fn g_original;
 static fopen_fn g_original_fopen;
 static fopen_s_fn g_original_fopen_s;
 static wfopen_fn g_original_wfopen;
+static wfopen_s_fn g_original_wfopen_s;
 static hyprlodr_loader *g_loader;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static unsigned g_logged;
 static int g_installed;
 static const char *g_status = "not_attempted";
 /* Which targets were patched, so a host reports exactly what is intercepted. */
-static char g_detail[192] = "";
+static char g_detail[320] = "";
 
 /* A failed install must not leave a log handle open, or a later retry would
  * append to a file nobody owns. */
@@ -228,6 +237,23 @@ static int utf8_to_wide(const char *narrow, wchar_t *out, int capacity) {
 /* The wide CRT entry point: this is the one the game's asset loader appears to
  * use. A path that does not convert, or a replacement that does not convert
  * back, is passed through unchanged rather than guessed at. */
+/* Shared wide-path resolution: returns the path the original should open and
+ * reports whether that path is a replacement. */
+static const wchar_t *resolve_wide(const wchar_t *name, char *narrow, size_t narrow_capacity,
+                                   char *replacement, wchar_t *wide_replacement,
+                                   size_t wide_capacity, int *redirected) {
+    narrow[0] = '\0';
+    *redirected = 0;
+    if (wide_to_utf8(name, narrow, (int)narrow_capacity) <= 0) return name;
+    resolve_path(narrow, replacement, redirected);
+    if (!*redirected) return name;
+    if (utf8_to_wide(replacement, wide_replacement, (int)wide_capacity) <= 0) {
+        *redirected = 0;
+        return name;
+    }
+    return wide_replacement;
+}
+
 static FILE *intercept_wfopen(const wchar_t *name, const wchar_t *mode) {
     char narrow[HYPRLODR_REDIRECT_PATH_MAX];
     char replacement[HYPRLODR_REDIRECT_PATH_MAX];
@@ -235,23 +261,32 @@ static FILE *intercept_wfopen(const wchar_t *name, const wchar_t *mode) {
     int redirected = 0;
     wfopen_fn original = g_original_wfopen;
     if (!original) return NULL;
-    narrow[0] = '\0';
-    const wchar_t *effective = name;
-    if (wide_to_utf8(name, narrow, (int)sizeof narrow) > 0) {
-        resolve_path(narrow, replacement, &redirected);
-        if (redirected &&
-            utf8_to_wide(replacement, wide_replacement,
-                         (int)(sizeof wide_replacement / sizeof wide_replacement[0])) > 0) {
-            effective = wide_replacement;
-        } else {
-            redirected = 0;
-        }
-    }
+    const wchar_t *effective = resolve_wide(name, narrow, sizeof narrow, replacement,
+                                            wide_replacement,
+                                            sizeof wide_replacement / sizeof wide_replacement[0],
+                                            &redirected);
     FILE *file = original(effective, mode);
-    if (narrow[0]) {
+    if (narrow[0])
         record_open(narrow, redirected ? replacement : narrow, "_wfopen", redirected, file != NULL);
-    }
     return file;
+}
+
+static int intercept_wfopen_s(FILE **out, const wchar_t *name, const wchar_t *mode) {
+    char narrow[HYPRLODR_REDIRECT_PATH_MAX];
+    char replacement[HYPRLODR_REDIRECT_PATH_MAX];
+    wchar_t wide_replacement[HYPRLODR_REDIRECT_PATH_MAX];
+    int redirected = 0;
+    wfopen_s_fn original = g_original_wfopen_s;
+    if (!original) return 22; /* EINVAL */
+    const wchar_t *effective = resolve_wide(name, narrow, sizeof narrow, replacement,
+                                            wide_replacement,
+                                            sizeof wide_replacement / sizeof wide_replacement[0],
+                                            &redirected);
+    int result = original(out, effective, mode);
+    if (narrow[0])
+        record_open(narrow, redirected ? replacement : narrow, "_wfopen_s", redirected,
+                    result == 0);
+    return result;
 }
 
 static int intercept_fopen_s(FILE **out, const char *name, const char *mode) {
@@ -340,6 +375,8 @@ static hook_target g_targets[] = {
      "fopen_s", 0, 0},
     {"crt-stdio", "_wfopen", (void *)(uintptr_t)&intercept_wfopen, (void **)&g_original_wfopen,
      "_wfopen", 0, 0},
+    {"crt-stdio", "_wfopen_s", (void *)(uintptr_t)&intercept_wfopen_s,
+     (void **)&g_original_wfopen_s, "_wfopen_s", 0, 0},
 };
 
 static const char *g_parse_error = "";

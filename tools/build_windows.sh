@@ -78,6 +78,7 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" 
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
 
 
+
 echo "== example mod =="
 mkdir -p "$OUT/examples"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/examples/uptime.c" -o "$OUT/obj/example_uptime.obj"

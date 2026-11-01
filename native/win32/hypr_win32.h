@@ -138,6 +138,8 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter(
 BOOL WINAPI CreateDirectoryA(LPCSTR path, void *security);
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, void *security,
                           DWORD disposition, DWORD flags, HANDLE template_file);
+HANDLE WINAPI CreateFileW(const wchar_t *name, DWORD access, DWORD share, void *security,
+                          DWORD disposition, DWORD flags, HANDLE template_file);
 BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, void *overlapped);
 BOOL WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, DWORD *read, void *overlapped);
 BOOL WINAPI CloseHandle(HANDLE handle);
