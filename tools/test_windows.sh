@@ -138,6 +138,9 @@ assert records, opens[:5]
 assert records[0]["redirected"] is True, records[0]
 assert records[0]["ok"] is True, records[0]
 assert records[0]["opened"].endswith("replacement.txt"), records[0]
+# Every record says when it happened and on which thread, so a long in-game
+# capture can be read as a timeline instead of an unordered list.
+assert "t_ms" in records[0] and "thread" in records[0], records[0]
 print(f"file log: {len(opens)} opens observed, redirect recorded")
 PY
 else

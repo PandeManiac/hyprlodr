@@ -73,6 +73,9 @@ static wfopen_s_fn g_original_wfopen_s;
 static hyprlodr_loader *g_loader;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static unsigned g_logged;
+/* Tick when the hook was installed, so every record carries a relative time:
+ * a long session then says *when* the game touches a file, not just that it did. */
+static DWORD g_start_tick;
 static int g_installed;
 static const char *g_status = "not_attempted";
 /* Which targets were patched, so a host reports exactly what is intercepted. */
@@ -174,11 +177,13 @@ static void record_open(const char *requested, const char *opened, const char *v
     if (sequence > (unsigned)HYPRLODR_FILE_LOG_LIMIT) return;
     escape_into(requested_json, sizeof requested_json, requested);
     escape_into(opened_json, sizeof opened_json, opened);
+    unsigned long elapsed_ms = g_start_tick ? (unsigned long)(GetTickCount() - g_start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"seq\":%u,\"event\":\"file_open\",\"via\":\"%s\",\"redirected\":%s,\"ok\":%s,"
+             "{\"seq\":%u,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"file_open\","
+             "\"via\":\"%s\",\"redirected\":%s,\"ok\":%s,"
              "\"requested\":\"%s\",\"opened\":\"%s\"}\n",
-             sequence, via, redirected ? "true" : "false", ok ? "true" : "false", requested_json,
-             opened_json);
+             sequence, elapsed_ms, (unsigned long)GetCurrentThreadId(), via,
+             redirected ? "true" : "false", ok ? "true" : "false", requested_json, opened_json);
     /* The handle is opened for append, so each WriteFile lands at end-of-file
      * without a lock: game threads may interleave records but never corrupt the
      * file pointer, and no kernel32 interlocked import is needed. */
@@ -461,6 +466,7 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     if (g_installed) return 0;
     if (!loader || !log_path || !*log_path) return fail_install("invalid_argument");
     g_loader = loader;
+    g_start_tick = GetTickCount();
 
     /* Open the log before patching, so this open cannot re-enter a shim. */
     g_log = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,

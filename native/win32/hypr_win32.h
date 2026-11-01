@@ -113,6 +113,10 @@ HANDLE WINAPI CreateThread(void *attributes, size_t stack_size, LPTHREAD_START_R
 BOOL WINAPI DisableThreadLibraryCalls(HMODULE module);
 void WINAPI Sleep(DWORD milliseconds);
 DWORD WINAPI GetCurrentProcessId(void);
+DWORD WINAPI GetCurrentThreadId(void);
+/* Milliseconds since boot; monotonic within one session, which is all the file
+ * log needs to say when an open happened relative to the hook installing. */
+DWORD WINAPI GetTickCount(void);
 HANDLE WINAPI FindFirstFileA(LPCSTR pattern, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindNextFileA(HANDLE find, WIN32_FIND_DATAA *data);
 BOOL WINAPI FindClose(HANDLE find);

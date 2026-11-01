@@ -14,7 +14,9 @@ FindNextFileA
 FreeLibrary
 GetCommandLineA
 GetCurrentProcessId
+GetCurrentThreadId
 GetProcessHeap
+GetTickCount
 GetModuleFileNameA
 GetModuleHandleA
 GetProcAddress

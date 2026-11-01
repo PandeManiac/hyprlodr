@@ -65,6 +65,15 @@
     "KERNEL32.dll": ["CreateFileA", "ReadFile"],
     "api-ms-win-crt-stdio-l1-1-0.dll": ["fopen", "fopen_s", "_wfopen"]
   },
+  "long_session": {
+    "note": "60 s of live game runtime with every target patched in 39 modules, checked alive every 5 s",
+    "alive": true,
+    "mods_initialized": 5,
+    "file_hook_detail": "CreateFileA=patched(8) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) _wfopen_s=absent modules=39",
+    "file_opens": 1,
+    "only_open": {"t_ms": 35, "thread": 360, "via": "CreateFileA", "requested": "\\\\.\\pipe\\wine_plugplay", "redirected": false},
+    "meaning": "The shim was live 35 ms after install and stayed live for a minute; the game made no file open through any patched slot in that time. Asset reads therefore do not use these entry points at all in this build."
+  },
   "attempts": [
     {
       "what": "WINAPI CreateFileW shim patched into every module's import slot",
