@@ -192,11 +192,15 @@ mode=suppress)`, initialized successfully, and rendered gameplay with the world 
 `cbc0acecd0fb0e516e989bd08a9e719f17941ddbef40135343f7ada2b901a71d`; it is not committed
 because it contains game content. The process was alive at capture.
 
-**Open stability issue.** The process exited a few seconds after the capture, with no
-`hyprlodr-crash.json` and no shutdown log, so sustained suppression is not yet proven safe.
-The next test must distinguish suppression itself from the hook's presence (run `pass` mode
-for the same duration). Until then, suppression is a verified visual capability, not a
-shippable default.
+**Stability control.** The suppress run exited a few seconds after its capture, with no
+`hyprlodr-crash.json` and no shutdown log. A `pass-through` run with the same hook and mod set
+was still alive more than 20 s after launch, and its capture shows the **original golden arm**
+rendering normally (sha256
+`b565488ced237361c6716b29e53ed921381f1fb3fa7bcca9cdaf9f36474d5e33`). The hook's presence
+alone is therefore not the cause, and pass-through is a working fallback that preserves the
+stock arm. Sustained suppression (zero count every frame) is still unproven and is not a
+shippable default. Neither run reached the loader's shutdown, so the in-memory patch simply
+died with the process; `image_restore` was not exercised in-game.
 
 **Correction that mattered.** The element type is `GL_UNSIGNED_INT` (5125), not
 `GL_UNSIGNED_SHORT`; the 4,752-byte buffer is 1,188 `uint32` indices. The original

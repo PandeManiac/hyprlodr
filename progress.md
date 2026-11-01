@@ -20,13 +20,16 @@ the 4,752-byte element buffer is exactly 1,188 `uint32` indices (4,752 = 1,188 x
 16-bit runs. The old cube IBO was therefore 72 bytes read as 32-bit indices, which explains
 the crash after the first substitution. The mod and `docs/RE_HAND.md` are corrected.
 
-**Two honest limitations.** The first shim logged through the host API from the render thread
-and the game died on the first gameplay hand draw; the shim is now pure (count, suppress,
-forward), and the host is only called at initialize/shutdown. The current build also exited a
-few seconds after the verified capture with no crash record and no shutdown log, so sustained
-suppression stability is unproven. The next test runs `pass` mode for the same duration to
-separate suppression from the hook's presence, then substitutes geometry for a solid test
-mesh through the same slot.
+**Two honest limitations, and a control that narrows the first.** The first shim logged
+through the host API from the render thread and the game died on the first gameplay hand draw;
+the shim is now pure (count, suppress, forward), and the host is only called at
+initialize/shutdown. The suppress run still exited a few seconds after capture, but a
+`pass-through` run with the same hook stayed alive more than 20 s and showed the **original
+golden arm** (sha256 `b565488ced237361c6716b29e53ed921381f1fb3fa7bcca9cdaf9f36474d5e33`), so the
+hook by itself is transparent and pass mode is a safe fallback. Sustained suppression remains
+unproven, and neither run reached loader shutdown, so `image_restore` was not exercised
+in-game. The next step is geometry substitution for a solid test mesh through the same slot,
+with immediate buffer restore, then the authored arm.
 
 ## 2026-11-01 (eleventh pass: live hand-draw recheck)
 

@@ -22,10 +22,9 @@
     "patched_bytes": 8,
     "patch_mechanism": "host ABI 6 image_write after build_matches()",
     "readback_verified": true,
-    "restore_mechanism": "host image_restore in shutdown; host also restores at process exit",
+    "restore_mechanism": "host image_restore in shutdown; the patch is memory-only and dies with the process",
     "forwarding": "every non-matching glDrawElements is passed to the saved original",
-    "mode_source": "<state_dir>/hand-mode.txt",
-    "mode": "suppress"
+    "mode_source": "<state_dir>/hand-mode.txt"
   },
   "hand_draw_signature": {
     "mode": 4,
@@ -38,7 +37,7 @@
     "index_width_bytes": 4,
     "note": "4752 = 1188 x 4. The two adjacent 1188-index draws are two passes over one uint32 index run, not two 16-bit runs."
   },
-  "observation": {
+  "suppress_observation": {
     "window": "0x06000003",
     "resolution": "1920x1080",
     "arm_visible": false,
@@ -49,13 +48,25 @@
     "screenshot_committed": false,
     "reason_not_committed": "the frame contains game content"
   },
+  "pass_mode_control": {
+    "mode": "pass-through",
+    "arm_visible": true,
+    "world_rendering": true,
+    "still_alive_seconds_after_capture": 8,
+    "screenshot_sha256": "b565488ced237361c6716b29e53ed921381f1fb3fa7bcca9cdaf9f36474d5e33",
+    "screenshot_bytes": 151251,
+    "screenshot_committed": false,
+    "reason_not_committed": "the frame contains game content"
+  },
   "log_lines": [
     "image_write: patched 8 byte(s) at rva 3d9ac8",
     "info: dispatch hook installed at rva 0x3d9ac8 (original=0x7bee1450 mode=suppress)",
+    "info: dispatch hook installed at rva 0x3d9ac8 (original=0x7bee1450 mode=pass-through)",
     "initialize_ok"
   ],
   "limitations": [
-    "The process exited a few seconds after the capture with no hyprlodr-crash.json and no shutdown log, so sustained suppression stability is unproven.",
+    "The suppress run exited a few seconds after the capture with no hyprlodr-crash.json; the pass-mode control stayed alive more than 20 seconds after launch with the original arm visible, so the hook's presence alone is not the cause. Sustained suppression is still unproven.",
+    "Neither run produced a loader shutdown log, so the in-game image_restore path has not been exercised; the patch is memory-only and cannot persist after process exit.",
     "The first shim version called the host logger from the render thread and the game died on the first gameplay hand draw; the shipped shim performs no host or GL calls and only counts, suppresses and forwards.",
     "Only suppression is proven. Geometry substitution through the same hook is not implemented yet."
   ]
