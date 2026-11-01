@@ -1,5 +1,24 @@
 # Session progress
 
+## 2026-11-01 (the pack's fonts, and matching the title's weight)
+
+**All eleven packed fonts are extracted and named**, after fixing a swapped length/offset pair in my
+`name`-table reader: Georgia (regular, bold, italic, bold-italic), Goethe Bold, Mongolian Baiti,
+Tinos (regular, bold), Consolas, Font Awesome 5 Free Solid, Hack. Fonts sit behind a 0x18-byte
+payload header, which is why checking for TrueType magic at offset 0 alone found nothing.
+
+**Which font drew the original title is narrowed, not proven.** Rendering `HYPER`/`DEMON` in each
+font, normalising to each band's ink box and scoring IoU against the captured mask gives Georgia
+Bold 0.677, Tinos Bold 0.638, Georgia 0.561, and drops to 0.35/0.33 for the sans and mono faces. So
+the original is a bold serif of that genre and Georgia Bold is the best candidate, but a single-scale
+silhouette comparison cannot identify it; that would need outline matching.
+
+**The weight now matches.** The shipped mask inks 0.428 of the canvas; the generator fits its glyph
+scale to a target ink (`--target-ink`, converged at 1.029) and measures 0.424 offline. In the running
+game the mask texture reads back at 0.424 against the original's 0.428, with the mask still found by
+signature (id 81) and frames 120/300/480 captured for the same session.
+
+
 ## 2026-11-01 (signature-based mask targeting, and animation preserved)
 
 **The mask is now found by signature instead of by name, and the measurement justified it.** The

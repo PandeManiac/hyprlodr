@@ -488,3 +488,38 @@ and logs `title_mask_found` with the name it settled on (81 in this session, fou
 That last point is the animation evidence: the game applies its own animated transform to the title
 after the mask is sampled, so a replacement mask inherits the rotation, the background flow and the
 post chain without reimplementing any of them.
+
+## Confirmed: the typeface candidates, measured against the shipped mask (2026-11-01)
+
+The pack's eleven fonts are now properly extracted and named, after fixing a swapped pair of
+fields in my `name`-table reader (length and offset were read from the same two bytes, which is why
+earlier attempts produced one enormous garbage family name and no fonts at all). Every font sits
+behind a 0x18-byte payload header, and the family names are exactly the keys already recovered:
+**Georgia** (regular, bold, italic, bold-italic), **Goethe Bold**, **Mongolian Baiti**,
+**Tinos** (regular, bold), **Consolas**, **Font Awesome 5 Free Solid** and **Hack**.
+
+Each font was then rendered as `HYPER` and `DEMON`, normalised to each band's ink box, and scored by
+IoU against the captured original mask:
+
+| font | best IoU | word / size |
+|---|---|---|
+| **Georgia Negreta (Bold)** | **0.677** | HYPER @ 96px |
+| Tinos Bold | 0.638 | HYPER @ 88px |
+| Georgia | 0.561 | HYPER @ 72px |
+| Tinos Regular | 0.557 | HYPER @ 48px |
+| Georgia Negreta cursiva | 0.554 | HYPER @ 60px |
+| Mongolian Baiti | 0.552 | HYPER @ 84px |
+| Goethe Bold | 0.448 | DEMON @ 56px |
+| Consolas | 0.350 | — |
+| Hack Regular | 0.332 | — |
+
+**Hypothesis, stated as such:** Georgia Bold is the leading candidate but 0.677 is not identification.
+A wrong font of similar class lands far lower (Consolas 0.35, Hack 0.33), and the second place is
+another serif of the same genre, so the result narrows the field to "bold transitional/didone serif
+from the pack, most likely Georgia Bold" rather than settling it. Proving it would need the glyph
+outlines matched, not silhouettes at one normalised scale.
+
+**Confirmed, by measurement:** the shipped mask's ink fraction is 0.428, and the replacement now
+fits its glyph scale to that number (`--target-ink`, which converged at scale 1.029). Offline the
+generated mask measures 0.424, and the texture read back from the running game measures 0.424
+against the original's 0.428, so the replacement no longer reads lighter than the original title.
