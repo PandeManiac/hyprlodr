@@ -349,6 +349,8 @@ static void write_attach_record(const char *stage, int status) {
     fclose(file);
 }
 
+#include "asset_probe.h"
+
 static DWORD WINAPI bootstrap(LPVOID unused) {
     (void)unused;
 
@@ -416,6 +418,13 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * records; nothing in the renderer is replaced. */
     hyprlodr_gl_hook_set_game_dir(g_game_dir);
     (void)hyprlodr_gl_hook_install(gl_log);
+    /* Research probe: find the live asset records so the pack can be read. It
+     * only reads memory and writes its own log. */
+    {
+        char assets_log[1024];
+        snprintf(assets_log, sizeof assets_log, "%s\\hyprlodr-assets.jsonl", g_game_dir);
+        (void)hyprlodr_asset_probe_start(g_game_dir, assets_log);
+    }
 
     write_attach_record("attached", HYPRLODR_OK);
 

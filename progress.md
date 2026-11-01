@@ -1,5 +1,20 @@
 # Session progress
 
+## 2026-11-01 (the live asset record table is now readable)
+
+New `native/win32/asset_probe.c` finds the game's 0x58-byte asset records in process memory
+without needing any address from the analysis: it requires a valid
+`(offset, size, tag)` slot plus three consecutive slots parsing. One instrumented run returned
+400 records in **2 contiguous runs (longest 266)**, with offsets and sizes chaining exactly
+(`232015452+3839395 = 235854847`, …), which proves the table is real. Tags seen: 266 × `0x100`
+(audio) and 134 × `1`. A raw dump confirms the documented field positions, and shows the
+`std::string` name field is **empty** — a scan of 722 MB / 282 regions found **zero** named
+records, so names are not stored in the table and slices must be identified by content instead.
+First content ranking (all 1024 keys, share of `0x00`/`0xff`) points at
+`offset 297650309, size 258588, tag 1` (0.66) as a mask-like payload — unconfirmed. Also
+corrected: the `ff 00 00 ff` window from the previous session sits inside a **tag-0x100 audio**
+record, so the stencil reading is a hypothesis, not a fact.
+
 ## 2026-11-01 (the game runs again: dead X screen, then a virtual one)
 
 **The blocker was environment, and it is solved.** Steam's client could not start its

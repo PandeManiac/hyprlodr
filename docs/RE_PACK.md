@@ -122,6 +122,48 @@ through the slots we own, even with 42 slots repatched across 72 modules. Frames
 be read at `wglSwapBuffers`; per-draw tracing needs a different instrument (the engine's own
 dispatch, not the import table).
 
+## Confirmed in live memory: the record table exists, and it stores no names
+
+`native/win32/asset_probe.c` (new) scans the running process for the measured 0x58-byte
+record layout and writes `hyprlodr-assets.jsonl`. Requirements per slot: `offset >= 0x18`,
+`size >= 0x18`, `offset + size <= pack size`, a tag from the loader's dispatch set, and **three
+consecutive slots** parsing (two produced hundreds of coincidences in unrelated memory).
+
+What one instrumented run produced (400-record cap, hit immediately):
+
+- **2 contiguous runs, longest 266 records**, and the members are *perfectly* contiguous:
+  `232015452 + 3839395 = 235854847`, `235854847 + 349559 = 236204406`,
+  `236204406 + 87415 = 236291821`, then `+87415 = 236379236` … That arithmetic cannot be
+  coincidence, so these are the real per-kind slice tables the resolver walks.
+- **Tag histogram: 266 × `0x100` (audio), 134 × `1`** over the 400 captured; other tags did
+  not appear in the arrays the scan reached first.
+- A raw dump of one record (offset `0dd4465c`, size `003a95a3`, tag at `+0x40` = `2`) confirms
+  the field positions from the decompilation, and the `std::string` at `+0x20` reads
+  **empty** (`size` 0 at `+0x30`, capacity 15 at `+0x38`, i.e. the small-string default).
+
+**Names are not stored in these records.** The probe was then changed to report only slots whose
+`std::string` looks like an asset name; over a full run it scanned **722 MB across 282 regions
+and found zero**. Two consequences:
+
+1. The name → record association must live elsewhere (the caller passes the name and the table is
+   searched by something derived from it, e.g. a precomputed key), or in a parallel array that
+   the scan did not reach.
+2. Slices can still be identified **by content**, and that path does not need names at all.
+
+### Content-based identification, in progress
+
+Decrypting the first 64 bytes of each slice with all 1024 keys and ranking by the share of
+`0x00`/`0xff` (a coverage-mask signature) gives a clear leader among the 267 slices ≥ 64 KiB:
+`share 0.66, seed 0x287, offset 297650309, size 258588, tag 1`, then several at 0.52–0.56.
+That leader is the strongest candidate yet for a 1-bit/mask payload, but it has **not** been
+rendered or confirmed to contain glyphs.
+
+**Correction to an earlier reading:** the `ff 00 00 ff` pattern found last session at offset
+201,583,721 falls inside record `offset 200701587, size 971233, tag 0x100` — an *audio* slice.
+So the "coverage mask" interpretation of that window is not supported; the bytes are decrypted
+correctly (the key family is fixed by the zero run), but what they belong to is unexplained.
+Treat "the title is a stencil mask" as a hypothesis from the screenshots, not a confirmed fact.
+
 ## Unverified
 
 - **Correctness against real plaintext.** The cipher cannot be validated without a known

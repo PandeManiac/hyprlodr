@@ -151,6 +151,39 @@ BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, 
 BOOL WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, DWORD *read, void *overlapped);
 BOOL WINAPI CloseHandle(HANDLE handle);
 BOOL WINAPI VirtualProtect(LPVOID address, size_t size, DWORD new_protect, DWORD *old_protect);
+
+/* --- address-space queries: the asset-record probe --------------------------
+ * The probe walks committed, readable regions looking for the game's asset
+ * records, so it needs VirtualQuery and the page constants, nothing more. */
+#define MEM_COMMIT 0x00001000u
+#define MEM_PRIVATE 0x00020000u
+#define MEM_MAPPED 0x00040000u
+#define PAGE_NOACCESS 0x00000001u
+#define PAGE_READONLY 0x00000002u
+#define PAGE_READWRITE 0x00000004u
+#define PAGE_WRITECOPY 0x00000008u
+#define PAGE_EXECUTE_READ 0x00000020u
+#define PAGE_EXECUTE_READWRITE 0x00000040u
+#define PAGE_EXECUTE_WRITECOPY 0x00000080u
+#define PAGE_GUARD 0x00000100u
+
+/* The x64 MEMORY_BASIC_INFORMATION the kernel actually fills in is 48 bytes;
+ * naming it explicitly here avoids depending on a SDK layout macro. */
+typedef struct {
+    void *BaseAddress;
+    void *AllocationBase;
+    DWORD AllocationProtect;
+    WORD PartitionId;
+    WORD Reserved0;
+    unsigned long long RegionSize;
+    DWORD State;
+    DWORD Protect;
+    DWORD Type;
+    DWORD Reserved1;
+} MEMORY_BASIC_INFORMATION64A;
+
+size_t WINAPI VirtualQuery(const void *address, MEMORY_BASIC_INFORMATION64A *info,
+                           size_t length);
 /* Wide/narrow conversion for the _wfopen shim. */
 int WINAPI WideCharToMultiByte(UINT codepage, DWORD flags, const wchar_t *wide, int wide_length,
                                char *narrow, int narrow_capacity, const char *default_char,
