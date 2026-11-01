@@ -102,7 +102,7 @@ The attach record also reports the file hook: the stand-in's modules import `Cre
 | `failed_install_rolls_back` | An install that fails after the proxy was replaced restores the original library, removes the backup and the manifest, and leaves the blocking file intact |
 | `uninstall_keeps_changed_mod` | A mod whose bytes changed since installation is kept (and reported), untouched mods are removed, original library restored |
 
-## Manager core (32/32 passing)
+## Manager core (35/35 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
 
@@ -132,6 +132,9 @@ The attach record also reports the file hook: the stand-in's modules import `Cre
 | `loader_preserves_existing_mod` | Existing mod file backed up and restored by uninstall |
 | `loader_install_rolls_back` | Failed install restores the proxy, removes the backup/manifest, leaves the blocking file intact |
 | `loader_uninstall_keeps_changed_mod` | A modified mod is kept; untouched mods and the loader are removed |
+| `file_log_reads_opens` | Parses `hyprlodr-files.jsonl`: two opens over two paths, one redirect, first at 35 ms, and a different event kind in the same file is not counted as an open |
+| `file_log_tolerates_garbage_and_caps` | A corrupt line does not change the counts, only the newest 200 records are kept, and the summary says so |
+| `file_log_absent` | A missing file log reports no opens instead of failing |
 
 UI verification: the app was launched under Xvfb against `build-win/demo-game` (fake install with five mods, one disabled) and captured to `docs/evidence/manager-ui.png`. That confirms rendering and data binding; it is not an interactive user test.
 
