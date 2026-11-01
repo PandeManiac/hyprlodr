@@ -15,6 +15,13 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(hyprlodr_loader PUBLIC dl)
 endif()
 
+add_library(hyprlodr_feather STATIC native/src/feather_spring.c)
+target_include_directories(hyprlodr_feather PUBLIC native/include)
+target_compile_options(hyprlodr_feather PRIVATE ${HYPRLODR_WARNINGS})
+if(UNIX AND NOT APPLE)
+  target_link_libraries(hyprlodr_feather PUBLIC m)
+endif()
+
 add_executable(hyprlodr-host native/src/host.c)
 target_link_libraries(hyprlodr-host PRIVATE hyprlodr_loader)
 target_compile_options(hyprlodr-host PRIVATE ${HYPRLODR_WARNINGS})
@@ -149,6 +156,11 @@ if(BUILD_TESTING)
   target_link_libraries(anchor_test PRIVATE hyprlodr_loader)
   target_compile_options(anchor_test PRIVATE ${HYPRLODR_WARNINGS})
   add_test(NAME anchor_test COMMAND anchor_test)
+
+  add_executable(feather_spring_test native/tests/feather_spring_test.c)
+  target_link_libraries(feather_spring_test PRIVATE hyprlodr_feather)
+  target_compile_options(feather_spring_test PRIVATE ${HYPRLODR_WARNINGS})
+  add_test(NAME feather_spring_test COMMAND feather_spring_test)
 
   # Asset container / cipher probe: proves the implementation round-trips a
   # synthetic archive. The real archive check is a manual, evidence-producing

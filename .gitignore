@@ -4,6 +4,7 @@
 /build-recovery/
 /.freebuff/
 __pycache__/
+*.blend1
 manager/**/bin/
 manager/**/obj/
 .tmp/

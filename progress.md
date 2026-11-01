@@ -1,5 +1,30 @@
 # Session progress
 
+## 2026-11-01 (eighth pass: arm art target, rig validation, spring runtime)
+
+**The replacement arm now exists as a reproducible authored asset, not a game-side replacement.**
+`tools/assets/build_berdly_arm.py` generates `assets/berdly-arm/berdly_arm.blend`, `.glb` and
+`.mesh.json` plus twelve inspected renders. The latest pass anchors every feather to a sampled
+forearm surface point, adds a tapered quill and raised rachis, rebuilds the hand as a curled claw
+with knuckle masses, and moves the palette to deep blue with blue/cyan/violet iridescence instead
+of the earlier pink/gold drift.
+
+**Measured from the generated runtime description:** 4,716 vertices / 4,570 faces, 26 authoring
+bones, 9 feather rows, max 3 influences per vertex, normalized weights, UVs on every face, and
+seven baked actions (idle, dash, dash_slide, jump, stomp, bunnyhop, fake). The arm is deliberately
+faceted and uses the authored Blender materials as an art target; the eventual runtime is meant to
+reuse `entity_hand`/`entity_hand_vs`, not these materials.
+
+**Added `native/src/feather_spring.c` + public header + CTest.** Fixed 240 Hz substeps, target and
+angle limits, overshoot clamp with velocity reversal, reset for teleports, and invalid-input
+handling. `feather_spring_test` passes; it checks 30/60/144/240 Hz convergence, bounded response,
+reversal and reset.
+
+**Honest blocker:** the authoring armature has 26 bones, but the verified `entity` path supplies at
+most 16 `bone_transforms`. The mesh metadata records `runtime_skinning_status:
+pending-16-bone-bake`. Milestone B is still blocked on observing the hand draw path; the renders are
+art inspection only, not game-render verification.
+
 ## 2026-11-01 (seventh pass: the old overlay is gone)
 
 **Removed the copper HYPRLODR wordmark overlay**, which was the pre-RE placeholder: a topmost
