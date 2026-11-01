@@ -1,0 +1,49 @@
+{
+  "date": "2026-11-01",
+  "binary": {
+    "path": "hyperdemon.exe",
+    "sha256_prefix": "7612dd72076002b7c0cb",
+    "image_base": "0x140000000"
+  },
+  "lobby_entity_registration": {
+    "sites_vma": [
+      "0x1401208a2",
+      "0x1401208e5"
+    ],
+    "strings": {
+      "0x14036b6e8": "entity_lobby_dagger_hyper",
+      "0x14036b708": "entity_lobby_dagger_hyper2"
+    },
+    "resolve_helper": "0x140211bc0",
+    "store_helper": "0x140211720",
+    "string_ctor": "0x140002d20",
+    "destination_slots": [
+      "0x68d8(%rbx)",
+      "0x6948(%rbx)",
+      "0x69b8(%rbx)"
+    ],
+    "array_stride": "0x70",
+    "observation": "identical registration block repeated per entity name at start-up"
+  },
+  "shader_registration": {
+    "sites_vma": [
+      "0x1400019c8",
+      "0x14007199d"
+    ],
+    "string_vma": "0x1403652f8 (shaders)",
+    "second_string": "0x14036acb0",
+    "thunk": "0x1403da550",
+    "register_call": "0x140004ac0",
+    "shader_file_literal": {
+      "text": "skull_giga.vert",
+      "vma": "0x1403689d0",
+      "rip_xrefs": 0
+    }
+  },
+  "unresolved": [
+    "title letter representation (atlas vs wordmark vs mesh)",
+    "iridescent material shader",
+    "title draw calls and render targets"
+  ],
+  "not_verified_in_game": "Steam client logged off; the game exits before rendering"
+}

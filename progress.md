@@ -1,5 +1,9 @@
 # Session progress
 
+## 2026-11-01 (title code sites: entities registered by name, shaders by directory)
+
+**Static evidence places the title content outside the string space.** Both lobby entity names resolve to an identical registration block (`0x1401208a2`, `0x1401208e5`): build the literal, resolve through `0x140211bc0`, store into consecutive slots of an array with 0x70 stride (`0x68d8`, `0x6948`, `0x69b8`). The `shaders` literal is passed with a second string and a thunk (`0x1403da550`) into a registration routine at `0x140004ac0` from functions `0x1400019c8`/`0x14007199d`, and `skull_giga.vert` has **zero** RIP-relative references, i.e. it is reached through data. With `HYPER`/`DEMON` absent from the binary while `PLAY`/`OPTIONS`/… are literals, the title is entity/texture-driven — retitling cannot be a string patch. Linux `ctest` stays 6/6. In-game verification remains impossible while Steam is logged off (`LogonFailure …`): `SteamAPI_Init` fails and the game exits before rendering. Ghidra headless needed a pre-existing project directory; disassembly came from `objdump` over mapped byte slices.
+
 ## 2026-11-01 (root cause: Steam logged off, not the game)
 
 **The launch blocker is an account state, not the game.** Steam's console log ends in `LogonFailure Service Unavailable` / `LogonFailure No Connection` followed by `LogOff()`, so `SteamAPI_Init` fails and HYPER DEMON exits deliberately within ~2 s: no window, no new crash dump, and the per-user `config` is never recreated — all three confirmed, with the loader uninstalled. The earlier prefix-rebuild advice is superseded; signing in to Steam is the fix. Static title work continued in parallel: the only `.vert` name in the binary is `skull_giga.vert`, and the lobby entity names resolve to two code sites (RVA `0x1208a2`, `0x1208e5`).
