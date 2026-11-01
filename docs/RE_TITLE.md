@@ -241,6 +241,42 @@ is geometry drawn with the game's fonts (Georgia for text, `tag 4096`) and shade
 geometry*, and the natural instrument is a same-tag, same-length payload served under the same
 name.
 
+## Confirmed: the pack holds no image data — the title is geometry, shaded
+
+The record table recovered from the live process is **complete**: its 863 spans tile the whole
+306,794,369-byte pack with no overlap, so nothing is hiding outside the records.
+
+Two surveys of the decrypted payloads settle what the pack does *not* contain:
+
+- **No image container** anywhere: no `DDS `, `PNG`, `KTX `, `JPEG`, `RIFF` or `TGA` signature in
+  any record's first 512 bytes (and the eleven `tag 4096` slices are genuine TrueType, so the
+  scan reads payloads correctly).
+- **No raw image geometry** either: searching every record for a width/height pair near the start
+  whose extent accounts for the remaining bytes at 1–4 bytes per pixel (`tools/re/find_textures.py`)
+  yields **zero** candidates across all 863 records and across the 39 slices whose seed is pinned
+  by name.
+
+Together with the earlier negative — `HYPER`/`DEMON` exist nowhere in the pack or the executable —
+this rules out the two easy readers of the capture. The title's letterforms are **not a mask
+texture and not a stored string**. They are geometry drawn by the `entity_vs`/`entity` material:
+the giant letters are shaded by the same iridescent program as everything else (hence the
+`spherical_proj`, `iri`, `crim_colour` uniforms and the ten-texture set), and the vertical
+repetition visible at the capture's edges is the same letterform drawn at a coarse tile pitch,
+not a wrapped bitmap.
+
+**Method caveat, measured.** For a slice whose name is unknown the seed is inferred from content
+(which key class yields the most readable text). That inference is validated: on the 39 slices
+whose name is known, the inferred class equals `zlib.crc32(name) & 0x3ff` for **10/10** that are
+reachable this way, including the binary `tag 1` and `tag 2` payloads — so the surveys above are
+not noise. What *is* noise is scoring records by how many uppercase letters they contain: that
+test matched 837 of 863 records and was discarded rather than used.
+
+**Consequence for the replacement.** Changing `HYPER`/`DEMON` to `HYPR`/`LODR` means changing
+glyph geometry (or the glyph source the geometry is built from), then serving a same-length,
+re-encrypted payload under the same name — the path `tools/re/pack_patch.py` already proves
+byte-exact. A text overlay or a replacement image would be a different renderer, which the brief
+excludes.
+
 ## Where this leaves the title (state of knowledge)
 
 - The title is content behind `entity_lobby_dagger_hyper*` (kind 4), resolved as

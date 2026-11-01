@@ -1,5 +1,34 @@
 # Session progress
 
+## 2026-11-01 (the pack is complete, contains no images, and the title is geometry)
+
+**Three measurements, one of them a correction of my own.** First, the live record table is
+*complete*: 863 non-overlapping spans tile 100% of the 306,794,369-byte pack, so every byte the
+game can load is in a record we can read. Second, the pack contains **no image data at all** — no
+`DDS `/`PNG`/`KTX `/`JPEG`/`RIFF`/`TGA` signature in any record, and no slice whose declared
+width/height accounts for its bytes at 1–4 bpp (new tool `tools/re/find_textures.py`). Since the
+eleven `tag 4096` slices are verifiably TrueType, the scan is reading payloads correctly. Third,
+`HYPER`/`DEMON` appear in neither pack nor executable (ASCII or UTF-16), and the exe's Steam
+interface is only `SteamAPI_Init`/`GetHSteamPipe`/`GetHSteamUser`/`IsSteamRunning`, so the words
+are not fetched from Steam either (`appmanifest` does say `HYPER DEMON`, but the game never asks).
+
+So the title's letterforms are **geometry** shaded by the `entity_vs`/`entity` material — the same
+iridescent program with `spherical_proj`/`iri`/`crim_colour` — and a replacement must change glyph
+geometry or its source, not a string or a bitmap.
+
+**Two methodological corrections, both recorded rather than quietly dropped.** (a) A score based
+on "how many of the letters H,Y,P,E,R,D,E,M,O,N a record's 1-char strings contain" matched 837 of
+863 records: pure noise, discarded. (b) I then wrongly concluded that the content-based seed
+inference was therefore unusable; a direct check says otherwise — on the 10 reachable named
+slices it reproduces `zlib.crc32(name) & 0x3ff` **10/10**, including binary `tag 1`/`tag 2`
+payloads, so the surveys above stand. `find_textures.py` now refuses unnamed records anyway,
+because for them there is no way to *confirm* the seed.
+
+Also confirmed this round from the captures themselves: the title is typography knocked out of the
+iridescent field at an enormous scale (letters run off every edge), and the sibling `SORATH`
+screen uses the same treatment, so this is the game's standard titling path rather than a
+one-off.
+
 ## 2026-11-01 (the materials and the delivery path are both in hand)
 
 **Two results, one negative, one constructive.** First, the probe's relaxed tag filter was
