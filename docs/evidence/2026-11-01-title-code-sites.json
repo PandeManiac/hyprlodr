@@ -108,7 +108,34 @@
       "semantics": "record loader dispatching on record[0x10] (type tag at 0x40)",
       "type_1": "lazy 0x38-byte object + 0x50-byte sub-object (+0x08 = 0x20), cached at record+0x90, bitmask check (obj+8)+0x4c & flags",
       "type_2": "uses cached pointer at +0x90, allocates 0x40-byte object",
-      "status": "cases 1 and 2 observed; remaining cases not yet read"
+      "status": "cases 1 and 2 observed; remaining cases not yet read",
+      "full_body": {
+        "record_fields": {
+          "0x00": "stream offset (seekg)",
+          "0x04": "payload byte count (malloc)",
+          "0x40": "type tag"
+        },
+        "read_path": [
+          "FUN_140215280 over name",
+          "FUN_140213370(stream, buf, size, check)",
+          "byte counter at stream+0x168"
+        ],
+        "payload_header": "0x18 bytes; parser receives buffer+0x18",
+        "dispatch": {
+          "1": "FUN_140205ec0",
+          "2": "FUN_1402330d0",
+          "4": "FUN_140210080",
+          "0x20": "FUN_140208790",
+          "0x100": "FUN_1401cd390"
+        }
+      }
     }
+  },
+  "parser_notes": {
+    "FUN_1401cd390": "audio: alGenBuffers/alBufferData, 0x1101 mono / 0x1103 stereo, rate at +0x7c",
+    "FUN_1402330d0": "compact u16/u32 struct reader, 16-vs-32-bit variant gate",
+    "FUN_140210080": "length-prefixed string followed by ints",
+    "FUN_140208790": "large text-format parser (FUN_1400ab750 / FUN_1400ab7c0)",
+    "FUN_140205ec0": "named sub-object graph builder (largest of the five)"
   }
 }

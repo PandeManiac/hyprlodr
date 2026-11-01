@@ -196,3 +196,39 @@ statically beyond its presence.
   labels do.
 - Nothing yet says whether the visible letters are a texture, an atlas or meshes; that needs
   the running game, which needs a Steam session.
+
+## Records are typed slices of the asset stream (Ghidra, 2026-11-01)
+
+Reading `FUN_140212920` to its end settles what a record *is*. The trailing half of the
+function does the actual work:
+
+- `malloc((int)record[0x04])`, then `seekg(*record)` on the stream passed as the first
+  argument — so **`record[0x00]` is a byte offset and `record[0x04]` is a byte count**;
+- `FUN_140215280(0, name, len)` computes a check value over the record's *name*, then
+  `FUN_140213370(stream, buffer, size, check)` reads the slice (validating it);
+- a second `FUN_140215280` over the payload is added to the running byte counter at
+  `stream + 0x168` (pack-read accounting);
+- the payload is handed to a per-tag parser starting at `buffer + 0x18`, i.e. **payloads carry
+  a 0x18-byte header** (`record[0x20] - 0x18` is the data length for tag `0x20`);
+- the stream object (`stream + 0x120`) is passed along for tag `0x100`.
+
+Tag → parser, as read from the dispatch:
+
+| Tag | Parser | Observed character |
+|---|---|---|
+| `1` | `FUN_140205ec0` | 404 lines, richest: builds a named sub-object graph (`FUN_1402067a0`, `FUN_140206870`, `FUN_140206900`, `FUN_140207280`, `FUN_14021a710`, `FUN_14023d6c0`) |
+| `2` | `FUN_1402330d0` | 87 lines, plain struct reader over u16/u32 fields with a 16- vs 32-bit variant gate |
+| `4` | `FUN_140210080` | 146 lines: length-prefixed string then integers (char-buffer construction on the stack) |
+| `0x20` | `FUN_140208790` | 552 lines, largest parser; parses a text-like format (`FUN_1400ab750`/`FUN_1400ab7c0`) |
+| `0x100` | `FUN_1401cd390` | **audio, confirmed**: `alGenBuffers`/`alBufferData` (OpenAL), buffer id in `obj+0x40`, sample rate `obj+0x7c`, mono/stereo via `0x1101`/`0x1103`, downsampling when the rate exceeds `DAT_140375890` |
+
+**Confirmed:** `entity_lobby_dagger_hyper*` names resolve to records of
+`(offset, size, tag)` into the asset stream, and the tag chooses the parser that materialises
+them. **Hypothesis (not proven):** the title's records use tag `1` (named sub-object graph) or
+`2` (compact struct). **Ruled out:** tag `0x100` is audio, and tags `4`/`0x20` are
+string/format parsers, so none of those can be the lettering itself.
+
+Why this matters: the lettering is addressed *by name inside the pack*, so a replacement can
+be a same-tag payload served under the same name — which is exactly what the `_Fiopen`
+redirect layer is for. What remains unknown is the record's tag and its payload layout, and the
+pack (`asset/asset`, 306,794,369 B) is still undecoded, so neither can be read offline.
