@@ -76,6 +76,61 @@ GPU. The fix is to sign in to Steam (Steam → Sign in), after which the game sh
 launch exactly as before; the earlier prefix-rebuild advice in this document is
 superseded and should not be needed.
 
+## 1c. RESOLVED: the launch failure was a dead X screen, and a virtual one fixes it
+
+The 1b diagnosis (signed out of Steam) was correct but incomplete: signing in was not
+possible either, because **Steam's client UI could not create a display**:
+
+```text
+[2026-11-01 06:33:00] Couldn't initialize SDL: The video driver did not add any displays
+```
+
+The KWin Wayland session's Xwayland virtual screen had collapsed to zero size:
+
+```text
+$ xdpyinfo | grep dimensions
+  dimensions:    0x0 pixels (0x0 millimeters)
+$ xdpyinfo | grep resolution
+  resolution:    -2147483648x-2147483648 dots per inch
+```
+
+Steam is an X11 client, so with no screen it came up without a window, never attempted
+a logon (`connection_log.txt` shows no `LogOn()` after the 04:53 `LogOff`), and
+`-applaunch 1743850` was silently a no-op. No desktop capture worked either (`xwd` and
+`grim` both refuse that 0x0 root), so this could not be fixed by clicking anything.
+
+**Working recipe (verified this session, no physical display needed):**
+
+```bash
+setsid Xvfb :99 -screen 0 1920x1080x24 +extension GLX +extension RANDR +render -noreset &
+DISPLAY=:99 glxinfo -B     # llvmpipe, GL 4.6 Compatibility -> acceptable to the game
+setsid env DISPLAY=:99 steam -cef-disable-gpu &          # auto-login, ~12 s
+setsid env DISPLAY=:99 steam -applaunch 1743850 &
+```
+
+Observed results: `connection_log.txt` reached `[Logged On, 4, 7] [U:1:193590130]`, the
+client authenticated, Proton started the prefix, and the game ran with a 1920x1080
+`hyperdemon` window; the game's own `steamuser.log` reports
+`Steam running..[berds]..login( )`. **llvmpipe is the renderer**, so timing is slow but
+frames are correct.
+
+**What the loader reports in that run** (`hyprlodr-attach.json`): `loader_abi` 7,
+`build_matches` true, `anchors_matched` 8/8, `tables_dumped` true, `file_hook`
+`installed` (`CreateFileA`, `fopen`, `fopen_s`, `_wfopen`, `_Fiopen` patched across 39
+modules), `gl_capture` `installed` (`GetProcAddress`+`wglGetProcAddress`, 27 slots, 46
+modules, growing to 42 slots / 72 modules in `hyprlodr-gl.jsonl`). A 1920x1080 frame was
+dumped behind `wglSwapBuffers` at frame 120.
+
+**Baseline of the original title (three captures, `import -window`, not committed):** the
+lettering is enormous **black glyph silhouettes** — `HYPER` across the upper half,
+`DEMON` across the lower — cut into vertical strips that repeat horizontally, with the
+animated iridescent field visible in the gaps and inside the counters, and the menu row
+(`PLAY OPTIONS TRAINING CLIPS LEADERBOARDS EXIT`) on a black band between the words. The
+mean luminance of successive captures changed (10669 -> 11855 over ~4 s), so the effect
+is animated. This is consistent with the title being a **mask/stencil over a full-screen
+shader effect** rather than a lit 3D wordmark, and it means the replacement has to supply
+glyph *shapes* in the same mask, not coloured art of its own.
+
 ## 2. What the binary says about the title (static, verified)
 
 **Observed** (`strings` on `hyperdemon.exe`, sha256 `7612dd72…3611`):

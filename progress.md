@@ -1,5 +1,23 @@
 # Session progress
 
+## 2026-11-01 (the game runs again: dead X screen, then a virtual one)
+
+**The blocker was environment, and it is solved.** Steam's client could not start its
+UI: `Couldn't initialize SDL: The video driver did not add any displays`, because the
+KWin Wayland session's Xwayland screen is **0x0** (`xdpyinfo`: `dimensions: 0x0 pixels`,
+DPI `-2147483648`). With no X screen, Steam never attempted a logon, `-applaunch` did
+nothing, and no capture tool could read the root window. Running everything on
+`Xvfb :99 -screen 0 1920x1080x24 +extension GLX` fixes it: GLX gives GL 4.6
+Compatibility through llvmpipe, Steam auto-logs in (`[Logged On, 4, 7]
+[U:1:193590130]`), Proton starts, and the game reaches a 1920x1080 window with
+`steamuser.log` = `Steam running..[berds]..login( )`. The proxy was then installed and
+reported `anchors_matched` 8/8, `file_hook` installed over 39 modules, `gl_capture`
+installed with 42 slots / 72 modules, and dumped a 1920x1080 frame. Three baseline
+captures of the original title show enormous black glyph silhouettes (`HYPER` over
+`DEMON`) in repeating vertical strips over an animated iridescent field, with the menu
+row between them — i.e. a stencil/mask over a full-screen shader effect. The proxy was
+uninstalled afterwards and `OpenAL32.dll` verified back to `396f8873…420b4`.
+
 ## 2026-11-01 (the pack cipher is reversed and implemented)
 
 **`asset/asset` is encrypted, and its reader is now understood well enough to decrypt.** The pack measures exactly 8.000 bits/byte over its first MiB with all 256 byte values present and contains no plaintext names, so it is encrypted rather than compressed. `FUN_140213370` reads a slice and un-XORs it in place with a rolling 16-bit state driven by two 256-byte tables (RVA `0x361710`, `0x361810`) and by the *ciphertext* byte just produced; the per-slice seed is `FUN_140215280`, a table-driven reflected CRC-32 whose table at RVA `0x36f700` matches the standard `0xEDB88320` polynomial byte for byte, i.e. `zlib.crc32(name)`. `tools/re/pack_crypt.py` implements decrypt and encrypt, loads both tables from the local executable at run time (no game data in the repo), and passes a round-trip test over random payloads at several seeds and sizes. **Unverified:** correctness against real plaintext — that needs one known `(offset, size, name)` record, and brute-forcing 35,319 candidate names at offset 0 gave no plausible plaintext, as expected since offset 0 is not a named entry. A scan for a static index of monotonic `(offset, size)` pairs in the executable produced only code-byte false positives, so the index is built another way. Steam is still logged off (`LogonFailure Service Unavailable`, `alive=0`), so no runtime probe was possible.
