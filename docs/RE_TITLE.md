@@ -228,6 +228,9 @@ them. **Hypothesis (not proven):** the title's records use tag `1` (named sub-ob
 `2` (compact struct). **Ruled out:** tag `0x100` is audio, and tags `4`/`0x20` are
 string/format parsers, so none of those can be the lettering itself.
 
+The pack format, cipher and the remaining unknowns are written up separately in
+[`RE_PACK.md`](RE_PACK.md).
+
 Why this matters: the lettering is addressed *by name inside the pack*, so a replacement can
 be a same-tag payload served under the same name — which is exactly what the `_Fiopen`
 redirect layer is for. What remains unknown is the record's tag and its payload layout, and the
