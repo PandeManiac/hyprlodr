@@ -277,6 +277,56 @@ re-encrypted payload under the same name — the path `tools/re/pack_patch.py` a
 byte-exact. A text overlay or a replacement image would be a different renderer, which the brief
 excludes.
 
+## Confirmed: the material set, and a program called `title_vs`
+
+Every `tag 8` slice **self-identifies**: its payload starts with the asset's own name, and
+`zlib.crc32(that name) & 0x3ff` reproduces the key class the slice decrypts under. That is a
+closed loop — a name is only accepted if its CRC regenerates the seed — and it yields the whole
+material set without any array pairing:
+
+| material | bytes | record (seed) |
+|---|---|---|
+| `entity` | 101676 | 306470982 (seed `0x068`) |
+| `post` | 57003 | 306654293 (seed `0x08d`) |
+| `tile` | 41389 | 306741738 (seed `0x104`) |
+| `particle` | 36465 | 306611973 (seed `0x3e1`) |
+| `dev` | 12696 | 306456816 (seed `0x105`) |
+| `snake` | 10730 | 306724525 (seed `0x39e`) |
+| `warp` | 8165 | 306783127 (seed `0x066`) |
+| `projection` | 7313 | 306711296 (seed `0x026`) |
+| `gem` | 7039 | 306572658 (seed `0x2b0`) |
+| `lazer` | 6794 | 306595706 (seed `0x343`) |
+| `hologram` | 6782 | 306588924 (seed `0x351`) |
+| `portal` | 5855 | 306648438 (seed `0x3f0`) |
+| `gui` | 5847 | 306581880 (seed `0x0f8`) |
+| `owl` | 5047 | 306606926 (seed `0x34d`) |
+| `squid` | 4558 | 306735255 (seed `0x1ef`) |
+| `light` | 4426 | 306602500 (seed `0x0f7`) |
+| `retrieval` | 4420 | 306718609 (seed `0x0aa`) |
+| `gem_old` | 2183 | 306579697 (seed `0x203`) |
+| `thorn` | 1925 | 306739813 (seed `0x1c8`) |
+| `egg` | 1470 | 306469512 (seed `0x142`) |
+| `skinning` | 1443 | 306723082 (seed `0x0f6`) |
+| `hand` | 1197 | 306587727 (seed `0x28f`) |
+| `boss` | 513 | 306456303 (seed `0x23a`) |
+
+These are shader *programs* (a slice holds several named vertex/fragment pairs), not single
+shaders. The two that matter for the title:
+
+- **`gui`** contains a program named **`title_vs`**. Its vertex shader ignores the world matrix
+  and emits `gl_Position = vec4( in_position.xy, 0.0, 1.0 )` — a **full-screen quad** — and the
+  paired fragment shader computes `vec3 result0 = mask * bg;` and writes it with alpha 1. The
+  title is therefore a screen-space composite of a *mask* over a *background*, which is exactly
+  the look in the capture: letterform silhouettes multiplied against the iridescent field.
+- **`post`** (57,003 bytes, 1,465 lines) is the post-process chain and contains a pass named
+  **`post_title_fs`** — a straight `texture(tex_diffuse, vuv)` copy — plus `post_combine`,
+  `post_blur_horz`, `post_glow_blur_vert`, lens-flare, vignette and sobel passes.
+
+So the pipeline is: full-screen quad with the glyph mask × background (title), then a `post_title`
+copy into the frame, then the rest of the post chain. The mask is not a pack image — the pack has
+none — so it is built at run time, and the pack's eleven TrueType fonts (`tag 4096`) are what it
+can be built from.
+
 ## Where this leaves the title (state of knowledge)
 
 - The title is content behind `entity_lobby_dagger_hyper*` (kind 4), resolved as

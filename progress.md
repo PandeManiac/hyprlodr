@@ -1,5 +1,33 @@
 # Session progress
 
+## 2026-11-01 (the material set is named, and `title_vs` is found)
+
+**The shader system is now a verified catalogue, and the title's program is identified.** A
+`tag 8` slice begins with its own asset name, and `zlib.crc32(name) & 0x3ff` regenerates the key
+class it decrypts under — a closed verification, so names no longer depend on pairing key arrays
+to record arrays (that pairing is off by a shift and was the source of the earlier confusion;
+`projection` is the shader at 306,711,296, not `hyper`). All **23 materials** came out of it:
+`entity` (101,676 B), `post` (57,003), `tile`, `particle`, `dev`, `snake`, `warp`, `projection`,
+`gem`, `lazer`, `hologram`, `portal`, `gui`, `owl`, `squid`, `light`, `retrieval`, `gem_old`,
+`thorn`, `egg`, `skinning`, `hand`, `boss`.
+
+The find that matters: **`gui` contains a program named `title_vs`**. Its vertex shader ignores
+`world_matrix` and writes `gl_Position = vec4(in_position.xy, 0.0, 1.0)` — a full-screen quad —
+and the paired fragment shader is `vec3 result0 = mask * bg;`. That is the title exactly as the
+capture shows it: letterform mask multiplied against the iridescent background. `post` (1,465
+lines) contains a matching `post_title_fs`, a plain `texture(tex_diffuse, vuv)` copy, inside the
+post chain (`post_combine`, `post_blur_horz`, `post_glow_blur_vert`, lens flare, vignette, sobel).
+
+Since the pack holds no image at all, the mask is built at run time — and the eleven `tag 4096`
+fonts (`Georgia` ×4, `Goethe Bold`, `Mongolian Baiti`, `Tinos` ×2, `Consolas`,
+`Font Awesome 5 Free Solid`, `Hack`) are the only glyph sources in the game. The next unknown is
+therefore narrow and specific: which font the `title_vs` mask is rasterised from, and what tells
+the renderer which characters to put in it.
+
+Also corrected: an earlier attempt tonight scored records by "readable text" with a threshold of
+20 characters, which admitted 800+ candidates per name because random bytes are ~30%% printable.
+Requiring a 1.4× margin over the runner-up fixed it, and the CRC check then confirmed every name.
+
 ## 2026-11-01 (the pack is complete, contains no images, and the title is geometry)
 
 **Three measurements, one of them a correction of my own.** First, the live record table is
