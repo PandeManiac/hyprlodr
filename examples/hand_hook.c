@@ -64,8 +64,8 @@ int _fltused = 0;
 typedef void (WINAPI *draw_elements_fn)(unsigned mode, int count, unsigned type,
                                         const void *indices);
 typedef void (WINAPI *bind_buffer_fn)(unsigned target, unsigned buffer);
-typedef void (WINAPI *buffer_sub_data_fn)(unsigned target, long long offset,
-                                          long long size, const void *data);
+typedef void (WINAPI *buffer_data_fn)(unsigned target, long long size, const void *data,
+                                      unsigned usage);
 typedef void (WINAPI *gen_buffers_fn)(int count, unsigned *buffers);
 typedef void (WINAPI *gen_vertex_arrays_fn)(int count, unsigned *arrays);
 typedef void (WINAPI *bind_vertex_array_fn)(unsigned array);
@@ -75,6 +75,7 @@ typedef void (WINAPI *vertex_attrib_pointer_fn)(unsigned index, int size, unsign
 typedef void (WINAPI *enable_vertex_attrib_array_fn)(unsigned index);
 typedef void (WINAPI *get_integerv_fn)(unsigned pname, int *value);
 typedef int (WINAPI *get_attrib_location_fn)(unsigned program, const char *name);
+typedef unsigned (WINAPI *get_error_fn)(void);
 typedef unsigned char (WINAPI *is_enabled_fn)(unsigned cap);
 typedef void (WINAPI *enable_fn)(unsigned cap);
 typedef void (WINAPI *disable_fn)(unsigned cap);
@@ -83,7 +84,7 @@ typedef void *(*wgl_get_proc_fn)(const char *name);
 static const hyprlodr_host_api *g_host;
 static draw_elements_fn g_original_draw;
 static bind_buffer_fn g_bind_buffer;
-static buffer_sub_data_fn g_buffer_sub_data;
+static buffer_data_fn g_buffer_data;
 static gen_buffers_fn g_gen_buffers;
 static gen_vertex_arrays_fn g_gen_vertex_arrays;
 static bind_vertex_array_fn g_bind_vertex_array;
@@ -91,6 +92,7 @@ static vertex_attrib_pointer_fn g_vertex_attrib_pointer;
 static enable_vertex_attrib_array_fn g_enable_vertex_attrib_array;
 static get_integerv_fn g_get_integerv;
 static get_attrib_location_fn g_get_attrib_location;
+static get_error_fn g_get_error;
 static is_enabled_fn g_is_enabled;
 static enable_fn g_enable;
 static disable_fn g_disable;
@@ -189,8 +191,8 @@ static void write_vertex(unsigned index, const float position[3], const float no
  * copied from the source mesh so the material's non-UV attribute keeps a sane
  * value. */
 static void build_cube(void) {
-    static const float centre[3] = {-0.0281f, 0.1000f, -0.1000f};
-    static const float half = 0.250f;
+    static const float centre[3] = {-0.0281f, 0.0000f, -0.0222f};
+    static const float half = 0.120f;
     static const float uv1[4] = {0.023678f, 0.092198f, 0.0f, 0.0f};
     static const float normals[6][3] = {
         {1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1},
@@ -213,8 +215,10 @@ static void build_cube(void) {
                                  tangents[face][axis] * u * half +
                                  bitangents[face][axis] * v * half;
             }
-            float uv[2] = {0.4f + 0.2f * (u + 1.0f) * 0.5f,
-                           0.4f + 0.2f * (v + 1.0f) * 0.5f};
+            /* A UV taken from an actual hand vertex (0.0643, 0.7835); the
+             * centre of the atlas sampled transparent texels and made the test
+             * cube invisible. */
+            float uv[2] = {0.0643f, 0.7835f};
             write_vertex(face * 4 + corner, position, normals[face], uv, uv1,
                          tangents[face], bitangents[face]);
         }
@@ -235,7 +239,7 @@ static void resolve_gl(void) {
     wgl_get_proc_fn wgl = (wgl_get_proc_fn)GetProcAddress(module, "wglGetProcAddress");
     if (wgl) {
         g_bind_buffer = (bind_buffer_fn)wgl("glBindBuffer");
-        g_buffer_sub_data = (buffer_sub_data_fn)wgl("glBufferSubData");
+        g_buffer_data = (buffer_data_fn)wgl("glBufferData");
         g_gen_buffers = (gen_buffers_fn)wgl("glGenBuffers");
         g_gen_vertex_arrays = (gen_vertex_arrays_fn)wgl("glGenVertexArrays");
         g_bind_vertex_array = (bind_vertex_array_fn)wgl("glBindVertexArray");
@@ -245,8 +249,7 @@ static void resolve_gl(void) {
         g_get_integerv = (get_integerv_fn)wgl("glGetIntegerv");
     }
     if (!g_bind_buffer) g_bind_buffer = (bind_buffer_fn)GetProcAddress(module, "glBindBuffer");
-    if (!g_buffer_sub_data)
-        g_buffer_sub_data = (buffer_sub_data_fn)GetProcAddress(module, "glBufferSubData");
+    if (!g_buffer_data) g_buffer_data = (buffer_data_fn)GetProcAddress(module, "glBufferData");
     /* GL 1.1 entry points come from opengl32's export table, not
      * wglGetProcAddress, which returns NULL for them. */
     if (!g_get_integerv) g_get_integerv = (get_integerv_fn)GetProcAddress(module, "glGetIntegerv");
@@ -254,6 +257,7 @@ static void resolve_gl(void) {
     if (!g_get_attrib_location)
         g_get_attrib_location =
             (get_attrib_location_fn)GetProcAddress(module, "glGetAttribLocation");
+    g_get_error = (get_error_fn)GetProcAddress(module, "glGetError");
     g_is_enabled = (is_enabled_fn)GetProcAddress(module, "glIsEnabled");
     g_enable = (enable_fn)GetProcAddress(module, "glEnable");
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
@@ -267,19 +271,20 @@ static void prepare_geometry(void) {
     if (g_geometry_state != 0) return;
     g_geometry_state = -1;
     ++hypr_hand_debug[0];
+    if (g_get_error) g_get_error(); /* clear stale engine errors */
     /* opengl32.dll is loaded by the game's window/GL setup, which happens after
      * mod initialization, so resolve the entry points here on the render
      * thread where the context is current. */
     hypr_hand_debug[7] = (unsigned long long)(size_t)GetModuleHandleA("opengl32.dll");
     resolve_gl();
-    hypr_hand_debug[1] = (g_bind_buffer != NULL) | ((g_buffer_sub_data != NULL) << 1) |
+    hypr_hand_debug[1] = (g_bind_buffer != NULL) | ((g_buffer_data != NULL) << 1) |
                          ((g_gen_buffers != NULL) << 2) |
                          ((g_gen_vertex_arrays != NULL) << 3) |
                          ((g_bind_vertex_array != NULL) << 4) |
                          ((g_vertex_attrib_pointer != NULL) << 5) |
                          ((g_enable_vertex_attrib_array != NULL) << 6) |
                          ((g_get_integerv != NULL) << 7);
-    if (!g_bind_buffer || !g_buffer_sub_data || !g_gen_buffers ||
+    if (!g_bind_buffer || !g_buffer_data || !g_gen_buffers ||
         !g_gen_vertex_arrays || !g_bind_vertex_array || !g_vertex_attrib_pointer ||
         !g_enable_vertex_attrib_array || !g_get_integerv)
         return;
@@ -297,7 +302,7 @@ static void prepare_geometry(void) {
 
     g_bind_vertex_array(array);
     g_bind_buffer(GL_ARRAY_BUFFER, buffer);
-    g_buffer_sub_data(GL_ARRAY_BUFFER, 0, CUBE_VBO_BYTES, g_cube_vbo);
+    g_buffer_data(GL_ARRAY_BUFFER, CUBE_VBO_BYTES, g_cube_vbo, 0x88E4u); /* GL_STATIC_DRAW */
 
     static const char *const names[5] = {"in_position", "in_normal", "in_uv0", "in_uv1",
                                           "in_tangent"};
@@ -317,12 +322,14 @@ static void prepare_geometry(void) {
     }
 
     g_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, element);
-    g_buffer_sub_data(GL_ELEMENT_ARRAY_BUFFER, 0, CUBE_IBO_BYTES, g_cube_ibo);
+    g_buffer_data(GL_ELEMENT_ARRAY_BUFFER, CUBE_IBO_BYTES, g_cube_ibo, 0x88E4u);
 
     g_bind_vertex_array((unsigned)previous);
 
     g_vao = array;
     hypr_hand_debug[2] = 1;
+    hypr_hand_debug[13] = (unsigned long long)program;
+    hypr_hand_debug[14] = g_get_error ? g_get_error() : 0;
     g_geometry_state = 1;
 }
 
@@ -346,6 +353,7 @@ static void draw_cube(void) {
     }
     ++g_substituted;
     ++hypr_hand_debug[5];
+    hypr_hand_debug[15] = g_get_error ? g_get_error() : 0;
 }
 
 /* The shim runs on the render thread inside the engine's own draw call. It

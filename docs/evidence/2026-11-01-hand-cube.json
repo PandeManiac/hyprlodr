@@ -1,48 +1,53 @@
 {
   "schema": "hyprlodr.evidence/1",
   "date": "2026-11-01",
-  "subject": "cube geometry substitution through the hand draw hook",
+  "subject": "visible cube geometry replacement through the hand draw hook",
   "mod": {
     "id": "example.hand-hook",
     "version": "0.3.0",
     "source": "examples/hand_hook.c"
   },
   "mechanism": {
-    "owned_draws": "mode GL_TRIANGLES, count 1188, type GL_UNSIGNED_INT/SHORT",
-    "geometry": "private VAO + VBO + IBO created at the first owned draw",
+    "owned_draws": "GL_TRIANGLES, count 1188, type GL_UNSIGNED_INT",
+    "geometry": "private VAO/VBO/IBO created at the first owned draw",
     "vertex_layout": "six float attributes, stride 72, offsets 0/12/24/32/48/60",
+    "attribute_locations": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "program_at_prepare": 89,
     "indices": "36 GL_UNSIGNED_INT indices, 24 flat-shaded cube vertices",
-    "engine_buffers": "never read or written; only the engine VAO is bound and restored",
-    "game_bytes_restored": "nothing to restore because game buffers are untouched"
+    "uv": "0.0643, 0.7835 copied from a live hand vertex",
+    "engine_buffers": "never read or written"
   },
+  "root_cause_fixed": "glBufferSubData on freshly generated zero-sized buffers raised GL_INVALID_VALUE 1281 and left the cube's VBO/IBO empty. glBufferData now creates the stores; the GL error after prepare and after draw is 0.",
   "live_debug": {
-    "export": "hypr_hand_debug at RVA 0x6010",
     "prepare_calls": 1,
     "gl_pointer_bitmask": 255,
-    "bitmask_meaning": "all eight resolved: bind, subdata, gen buffers, gen VAO, bind VAO, attrib pointer, enable attrib, getIntegerv",
     "geometry_state": 1,
-    "hand_draws_seen": 3848,
-    "draws_substituted": 3848,
-    "note": "the counters were read live from the running process with GDB"
+    "hand_draws_seen": 10768,
+    "draws_substituted": 10768,
+    "error_after_prepare": 0,
+    "error_after_draw": 0,
+    "read_method": "GDB read of the hypr_hand_debug export at RVA 0x6010 in the running process"
   },
   "visual_result": {
     "stock_arm_visible": false,
+    "cube_visible": true,
+    "cube_appearance": "a large textured slab filling the lower frame, lit by the game's hand material",
     "world_and_birds_rendering": true,
-    "test_cube_visible": false,
-    "screenshot_sha256": "4cbd41505df136d29bd0329923893ba29c9e821a4573d39a198e4eecc32580f0",
+    "screenshot_sha256": "dc926f7db95ad71047a46dbe30d21e97c9ffbadf163bec6011494a9db7a70ffd",
+    "screenshot_bytes": 128083,
     "screenshot_committed": false,
-    "interpretation": "the hook owns both passes and the original arm is replaced, but the replacement geometry has not yet been made visible; this is not yet a usable geometry replacement"
+    "reason_not_committed": "the frame contains game content"
   },
-  "findings": [
-    "opengl32.dll is loaded after mod initialization, so GL entry points must be resolved lazily at the first owned draw.",
-    "wglGetProcAddress returns NULL for GL 1.1 glGetIntegerv; it must come from GetProcAddress on opengl32.",
-    "The first buffer-read approach (glGetBufferSubData inside the draw) never produced a ready state and the game exited; the private-VAO approach reaches ready and substitutes every draw."
+  "remaining": [
+    "The cube is oversized and too close; scale and pivot must be fitted before the authored arm can replace it.",
+    "Depth test and culling are disabled only for the cube draw and restored afterwards.",
+    "The authored 16-bone arm is not uploaded through this path yet."
   ],
-  "unverified_changes": [
-    "Querying glGetAttribLocation for in_position/in_normal/in_uv0/in_uv1/in_tangent and binding the cube at those locations.",
-    "Disabling GL_DEPTH_TEST and GL_CULL_FACE for the cube draw and restoring them afterwards.",
-    "The larger cube (half 0.25) placed at (-0.028, 0.10, -0.10).",
-    "The live run after these changes stopped at the title screen, so they have not been observed in gameplay."
-  ],
-  "next_step": "Enter gameplay again, read debug slots 8-12 for the real attribute locations, and make the cube rasterize before replacing it with the baked arm mesh."
+  "next_step": "Fit the cube's scale/pivot in the hand's model space, then upload the baked runtime16 mesh through the same private VAO."
 }

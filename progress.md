@@ -1,5 +1,24 @@
 # Session progress
 
+## 2026-11-01 (fourteenth pass: visible cube replacement)
+
+**The hand draw now renders our geometry, visibly.** The cube path was failing because
+`glBufferSubData` was used on freshly generated zero-sized buffers, which raises
+`GL_INVALID_VALUE` (1281) and leaves the VBO/IBO empty; `glBufferData` fixed it. The cube's
+initial UVs also sampled transparent atlas texels, so its UV now comes from a live hand vertex
+(`0.0643, 0.7835`).
+
+**Live proof:** attribute locations read as 0-4 for position/normal/uv0/uv1/tangent on program
+89; debug counters show 10,768 of 10,768 owned draws substituted, with GL error 0 after prepare
+and after draw. The screenshot shows a large textured slab in the lower frame, the original arm
+gone, and the world still rendering. The frame's sha256 is recorded in
+`docs/evidence/2026-11-01-hand-cube.json`; the image is not committed because it contains game
+content.
+
+**Next:** fit the cube's scale and pivot in hand space, then upload the baked 16-bone runtime
+mesh through the same private VAO and drive it from the seven actions. The cube is a milestone,
+not the arm.
+
 ## 2026-11-01 (thirteenth pass: cube substitution through the hook)
 
 **The hook now owns the hand draws for real geometry, but the test cube is not visible yet.**

@@ -327,26 +327,28 @@ is still an art-direction approximation of the game camera, and none of this is 
 verification. The current first-person render still has substantial empty frame around the
 arm and the vanes read more like sharp plates than fine barbs; both are open art issues.
 
-## Geometry-substitution stage (in progress)
+## Geometry-substitution stage (verified visible)
 
-`example.hand-hook` 0.3.0 adds a `cube` mode. At the first owned draw it builds a private
-VAO/VBO/IBO with the measured 72-byte layout and 36 `GL_UNSIGNED_INT` indices, then binds
-that VAO for both hand passes and restores the engine's VAO. The engine's own buffers are
-never read or written, so there is no readback stall and nothing to restore.
+`example.hand-hook` 0.3.0's `cube` mode creates a private VAO/VBO/IBO at the first owned draw
+and binds it for both hand passes. Attribute locations were read live as **0, 1, 2, 3, 4**
+(`in_position`, `in_normal`, `in_uv0`, `in_uv1`, `in_tangent`) with program 89, so the measured
+layout maps directly. The engine's buffers are never read or written.
 
-A debug export (`hypr_hand_debug`) read live from the running process proved: one prepare
-call, all eight GL entry points resolved (bitmask 255), geometry ready, and **3,848 of 3,848
-owned draws substituted**. The stock arm disappeared from the frame while the world kept
-rendering. The test cube itself did **not** rasterize, so this is a proven draw takeover, not
-yet a visible geometry replacement.
+The first attempts drew nothing for a concrete reason: `glBufferSubData` on freshly generated,
+zero-sized buffers raises `GL_INVALID_VALUE` (1281) and leaves the VBO/IBO empty. Using
+`glBufferData` to create the stores fixed it; the GL error after prepare and after the draw is
+now 0. The cube's first UVs also sampled a transparent atlas region; a UV copied from a live
+hand vertex (`0.0643, 0.7835`) made it visible.
 
-Two bootstrapping facts came out of it: `opengl32.dll` is loaded after mod initialization, so
-GL entry points must be resolved at the first owned draw, and `wglGetProcAddress` returns NULL
-for GL 1.1 `glGetIntegerv`, which needs a `GetProcAddress` fallback.
+Live debug from the running process: one prepare call, all eight GL entry points resolved
+(bitmask 255), geometry ready, **10,768 of 10,768 owned draws substituted**. The screenshot shows
+a large textured slab filling the lower frame, with the original arm gone and the world and
+birds still rendering (sha256 in `docs/evidence/2026-11-01-hand-cube.json`). This is the first
+visible geometry replacement.
 
-A later build queries `glGetAttribLocation` for `in_position`/`in_normal`/`in_uv0`/`in_uv1`/
-`in_tangent`, disables depth test and culling for the cube draw, and uses a larger cube. The
-confirming run stopped at the title screen, so those changes are built but **unverified**.
+The cube is deliberately crude and currently oversized and too close to the camera. Its scale
+and pivot must be fitted to the hand's model space before the authored arm mesh can replace it.
+Depth test and culling are disabled only for this draw and restored immediately after.
 
 ## Next experiments, in order
 
