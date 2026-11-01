@@ -128,6 +128,20 @@ installing rather than by hand-copying, and a mask the user already had must sur
 The mask itself is not committed: it is rendered by `tools/make_title_mask.py` from a face inside the
 user's own installation, and `/assets/hyprlodr-title-mask.raw` is ignored by Git.
 
+## Face recovery (5/5 passing)
+
+`tools/tests/test_title_mask_from_game.py` covers `tools/title_mask_from_game.py`, which recovers the
+typeface from the container instead of trusting a face copied out earlier. The tests build their own
+encrypted container, so they never read the game executable or its assets.
+
+| Scenario | Asserts |
+|---|---|
+| `recovers_face_names` | A hand-made sfnt at byte 0 of a slice is cracked, decrypted, and identified by its `name` table |
+| `recovers_and_renders` | A real system font behind a 24-byte slice header survives the round trip with the header stripped, and the rendered mask is 853x480 with plausible ink |
+| `ignores_non_font_records` | Noise is not reported as a face |
+| `unknown_family_is_reported` | A family that is not there fails while naming what was actually found |
+| `records_are_read_from_both_shapes` | Both log shapes (JSON lines, one keyed object) yield `(offset, size)` records |
+
 ## Manager core (36/36 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.

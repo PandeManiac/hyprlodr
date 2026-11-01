@@ -637,3 +637,39 @@ measured grid above.
 
 **Verified in game** with the mask installed by this path rather than copied: the log records one
 `title_mask_loaded` and one `title_mask_found`, and `HYPR` over `LODR` renders at frames 483 and 512.
+
+## Recovering the face from the user's own installation (2026-11-01)
+
+**Confirmed: every font slice in the container is a TrueType file behind a 24-byte header.** The
+proxy's record log and the container agree to the byte: slice sizes are exactly *font size + 24*
+(Georgia regular 219736 = 219712 + 24, Georgia bold 207500 = 207476 + 24, catalog up to Tinos regular
+454876 = 454852 + 24), and the sfnt signature sits at offset 24 of every decrypted payload. This is
+why an earlier scan that expected the signature at byte 0 found no fonts at all.
+
+**Confirmed: the container ships eleven faces, and its own entry names say which.** The log's `key`
+events list the 1008 entry names the resolver walks, among them `georgia`, `georgiab`, `georgiai`,
+`georgiaz` and `goethebold`; the recovered `name` tables give them human names:
+
+| Face | Slice | Family / style |
+|---|---|---|
+| `georgia` | 219736 | Georgia / Regular |
+| `georgiab` | 207500 | Georgia / Bold |
+| `georgiai` | 208468 | Georgia / Italic |
+| `georgiaz` | 211804 | Georgia / Bold Italic |
+| `goethebold` | 134416 | Goethe / Bold |
+| - | 454876 / 419948 | Tinos Regular / Bold |
+| - | 289076 | Mongolian Baiti Regular |
+| - | 358280 / 309432 | Consolas Regular / Hack Regular |
+| - | 191136 | Font Awesome 5 Free Solid |
+
+**Confirmed: the pipeline is now reproducible from the repository plus the user's installation.**
+`tools/title_mask_from_game.py` reads the record log, cracks each slice's 1024-key space, strips the
+header, identifies faces by their `name` table and renders the words with `make_title_mask`. On this
+installation it recovers all eleven faces, selects Georgia Bold, and produces a mask that is
+**byte-identical** to the mask already verified in game - so the replacement no longer depends on a
+face extracted by hand in an earlier session.
+
+**Hypothesis, still unproven:** the original title lettering is one of the shipped high-contrast
+serifs (Georgia Bold, Goethe Bold or Tinos Bold). All three render within a couple of pixels of each
+other at the measured cap height, so the mask cannot distinguish them; proving which one the title
+used needs the draw-time binding, not the geometry.

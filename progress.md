@@ -1,5 +1,32 @@
 # Session progress
 
+## 2026-11-01 (fifth pass: the face comes out of the installation)
+
+**The typeface no longer has to be extracted by hand.** `tools/title_mask_from_game.py` reads the
+proxy's record log, cracks each slice (1024 keys), strips the 24-byte slice header every font carries,
+identifies faces by their `name` table and renders the mask. On the live installation it recovers all
+eleven shipped faces and produces a mask **byte-identical** to the one already verified in game.
+
+**Confirmed the last unknown in that path:** font slices are a TrueType file behind a 24-byte header -
+slice size is exactly font size + 24, and the sfnt signature sits at offset 24. A scan that expected
+byte 0 found nothing, which is what failed first.
+
+**Confirmed the container's own names for them:** `georgia`, `georgiab`, `georgiai`, `georgiaz`,
+`goethebold` appear in the logged key table, and the recovered name tables name all eleven faces
+(Georgia regular/bold/italic/bold-italic, Goethe bold, Tinos regular/bold, Mongolian Baiti, Consolas,
+Hack, Font Awesome).
+
+**Verified in game:** installed with the recovered mask, `title_mask_loaded` and `title_mask_found`
+once each, frames 102/114/120 from a fresh process showing HYPR over LODR with the original fill.
+
+**Fixed a hole in my own verification:** an earlier "pristine" check compared `OpenAL32.dll`'s hash but
+never looked for `OpenAL32_real.dll`, so a leftover backup library silently blocked the next install
+and a stale game process answered dump requests. Pristine now means: original hash, no backup library,
+no mods directory, no `hyprlodr-*` artefacts.
+
+**Tests:** face recovery 5/5, mask installer 3/3, installer safety 3/3.
+
+
 ## 2026-11-01 (fourth pass: the mask travels with the install)
 
 **The replacement had a pipeline hole: the glyph mask was hand-copied.** Nothing in the repository

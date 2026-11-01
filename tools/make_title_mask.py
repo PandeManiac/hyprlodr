@@ -90,6 +90,18 @@ def build(path: Path, top: str, bottom: str, scale: float) -> np.ndarray:
     return coverage
 
 
+def write_mask(coverage: np.ndarray, out: Path, preview: Path | None = None) -> int:
+    """Write coverage as the RGBA the upload path expects; returns the byte count."""
+    rgba = np.zeros((HEIGHT, WIDTH, 4), dtype=np.uint8)
+    rgba[:, :, 3] = 255 - coverage           # letters are the transparent part
+    rgba = np.flipud(rgba)                   # upload path treats row 0 as the bottom row
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(rgba.tobytes())
+    if preview is not None:
+        Image.fromarray(np.dstack([np.flipud(rgba[:, :, 3])] * 3)).save(preview)
+    return rgba.nbytes
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--font", required=True, type=Path)
@@ -116,15 +128,9 @@ def main(argv: list[str]) -> int:
             scale = min(1.45, max(0.80, scale * math.sqrt(args.target_ink / ink)))
             coverage = build(args.font, args.top, args.bottom, scale)
 
-    rgba = np.zeros((HEIGHT, WIDTH, 4), dtype=np.uint8)
-    rgba[:, :, 3] = 255 - coverage           # letters are the transparent part
-    rgba = np.flipud(rgba)                   # upload path treats row 0 as the bottom row
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_bytes(rgba.tobytes())
-    if args.preview:
-        Image.fromarray(np.dstack([np.flipud(rgba[:, :, 3])] * 3)).save(args.preview)
+    size = write_mask(coverage, args.out, args.preview)
     print("%s: %dx%d %d B scale=%.3f ink=%.3f (words %s / %s)"
-          % (args.out, WIDTH, HEIGHT, rgba.nbytes, scale, float((coverage > 127).mean()),
+          % (args.out, WIDTH, HEIGHT, size, scale, float((coverage > 127).mean()),
              args.top, args.bottom))
     return 0
 
