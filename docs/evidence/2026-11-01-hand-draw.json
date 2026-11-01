@@ -52,6 +52,11 @@
       "name": "stale_count_1188",
       "change": "replaced the first records but left count at 1188 before the capture deadline",
       "result": "the arm visibly stretched into large triangles, proving the live draw consumed the substituted buffer"
+    },
+    {
+      "name": "outward_winding_retest",
+      "change": "reversed all cube triangles to face outward and re-ran the substitution",
+      "result": "the same small fragment remained; back-face culling is not the cause, so placement or the inherited vertex attributes are the remaining issue"
     }
   ],
   "restoration": "the original VBO and IBO were written back at the hand draw and a screenshot confirmed the original arm returned",

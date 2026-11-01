@@ -168,7 +168,9 @@ cube in the same 72-byte format and 36 indices, then changing only the hand draw
 `count = 36`, removed the arm and produced a small fragment at the centre of the screen.
 When the original index count was left at 1,188 while the first records were replaced, the
 arm visibly stretched into large triangles. Both outcomes prove the draw consumes buffer 41
-and index buffer 42 live; neither is a correct rig-space placement. The cube inherited one
+and index buffer 42 live; neither is a correct rig-space placement. Reversing every cube
+triangle to face outward produced the same fragment, so back-face culling is not the cause;
+the remaining issue is the inherited vertex data and placement. The cube inherited one
 existing vertex's bone weights rather than a deliberate hand pivot, and the draw was not
 restored before the first capture window ended.
 

@@ -56,8 +56,18 @@ def cube_vertices(anchor: tuple[float, float, float], size: float) -> list[tuple
     return points
 
 
-def cube_indices() -> list[int]:
-    # Corners are ordered x fastest, then y, then z.
+def _cross(a, b):
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def cube_indices(points: list[tuple[float, float, float]], center) -> list[int]:
+    # Corners are ordered x fastest, then y, then z. Emit outward-facing
+    # triangles explicitly: the hand material renders with face culling, so an
+    # inward cube is invisible except at its silhouette.
     quads = (
         (0, 1, 3, 2),
         (4, 6, 7, 5),
@@ -68,7 +78,17 @@ def cube_indices() -> list[int]:
     )
     indices: list[int] = []
     for a, b, c, d in quads:
-        indices.extend((a, b, c, a, c, d))
+        for triangle in ((a, b, c), (a, c, d)):
+            p0, p1, p2 = (points[index] for index in triangle)
+            normal = _cross(
+                tuple(p1[i] - p0[i] for i in range(3)),
+                tuple(p2[i] - p0[i] for i in range(3)),
+            )
+            centroid = tuple((p0[i] + p1[i] + p2[i]) / 3.0 for i in range(3))
+            outward = sum(normal[i] * (centroid[i] - center[i]) for i in range(3))
+            if outward < 0.0:
+                triangle = (triangle[0], triangle[2], triangle[1])
+            indices.extend(triangle)
     return indices
 
 
@@ -82,7 +102,8 @@ def build(vbo_path: Path, vertex_index: int, size: float) -> tuple[bytes, bytes,
     anchor = positions[vertex_index]
     base = records[vertex_index]
     vertices = bytearray()
-    for point in cube_vertices(anchor, size):
+    points = cube_vertices(anchor, size)
+    for point in points:
         record = bytearray(base)
         struct.pack_into("<3f", record, POSITION_OFFSET, *point)
         normal = [point[i] - anchor[i] for i in range(3)]
@@ -90,7 +111,7 @@ def build(vbo_path: Path, vertex_index: int, size: float) -> tuple[bytes, bytes,
         struct.pack_into("<3f", record, NORMAL_OFFSET, *(value / length for value in normal))
         vertices.extend(record)
 
-    indices = cube_indices()
+    indices = cube_indices(points, anchor)
     index_bytes = struct.pack(f"<{len(indices)}H", *indices)
     bounds = {
         axis: [min(point[i] for point in positions), max(point[i] for point in positions)]

@@ -20,8 +20,9 @@ eight vertex records and first 36 indices with a cube and drawing only those ind
 removed the arm and produced a small fragment. Replacing the records while leaving the
 original count visibly stretched the arm into large triangles. That proves the live draw
 consumes buffers 41/42; the cube inherited one vertex's weights and was not placed at a
-usable hand pivot. The original VBO/IBO were then written back and a live screenshot
-confirmed the original arm returned.
+usable hand pivot. A second run with every triangle wound outward produced the same
+fragment, so back-face culling is not the cause. The original VBO/IBO were then written
+back and a live screenshot confirmed the original arm returned.
 
 **New committed artifacts:** `docs/RE_HAND.md` now records the draw signature, buffer
 layout and precise limitations; `docs/evidence/2026-11-01-hand-draw.json` holds the
