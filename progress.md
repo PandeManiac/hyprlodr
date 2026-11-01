@@ -1,5 +1,33 @@
 # Session progress
 
+## 2026-11-01 (the title's fragment shader is read, and it corrects the geometry theory)
+
+**The `title_vs` program is now fully understood, and it overturns tonight's earlier claim.** The
+fragment shader is short and unambiguous: it centres an **854×480 window** horizontally by
+`data.x`, aspect-corrects that window to the drawable, takes
+`mask = vec3(1.0 - texture(tex_diffuse, uv1).a)`, takes `bg = texture(tex_diffuse3, uv0).rgb`,
+clips the mask to the window, and writes `mask * bg` with alpha 1. So the title's lettering is the
+**alpha channel of a texture, used inverted**, composited over a full-screen iridescent background
+sampled with plain screen UVs. That is precisely the capture: the iridescent field is `bg`, and the
+letters are the regions where `bg` is not multiplied in.
+
+This supersedes "the title is geometry": there is no stored mask because the mask is a **render
+target**. The same `gui` slice holds `gui_text_fs`, which multiplies a font mask into a colour and
+writes it with alpha 0.5, so GUI text is rasterised offscreen and the title pass consumes such a
+target. Glyph shapes can only come from the pack's eleven TrueType fonts.
+
+**Method that made this tractable, worth keeping:** a `tag 8` slice starts with its own asset name
+and `zlib.crc32(name) & 0x3ff` regenerates the key class it decrypts under, which is a closed
+verification and named all 23 materials without pairing arrays to records. Getting there needed a
+1.4× margin over the runner-up: a "readable text ≥ 20 chars" threshold alone admitted 800+
+candidates per name, since random bytes are ~30%% printable.
+
+**Consequence for the replacement (plan, not yet verified):** no new renderer is required. Keep
+`title_vs`, the `post_title` copy and the background texture; change only the characters that are
+rasterised into the title's alpha target, with the same font, the same inverted-alpha convention
+and the same 854×480 window. The open question is the CPU-side string and font choice for that
+pass.
+
 ## 2026-11-01 (the material set is named, and `title_vs` is found)
 
 **The shader system is now a verified catalogue, and the title's program is identified.** A

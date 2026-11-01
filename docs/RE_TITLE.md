@@ -322,10 +322,46 @@ shaders. The two that matter for the title:
   **`post_title_fs`** — a straight `texture(tex_diffuse, vuv)` copy — plus `post_combine`,
   `post_blur_horz`, `post_glow_blur_vert`, lens-flare, vignette and sobel passes.
 
-So the pipeline is: full-screen quad with the glyph mask × background (title), then a `post_title`
-copy into the frame, then the rest of the post chain. The mask is not a pack image — the pack has
-none — so it is built at run time, and the pack's eleven TrueType fonts (`tag 4096`) are what it
-can be built from.
+**Correction (supersedes "the title is geometry").** Reading the whole `title_vs` program shows
+the letterforms are a **texture alpha channel**, not geometry. The fragment shader samples three
+textures and does exactly this:
+
+```glsl
+uv1 = uv0;                                       // full-screen uv
+uv1.x -= (data.x - 854.0) * 0.5 / data.x;        // centre an 854-wide window
+uv1.x  = uv1.x * (data.x / data.y) / (854.0/480.0);   // aspect-correct that window
+vec3 mask = vec3( 1.0 - texture( tex_diffuse,  uv1 ).a );  // letters = *inverse alpha*
+vec3 bg   =        texture( tex_diffuse3, uv0 ).rgb;       // iridescent background
+if ( uv1.x < 0.0 || uv1.x > 1.0 ) mask = vec3( 0.0 );      // clip to the window
+out_colour0 = vec4( mask * bg, 1.0 );
+```
+
+Three facts follow, and they are the whole title pipeline:
+
+1. The title's lettering is the **alpha channel of `tex_diffuse`**, used inverted (`1.0 - a`), so
+   the glyphs are the *transparent* parts of that texture and the surround is opaque. That is why
+   the capture shows black silhouettes cutting into the iridescent field: the field is `bg` and
+   the letters are where `bg` is **not** multiplied in.
+2. The mask is composited over a **854×480 window**, centred horizontally by `data.x`, then
+   aspect-corrected to the drawable. The apparent repetition/stretch at the capture's edges is
+   this window being stretched to 1920×1080, not a wrapped bitmap.
+3. `bg` is a separate full-screen texture (`tex_diffuse3`) sampled with plain screen UVs, so the
+   iridescent animation lives in the background texture and is untouched by the mask.
+
+The earlier "no image in the pack, therefore geometry" step is therefore wrong in its conclusion
+though right in its evidence: there is no *stored* mask because the mask is a **render target**.
+The same `gui` slice also contains `gui_text_fs`, which multiplies a font mask into a colour and
+writes it with **alpha 0.5** — i.e. GUI text is rasterised into offscreen targets, and the title
+pass consumes one of them. The glyph shapes in that target can only come from the pack's eleven
+TrueType fonts, which are the game's only glyph source.
+
+**Plan this makes concrete (design, not yet verified).** `HYPR`/`LODR` does not need a new
+renderer: it needs the text that is rasterised into the title's alpha target to be different
+characters. Reusing the game's own path means: keep `title_vs` and the `post_title` copy
+untouched, keep `tex_diffuse3` (the background) untouched, and change only the glyph rasterisation
+that fills the mask — same font, same alpha convention (`1.0 - a`), same 854×480 window. The
+remaining unknown is the CPU-side string and font selection for that pass, which is exactly what
+the next step targets.
 
 ## Where this leaves the title (state of knowledge)
 
