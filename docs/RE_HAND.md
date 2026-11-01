@@ -327,6 +327,27 @@ is still an art-direction approximation of the game camera, and none of this is 
 verification. The current first-person render still has substantial empty frame around the
 arm and the vanes read more like sharp plates than fine barbs; both are open art issues.
 
+## Geometry-substitution stage (in progress)
+
+`example.hand-hook` 0.3.0 adds a `cube` mode. At the first owned draw it builds a private
+VAO/VBO/IBO with the measured 72-byte layout and 36 `GL_UNSIGNED_INT` indices, then binds
+that VAO for both hand passes and restores the engine's VAO. The engine's own buffers are
+never read or written, so there is no readback stall and nothing to restore.
+
+A debug export (`hypr_hand_debug`) read live from the running process proved: one prepare
+call, all eight GL entry points resolved (bitmask 255), geometry ready, and **3,848 of 3,848
+owned draws substituted**. The stock arm disappeared from the frame while the world kept
+rendering. The test cube itself did **not** rasterize, so this is a proven draw takeover, not
+yet a visible geometry replacement.
+
+Two bootstrapping facts came out of it: `opengl32.dll` is loaded after mod initialization, so
+GL entry points must be resolved at the first owned draw, and `wglGetProcAddress` returns NULL
+for GL 1.1 `glGetIntegerv`, which needs a `GetProcAddress` fallback.
+
+A later build queries `glGetAttribLocation` for `in_position`/`in_normal`/`in_uv0`/`in_uv1`/
+`in_tangent`, disables depth test and culling for the cube draw, and uses a larger cube. The
+confirming run stopped at the title screen, so those changes are built but **unverified**.
+
 ## Next experiments, in order
 
 1. **Substitute geometry through the verified hook.** The shim now owns the two hand draws.

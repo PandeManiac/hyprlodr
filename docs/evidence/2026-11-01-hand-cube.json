@@ -1,0 +1,48 @@
+{
+  "schema": "hyprlodr.evidence/1",
+  "date": "2026-11-01",
+  "subject": "cube geometry substitution through the hand draw hook",
+  "mod": {
+    "id": "example.hand-hook",
+    "version": "0.3.0",
+    "source": "examples/hand_hook.c"
+  },
+  "mechanism": {
+    "owned_draws": "mode GL_TRIANGLES, count 1188, type GL_UNSIGNED_INT/SHORT",
+    "geometry": "private VAO + VBO + IBO created at the first owned draw",
+    "vertex_layout": "six float attributes, stride 72, offsets 0/12/24/32/48/60",
+    "indices": "36 GL_UNSIGNED_INT indices, 24 flat-shaded cube vertices",
+    "engine_buffers": "never read or written; only the engine VAO is bound and restored",
+    "game_bytes_restored": "nothing to restore because game buffers are untouched"
+  },
+  "live_debug": {
+    "export": "hypr_hand_debug at RVA 0x6010",
+    "prepare_calls": 1,
+    "gl_pointer_bitmask": 255,
+    "bitmask_meaning": "all eight resolved: bind, subdata, gen buffers, gen VAO, bind VAO, attrib pointer, enable attrib, getIntegerv",
+    "geometry_state": 1,
+    "hand_draws_seen": 3848,
+    "draws_substituted": 3848,
+    "note": "the counters were read live from the running process with GDB"
+  },
+  "visual_result": {
+    "stock_arm_visible": false,
+    "world_and_birds_rendering": true,
+    "test_cube_visible": false,
+    "screenshot_sha256": "4cbd41505df136d29bd0329923893ba29c9e821a4573d39a198e4eecc32580f0",
+    "screenshot_committed": false,
+    "interpretation": "the hook owns both passes and the original arm is replaced, but the replacement geometry has not yet been made visible; this is not yet a usable geometry replacement"
+  },
+  "findings": [
+    "opengl32.dll is loaded after mod initialization, so GL entry points must be resolved lazily at the first owned draw.",
+    "wglGetProcAddress returns NULL for GL 1.1 glGetIntegerv; it must come from GetProcAddress on opengl32.",
+    "The first buffer-read approach (glGetBufferSubData inside the draw) never produced a ready state and the game exited; the private-VAO approach reaches ready and substitutes every draw."
+  ],
+  "unverified_changes": [
+    "Querying glGetAttribLocation for in_position/in_normal/in_uv0/in_uv1/in_tangent and binding the cube at those locations.",
+    "Disabling GL_DEPTH_TEST and GL_CULL_FACE for the cube draw and restoring them afterwards.",
+    "The larger cube (half 0.25) placed at (-0.028, 0.10, -0.10).",
+    "The live run after these changes stopped at the title screen, so they have not been observed in gameplay."
+  ],
+  "next_step": "Enter gameplay again, read debug slots 8-12 for the real attribute locations, and make the cube rasterize before replacing it with the baked arm mesh."
+}

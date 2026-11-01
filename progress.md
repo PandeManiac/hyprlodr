@@ -1,5 +1,29 @@
 # Session progress
 
+## 2026-11-01 (thirteenth pass: cube substitution through the hook)
+
+**The hook now owns the hand draws for real geometry, but the test cube is not visible yet.**
+`example.hand-hook` 0.3.0 adds `cube` mode: a private VAO/VBO/IBO with the measured 72-byte
+layout and 36 `GL_UNSIGNED_INT` indices, bound for both hand passes and restored afterwards.
+The engine's buffers are never read or written.
+
+**Live debug proved the draw takeover:** one prepare call, all eight GL entry points resolved
+(bitmask 255), geometry state ready, and **3,848 of 3,848 owned draws substituted**. The stock
+arm disappeared while the world kept rendering. The cube itself did not rasterize, so this is
+not yet a usable replacement.
+
+**Two GL bootstrapping bugs were found and fixed.** `opengl32.dll` loads after mod init, so
+resolution has to happen at the first owned draw; and `wglGetProcAddress` returns NULL for
+GL 1.1 `glGetIntegerv`, which needs a `GetProcAddress` fallback. The earlier
+`glGetBufferSubData` approach never reached ready and the game exited; the private-VAO path
+does reach ready and substitutes every draw.
+
+**Unverified tail:** a later build queries `glGetAttribLocation`, disables depth/cull for the
+cube draw and uses a larger cube. Its confirming run stopped at the title screen, so those
+changes are built but not observed in gameplay. Next: read their attribute locations from the
+debug export, make the cube rasterize, then upload the baked 16-bone arm mesh through the same
+path.
+
 ## 2026-11-01 (twelfth pass: persistent hand-draw hook, live suppression)
 
 **The hand draw now has a production hook, not just a GDB breakpoint.** `examples/hand_hook.c`
