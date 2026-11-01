@@ -1,5 +1,25 @@
 # Session progress
 
+## 2026-11-01 (signature-based mask targeting, and animation preserved)
+
+**The mask is now found by signature instead of by name, and the measurement justified it.** The
+live renderer holds seven textures of exactly 853x480. Only one is the title mask: id 81, zero RGB,
+mixed alpha. The others are uniformly clear or uniformly opaque (and one has non-zero colour), so a
+size-only match would have hit id 112 and overwritten a texture the renderer owns. The loader scans
+for size + zero colour + mixed alpha, logs `title_mask_found` with the name it chose, and uploads
+the replacement mask there.
+
+**Three frames from one session, 1920x1080:** frame 120 is the Sorath splash before the title
+exists; frames 300 and 480 both show `HYPR` above `LODR` with the animated iridescent fill and the
+menu row intact between them. Between 300 and 480 the lettering picks up a small rotation, which is
+the game's own animated transform applied after the mask is sampled: the replacement inherits the
+animation rather than reimplementing it.
+
+**Process error worth keeping:** a build with a missing `OpenAL32_real.dll` failed, and because the
+command was not fail-fast the run continued on the previous binary and produced misleading logs.
+The cycle is now run with `set -euo pipefail` and the correct order (uninstall, build against the
+pristine `OpenAL32.dll`, install), which is also why the build script's argument matters.
+
 ## 2026-11-01 (the title's mask texture, found in-game, replaced, and seen working)
 
 **The title's lettering is a single 853x480 texture, and it is now read, replaced and verified in

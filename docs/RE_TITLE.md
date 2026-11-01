@@ -456,3 +456,35 @@ after the game had drawn with it contains our mask (ink 0.312 against the origin
 (the glyph shapes resemble a bold Didone serif; the packed font at record 303,451,631 reproduces
 the shapes closely but this is not proven), whether the shipped mask is stored packed or built at
 load time, and how the game would animate or re-render the mask if the title were re-entered.
+
+## Confirmed: the mask is recognised by signature, and seven textures share its size (2026-11-01)
+
+Targeting the mask by texture name was provisional, because texture names are allocation counters.
+Replacing that with recognition by what the texture *is* produced a sharper result than expected:
+the live renderer holds **seven** textures of exactly 853x480, and only one of them is the title
+mask.
+
+| texture | alpha | RGB | is the title mask |
+|---|---|---|---|
+| 81 | mixed (ink 0.428 / 0.312 after replacement) | 0 | **yes** |
+| 112 | uniform clear | 0 | no |
+| 113 | uniform opaque | 0 | no |
+| 114 | uniform opaque | up to 255 | no |
+| 115, 116, 117 | uniform clear | 0, 3, 5 | no |
+
+A size-only match would therefore have picked 112 — an identically sized, identically zero-RGB
+texture — and overwritten something the renderer owns. The predicate that discriminates is the
+conjunction of size (853x480), zero colour, and genuinely mixed alpha; the loader now scans for it
+and logs `title_mask_found` with the name it settled on (81 in this session, found at start-up).
+
+**Multi-frame evidence from one session** (1920x1080, world-space captures):
+
+- frame 120 — the Sorath splash, before the title exists (`9 players currently online.`, the eye
+  mark and the `SORATH` wordmark). The upload has already happened and is harmless.
+- frame 300 — `HYPR` over `LODR`, upright, in the original oversized serif, filled by the animated
+  iridescent background, with `PLAY OPTIONS TRAINING CLIPS LEADERBOARDS EXIT` between the words.
+- frame 480 — the same, and the lettering now carries a small rotation relative to frame 300.
+
+That last point is the animation evidence: the game applies its own animated transform to the title
+after the mask is sampled, so a replacement mask inherits the rotation, the background flow and the
+post chain without reimplementing any of them.

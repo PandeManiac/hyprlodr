@@ -788,11 +788,53 @@ static void dump_frame(unsigned frame, int width, int height) {
  * consumes it: by writing our glyph mask into that texture. The shader, the
  * background texture, the window maths and the whole post chain stay the game's
  * own. */
-#define HYPRLODR_TITLE_MASK_TEXTURE 81u
 #define HYPRLODR_TITLE_MASK_WIDTH 853
 #define HYPRLODR_TITLE_MASK_HEIGHT 480
 
+static gl_uint g_title_mask_texture;
 static int g_title_mask_state;
+
+/* A title mask is identified by what it is, not by a driver-assigned name. The
+ * name seen in one session was 81, but texture names are allocation counters: a
+ * different settings combination or load order moves them. The signature is the
+ * one measured from the live renderer - exactly 853x480, RGB zero everywhere,
+ * and an alpha channel that is genuinely mixed. */
+static int texture_is_title_mask(gl_uint id) {
+    get_tex_level_fn get_level = (get_tex_level_fn)gl11("glGetTexLevelParameteriv");
+    get_tex_image_fn get_image = (get_tex_image_fn)gl11("glGetTexImage");
+    bind_texture_fn bind = (bind_texture_fn)gl11("glBindTexture");
+    if (!get_level || !get_image || !bind) return 0;
+    gl_int width = 0, height = 0;
+    bind(GL_TEXTURE_2D, id);
+    get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+    get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+    if (width != HYPRLODR_TITLE_MASK_WIDTH || height != HYPRLODR_TITLE_MASK_HEIGHT) return 0;
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    HANDLE heap = GetProcessHeap();
+    unsigned char *pixels = (unsigned char *)HeapAlloc(heap, 0, bytes);
+    if (!pixels) return 0;
+    memset(pixels, 0, bytes);
+    get_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    int colour_is_zero = 1;
+    unsigned opaque = 0, clear = 0;
+    for (size_t index = 0; index < bytes; index += 4u) {
+        if (pixels[index] | pixels[index + 1] | pixels[index + 2]) {
+            colour_is_zero = 0;
+            break;
+        }
+        if (pixels[index + 3] == 0) ++clear;
+        else if (pixels[index + 3] == 255) ++opaque;
+    }
+    HeapFree(heap, 0, pixels);
+    if (!colour_is_zero) return 0;
+    return clear > 0 && opaque > 0;
+}
+
+static gl_uint find_title_mask(void) {
+    for (gl_uint id = 1; id <= HYPRLODR_TEX_SCAN_LIMIT; ++id)
+        if (texture_is_title_mask(id)) return id;
+    return 0;
+}
 
 static void apply_title_mask(void) {
     if (g_title_mask_state < 0 || !g_game_dir[0]) return;
@@ -800,7 +842,8 @@ static void apply_title_mask(void) {
     tex_sub_image_fn upload = (tex_sub_image_fn)gl11("glTexSubImage2D");
     bind_texture_fn bind = (bind_texture_fn)gl11("glBindTexture");
     get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
-    if (!upload || !bind || !get_integerv) {
+    get_tex_level_fn get_level = (get_tex_level_fn)gl11("glGetTexLevelParameteriv");
+    if (!upload || !bind || !get_integerv || !get_level) {
         g_title_mask_state = -1;
         return;
     }
@@ -824,9 +867,17 @@ static void apply_title_mask(void) {
         g_title_mask_state = 1;
         log_body("\"event\":\"title_mask_loaded\"");
     }
+    if (!g_title_mask_texture) {
+        g_title_mask_texture = find_title_mask();
+        if (!g_title_mask_texture) return;
+        char found[128];
+        snprintf(found, sizeof found, "\"event\":\"title_mask_found\",\"texture\":%u",
+                 g_title_mask_texture);
+        log_body(found);
+    }
     gl_int previous = 0;
     get_integerv(GL_TEXTURE_BINDING_2D, &previous);
-    bind(GL_TEXTURE_2D, HYPRLODR_TITLE_MASK_TEXTURE);
+    bind(GL_TEXTURE_2D, g_title_mask_texture);
     upload(GL_TEXTURE_2D, 0, 0, 0, HYPRLODR_TITLE_MASK_WIDTH, HYPRLODR_TITLE_MASK_HEIGHT, GL_RGBA,
            GL_UNSIGNED_BYTE, pixels);
     bind(GL_TEXTURE_2D, (gl_uint)previous);
@@ -858,7 +909,7 @@ static BOOL WINAPI shim_swap_buffers(void *device) {
     }
     if (g_frames >= 120 && g_frames <= 720 && (g_frames % 180u) == 0u)
         dump_textures((int)g_frames);
-    if (g_frames == 120 || g_frames == 300) {
+    if (g_frames == 120 || g_frames == 300 || g_frames == 480) {
         get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
         gl_int viewport[4] = {0, 0, 0, 0};
         if (get_integerv) get_integerv(GL_VIEWPORT, viewport);
