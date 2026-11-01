@@ -30,7 +30,8 @@
       {"index": 4, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
       {"index": 5, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41}
     ],
-    "layout_note": "positions are the first three floats and normals the next three; attribute byte offsets and the current program were not captured in this pass"
+    "attribute_offsets": [0, 12, 24, 32, 48, 60],
+    "layout_note": "positions are the first three floats and normals the next three; attribute byte offsets were measured, while the current program and uniform values were not captured reliably"
   },
   "experiments": [
     {
@@ -62,8 +63,8 @@
   "restoration": "the original VBO and IBO were written back at the hand draw and a screenshot confirmed the original arm returned",
   "limitations": [
     "the production dispatch-table hook is not yet implemented",
-    "attribute byte offsets, current program, texture bindings and bone_transforms were not captured",
-    "the authored 26-bone arm still needs a 16-bone runtime bake",
+    "current program, texture bindings and bone_transforms were not captured reliably",
+    "the 16-bone runtime bake is complete but is not yet driven by the game draw path",
     "the live substitution is a debugger proof, not a shipped mod path"
   ]
 }

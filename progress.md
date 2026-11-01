@@ -1,5 +1,28 @@
 # Session progress
 
+## 2026-11-01 (tenth pass: validated 16-bone runtime arm)
+
+**The authored arm now fits the game's 16-matrix skinning budget without discarding its
+feather rig.** `tools/assets/bake_runtime16.py` creates a second armature and mesh in the
+editable project: five core bones, two merged digit groups and all nine feather rows. The
+original 26-bone authoring rig, weights and actions remain untouched in the same `.blend`.
+
+**Validation is numeric, not just a successful script run.** The bake reports 16 runtime
+bones, max 3 influences per vertex, a 3.0e-8 weight-sum error, a 1.8e-7 rest-matrix error,
+and a 2.7e-7 baked pose-matrix error across all seven actions. The runtime GLB contains
+exactly seven `runtime_*` animations and one 16-joint skin. The runtime JSON also records
+all 4,716 normalized vertex weights and per-frame bone channels.
+
+**The runtime was inspected visually.** `runtime_fp_idle`, `runtime_fp_dash`,
+`runtime_fp_bunnyhop` and `runtime_fp_stomp` use the first-person camera and show the blue
+faceted arm, layered feather rows and claws surviving the bake. The four finger chains are
+rigid in the runtime; independent claw curl remains an authoring-only detail. This is still
+not a game replacement: the material/draw integration is the next step.
+
+**Hand attribute offsets were also captured:** `0, 12, 24, 32, 48, 60` bytes. The test cube
+used the correct position/normal offsets, so the remaining cube fragment is a placement and
+inherited-weight problem, not an offset guess.
+
 ## 2026-11-01 (ninth pass: hand draw located, live buffer substitution proved)
 
 **The first-person hand is no longer invisible to the capture.** The engine's

@@ -230537,11 +230537,13 @@
  ],
  "bone_budget": 16,
  "authoring_bone_count": 26,
- "runtime_skinning_status": "pending-16-bone-bake",
+ "runtime_skinning_status": "baked-16",
  "notes": [
   "The authoring armature has 26 bones (fingers, claws and nine feather rows). The verified entity path supplies at most 16 bone matrices, so a 16-bone runtime bake is required before the mesh can use the game draw path.",
   "The rig is authored for the verified entity 16-bone LBS path.",
   "The Blender materials are an art target; runtime keeps entity_hand shading.",
   "Feather bones are hierarchical rows, not 31 independent simulators."
- ]
+ ],
+ "runtime_bone_count": 16,
+ "runtime_asset": "berdly_arm.runtime16.json"
 }
