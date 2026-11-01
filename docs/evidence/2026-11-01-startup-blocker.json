@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-01",
+  "startup": {
+    "symptom": "process exits within ~2 s of steam -applaunch, no window",
+    "with_loader_installed": false,
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4",
+    "ruled_out": [
+      "gpu_gl (glxinfo direct rendering, 4.6)",
+      "steam_client (restarted, 12 webhelpers)",
+      "game_config (removed, never regenerated)",
+      "hyprlodr_leftovers (moved to /tmp/hd-leftovers)",
+      "prefix_registry (system.reg 4698021 B, user.reg 315829 B)"
+    ]
+  },
+  "minidump": {
+    "file": "crash_steamuser.dmp",
+    "bytes": 59737,
+    "timestamp": "2026-11-01T04:53:19",
+    "exception_code": "0xC0000005",
+    "faulting_address": "0x90",
+    "exception_info": [
+      "0x0",
+      "0x90"
+    ],
+    "thread": 328,
+    "modules": 63,
+    "faulting_module": "C:\\windows\\system32\\ntdll.dll+0x714e0",
+    "note": "later launches write no dump and do not recreate config: they die earlier"
+  },
+  "static": {
+    "menu_label_literals": [
+      "PLAY",
+      "OPTIONS",
+      "TRAINING",
+      "CLIPS",
+      "LEADERBOARDS",
+      "EXIT"
+    ],
+    "title_literals_present": false,
+    "title_search": [
+      "ascii HYPER/DEMON absent",
+      "utf16 HYPER/DEMON absent"
+    ],
+    "asset_name_strings": [
+      "entity_lobby_dagger_hyper",
+      "entity_lobby_dagger_hyper2"
+    ],
+    "shader_names": [
+      "skull_giga.vert"
+    ],
+    "font_strings": [
+      "glyph-dict",
+      "font-format",
+      "FontName",
+      "FontMatrix",
+      "FontBBox"
+    ],
+    "font_libraries_named": []
+  },
+  "in_game_verification_this_session": false,
+  "reason": "game does not start"
+}
