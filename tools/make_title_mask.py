@@ -99,7 +99,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--preview", type=Path)
     parser.add_argument("--target-ink", type=float,
                         help="fit the glyph scale until this fraction of pixels is inked "
-                             "(the shipped mask measures 0.428); without it the rects are used exactly")
+                             "(the original measures 0.428). Opt-in only: matching INK pushes the "
+                             "ink outside the measured rects - 0.428 scales to 1.065, which inks "
+                             "rows 5..476, columns 0..852 and collapses the 28-row gap to 14, "
+                             "because four letters cannot cover five letters' area at the same cap "
+                             "height. The default (rects exactly) is the faithful choice")
     args = parser.parse_args(argv)
 
     scale = 1.0

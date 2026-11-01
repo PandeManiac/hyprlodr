@@ -537,11 +537,25 @@ Rows 221..248 are blank, so the gap between the words is **28 rows**, and the ma
 above, 10 below, 12 left and 10 right. This corrects an earlier note that put the gap at rows
 233..247: that number came from a coarser scan and is superseded.
 
-The generator now places the replacement's ink box on exactly this grid (`RECTS`), so the new
-lettering occupies the space the original occupied instead of being centred approximately. At the
-exact rects the replacement inks 0.378 of the canvas, because four letters cover less area than
-five; `--target-ink 0.428` grows the box about its centre to reach the original's density and
-converges at scale 1.065, ink 0.425.
+The generator places the replacement's ink box on exactly this grid (`RECTS`), so the new lettering
+occupies the space the original occupied instead of being centred approximately.
+
+At the exact rects the replacement inks 0.378 of the canvas, because four letters cover less area
+than five. An earlier revision closed that gap with `--target-ink 0.428`, growing the box about its
+centre by 6.5% - and measuring the result shows it breaks the geometry it was supposed to serve:
+
+| mask | bands (cap) | columns | gap | ink |
+|---|---|---|---|---|
+| original | 12..220 (209), 249..469 (221) | 12..842 | 28 | 0.428 |
+| exact grid (**ships**) | 12..220 (209), 249..469 (221) | 12..841 | 28 | 0.378 |
+| density fit (rejected) | 5..227 (223), 242..476 (235) | 0..852 | 14 | 0.425 |
+
+The density fit makes the caps 223/235 px against the original's 209/221, bleeds to column 0 and row
+476, and halves the gap between the words. Ink density is a *consequence* of the original having five
+letters per word, not a property to reproduce: imitating it by scaling the glyphs trades an exact
+match on geometry for an approximate match on coverage. The exact-grid mask is therefore what ships,
+verified in game (frames 120/300/480 and 491). `--target-ink` remains available for comparison and its
+help text now says plainly that it leaves the measured rects.
 
 ## Typeface: what the measurement cannot settle (2026-11-01)
 

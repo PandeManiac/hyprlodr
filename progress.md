@@ -1,5 +1,29 @@
 # Session progress
 
+## 2026-11-01 (third pass: the density fit is rejected, the exact-grid mask ships)
+
+**Found a defect in what was shipping.** Chasing why the title looked slightly oversized, I measured
+the shipped mask instead of trusting the generator's intent: it inked rows 5..476 and columns 0..852
+with only 14 blank rows between the words, while the original inks rows 12..220 and 249..469, columns
+12..842, with 28 blank rows. The cause was `--target-ink 0.428`, which scaled the glyphs 1.065 about
+the centre to imitate the original's ink coverage - so the caps became 223/235 px against the measured
+209/221 and the lettering ran past the margins it was supposed to respect.
+
+**Decision: geometry over coverage.** Four letters cannot cover five letters' area at the same cap
+height, so ink density is a consequence of the original's five-letter words, not a property worth
+faking. The exact-grid mask now ships (ink 0.378, bands 12..220 and 249..469, columns 12..841, gap 28)
+and `--target-ink` carries a help text saying it leaves the rects.
+
+**Verified in game** at frames 120/300/480 and on demand at 491: `HYPR` over `LODR` inside the
+measured margins with the full 28-row gap, the iridescent fill and animation unchanged, menu row
+intact.
+
+**Retracted mid-check:** a quick measurement appeared to show the original's caps swapped (221 top,
+209 bottom). That was my own double flip - `mask_upright.bin` is already upright, so flipping it
+inverted the bands. Measured unflipped, the original is 209 on top and 221 below, exactly as `RECTS`
+already had it.
+
+
 ## 2026-11-01 (second pass: input falsified, resize survival confirmed)
 
 **The focus hypothesis was wrong, and I retracted it.** I had written that Xvfb's lack of a window
