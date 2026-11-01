@@ -1,0 +1,62 @@
+{
+  "schema": "hyprlodr.evidence/1",
+  "date": "2026-11-01",
+  "subject": "persistent first-person hand draw hook",
+  "game": {
+    "executable_sha256": "7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611",
+    "build_timestamp": "0x66ecd8b5",
+    "module_base": "0x140000000",
+    "anchors_matched": "8/8",
+    "build_matches": true
+  },
+  "mod": {
+    "id": "example.hand-hook",
+    "version": "0.1.0",
+    "dll_sha256": "43fc921e0be0a1a2443c62082250b75705e1e4416b6b336388defd04b9efa3bb",
+    "source": "examples/hand_hook.c",
+    "windows_only": true
+  },
+  "hook": {
+    "dispatch_rva": "0x3d9ac8",
+    "saved_original_pointer": "0x7bee1450",
+    "patched_bytes": 8,
+    "patch_mechanism": "host ABI 6 image_write after build_matches()",
+    "readback_verified": true,
+    "restore_mechanism": "host image_restore in shutdown; host also restores at process exit",
+    "forwarding": "every non-matching glDrawElements is passed to the saved original",
+    "mode_source": "<state_dir>/hand-mode.txt",
+    "mode": "suppress"
+  },
+  "hand_draw_signature": {
+    "mode": 4,
+    "mode_name": "GL_TRIANGLES",
+    "count": 1188,
+    "index_type": 5125,
+    "index_type_name": "GL_UNSIGNED_INT",
+    "element_buffer_bytes": 4752,
+    "index_count": 1188,
+    "index_width_bytes": 4,
+    "note": "4752 = 1188 x 4. The two adjacent 1188-index draws are two passes over one uint32 index run, not two 16-bit runs."
+  },
+  "observation": {
+    "window": "0x06000003",
+    "resolution": "1920x1080",
+    "arm_visible": false,
+    "world_and_birds_rendering": true,
+    "process_state_at_capture": "Rsl",
+    "screenshot_sha256": "cbc0acecd0fb0e516e989bd08a9e719f17941ddbef40135343f7ada2b901a71d",
+    "screenshot_bytes": 98628,
+    "screenshot_committed": false,
+    "reason_not_committed": "the frame contains game content"
+  },
+  "log_lines": [
+    "image_write: patched 8 byte(s) at rva 3d9ac8",
+    "info: dispatch hook installed at rva 0x3d9ac8 (original=0x7bee1450 mode=suppress)",
+    "initialize_ok"
+  ],
+  "limitations": [
+    "The process exited a few seconds after the capture with no hyprlodr-crash.json and no shutdown log, so sustained suppression stability is unproven.",
+    "The first shim version called the host logger from the render thread and the game died on the first gameplay hand draw; the shipped shim performs no host or GL calls and only counts, suppresses and forwards.",
+    "Only suppression is proven. Geometry substitution through the same hook is not implemented yet."
+  ]
+}

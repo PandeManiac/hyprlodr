@@ -112,6 +112,10 @@ echo "  MOD example.game-info (in $OUT/examples, ABI 5 image reader)"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.title-replacement.dll" \
   "$OUT/obj/example_title_replacement.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.title-replacement (in $OUT/examples, ships the title mask as a package file)"
+"$CC" "${CFLAGS[@]}" -c "$ROOT/examples/hand_hook.c" -o "$OUT/obj/example_hand_hook.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.hand-hook.dll" \
+  "$OUT/obj/example_hand_hook.obj" "$CRT_OBJ" "$K32"
+echo "  MOD example.hand-hook (in $OUT/examples, GL dispatch-table hook)"
 
 # Stage the example as a real package, so the documented authoring path is the
 # path that is actually exercised rather than described.

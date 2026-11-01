@@ -1,5 +1,33 @@
 # Session progress
 
+## 2026-11-01 (twelfth pass: persistent hand-draw hook, live suppression)
+
+**The hand draw now has a production hook, not just a GDB breakpoint.** `examples/hand_hook.c`
+(`example.hand-hook`) gates on `build_matches()`, reads the 8-byte slot at RVA `0x3d9ac8`
+(live value `0x7bee1450`), writes its shim through ABI 6 `image_write`, verifies the readback,
+and restores the slot with `image_restore` on shutdown. The shim forwards every unrelated
+draw and matches the hand by `GL_TRIANGLES`, `count == 1188` and the index type. Mode is read
+from `<state_dir>/hand-mode.txt` (`suppress` or pass-through).
+
+**Suppression is visually verified in the real game.** The mod logged `patched 8 byte(s) at
+rva 3d9ac8` and `dispatch hook installed ... (original=0x7bee1450 mode=suppress)`, initialized,
+and gameplay rendered the world and birds with **no first-person arm** (1920x1080, sha256
+`cbc0acecd0fb0e516e989bd08a9e719f17941ddbef40135343f7ada2b901a71d`, not committed because it
+contains game content). The process was alive at capture.
+
+**The index type was wrong all along.** The live draw declares 5125 = `GL_UNSIGNED_INT`, and
+the 4,752-byte element buffer is exactly 1,188 `uint32` indices (4,752 = 1,188 x 4), not two
+16-bit runs. The old cube IBO was therefore 72 bytes read as 32-bit indices, which explains
+the crash after the first substitution. The mod and `docs/RE_HAND.md` are corrected.
+
+**Two honest limitations.** The first shim logged through the host API from the render thread
+and the game died on the first gameplay hand draw; the shim is now pure (count, suppress,
+forward), and the host is only called at initialize/shutdown. The current build also exited a
+few seconds after the verified capture with no crash record and no shutdown log, so sustained
+suppression stability is unproven. The next test runs `pass` mode for the same duration to
+separate suppression from the hook's presence, then substitutes geometry for a solid test
+mesh through the same slot.
+
 ## 2026-11-01 (eleventh pass: live hand-draw recheck)
 
 **A second live Steam/Proton process confirmed the hand signature after the previous game had

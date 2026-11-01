@@ -3,11 +3,13 @@
 Status: **Milestone A complete; Milestone B in progress.** The material/shader path, the
 skinning path and the gameplay-facing material set are identified from the shipped pack and
 the executable. The live hand draw is now located and proved by suppressing it and by
-substituting its vertex/index buffers. The hand is a 238-vertex, 72-byte-stride skinned mesh
-behind a two-pass 1,188-index draw. A production replacement is not yet integrated: the first
-test mesh was not correctly pivoted and rendered only as a fragment, and the persistent hook
-has not been written. This document separates what was measured from what is inferred, and
-names the next experiment.
+substituting its vertex/index buffers. The hand is a 238-vertex, 72-byte-stride mesh behind a
+two-pass 1,188-index draw. Its six attributes carry position, normal, `uv0`, `uv1`, tangent
+and bitangent; **no skin indices or weights are in this buffer**, so the mesh is posed before
+upload rather than skinned by the draw. A production replacement is not yet integrated: the
+first test mesh was not correctly placed and rendered only as a fragment. The persistent
+dispatch hook is now written and proved live as `example.hand-hook`. This document separates
+what was measured from what is inferred, and names the next experiment.
 
 All offsets in this file are into the **user's local installation**. No game bytes, shader
 text or extracted assets are committed.
@@ -150,19 +152,56 @@ At the hand draw the measured state is:
 |---|---|
 | Mode | `GL_TRIANGLES` (4) |
 | Count | 1,188 indices per pass; two passes per frame |
-| Index type | `GL_UNSIGNED_SHORT` (5125, read from the call setup) |
+| Index type | `GL_UNSIGNED_INT` (5125, read from the call setup) |
 | Attribute buffer | 41 (all six enabled attributes) |
 | Element buffer | 42 |
 | Attribute buffer size | 17,136 bytes |
-| Element buffer size | 4,752 bytes |
+| Element buffer size | 4,752 bytes (1,188 `uint32` indices) |
 | Vertex stride | 72 bytes |
 | Vertex count | 238 (`17136 / 72`) |
 | Enabled attributes | six: 3, 3, 2, 4, 3, 3 floats, all stride 72, all in buffer 41 |
 | Attribute offsets | 0, 12, 24, 32, 48, 60 bytes |
 
 The first three floats of each 72-byte record are object-space position; the next three are
-normal. The remaining fields carry tangent/UV and the skinned-entity data. The 4,752-byte
-index buffer holds two 1,188-index runs, consistent with two passes (or right/left hands).
+normal. The remaining fields carry tangent/UV and the skinned-entity data.The 4,752-byte index buffer is exactly one run of 1,188 `uint32` indices
+(4,752 = 1,188 x 4), so the two adjacent draws are two passes over one index
+run, not two 16-bit runs or two different hands.
+
+## Verified live: the persistent dispatch hook
+
+`examples/hand_hook.c` (`example.hand-hook`) installs the production hook from a normal mod:
+
+- it gates on `build_matches()`, reads the 8-byte slot at RVA `0x3d9ac8` (the live value was
+  `0x7bee1450`, the `glDrawElements` entry), writes its shim there through ABI 6
+  `image_write`, and reads the slot back to confirm the write;
+- the shim forwards every unrelated draw to the saved pointer and matches the hand by
+  `mode == GL_TRIANGLES`, `count == 1188` and index type `GL_UNSIGNED_INT` or
+  `GL_UNSIGNED_SHORT`;
+- in `suppress` mode it sets the count to zero for those two passes; `pass` mode forwards
+  them unchanged. The mode is read from `<state_dir>/hand-mode.txt` at initialization;
+- `shutdown` calls `image_restore`, and the host also restores every patch at process exit.
+
+The shim performs no host logging and no GL queries. An earlier version logged the first
+interception through the host API from the render thread, and the game died on the first
+gameplay hand draw; the shim is now pure (count, optionally suppress, forward).
+
+**Live result.** On the fingerprinted build (8/8 anchors, base `0x140000000`) the game logged
+`patched 8 byte(s) at rva 3d9ac8` and `dispatch hook installed ... (original=0x7bee1450
+mode=suppress)`, initialized successfully, and rendered gameplay with the world and birds but
+**no first-person arm**. The captured frame is 1920x1080, sha256
+`cbc0acecd0fb0e516e989bd08a9e719f17941ddbef40135343f7ada2b901a71d`; it is not committed
+because it contains game content. The process was alive at capture.
+
+**Open stability issue.** The process exited a few seconds after the capture, with no
+`hyprlodr-crash.json` and no shutdown log, so sustained suppression is not yet proven safe.
+The next test must distinguish suppression itself from the hook's presence (run `pass` mode
+for the same duration). Until then, suppression is a verified visual capability, not a
+shippable default.
+
+**Correction that mattered.** The element type is `GL_UNSIGNED_INT` (5125), not
+`GL_UNSIGNED_SHORT`; the 4,752-byte buffer is 1,188 `uint32` indices. The original
+`GL_UNSIGNED_SHORT` test cube therefore fed a 72-byte index buffer to a draw that consumed
+32-bit indices, which is what crashed the earlier live session.
 
 **Buffer substitution is proved, but a usable replacement is not.** Writing an eight-vertex
 cube in the same 72-byte format and 36 indices, then changing only the hand draw to
@@ -213,10 +252,9 @@ the audio/event system uses. This is the hook vocabulary the feather runtime sho
    (`0,12,24,32,48,60`), but the current program and the `bone_transforms` uniform block are
    not captured reliably. Capture those before building an independent VAO; the test cube
    already uses the measured offsets and still needs a deliberate pivot.
-3. **Persistent hook.** The live proof uses GDB. The production path is to patch the 8-byte
-   pointer at RVA `0x3d9ac8` after fingerprint verification, save the original and restore it
-   on unload. Startup may rewrite the table, so the hook must install/verify at the first
-   frame and gate on the `count=1188`/VAO/buffer signature.
+3. **Persistent hook.** Implemented and live-verified (previous section). The remaining work
+   is stability: run `pass` mode for the same duration to separate suppression from the
+   hook's mere presence, and only then make suppression a default.
 4. **16-bone bake.** The authored arm still has 26 bones; the `entity` path supplies at most
    16 matrices. This is independent of the draw hook and remains required before integration.
 
@@ -287,10 +325,10 @@ arm and the vanes read more like sharp plates than fine barbs; both are open art
 
 ## Next experiments, in order
 
-1. **Write the persistent dispatch hook.** After fingerprint verification, replace the
-   pointer at RVA `0x3d9ac8` with a shim that saves the original, logs the hand signature and
-   can temporarily set the hand count to zero. Install it from a mod or the proxy, never
-   from a global import patch. Prove that turning it off restores the original arm.
+1. **Substitute geometry through the verified hook.** The shim now owns the two hand draws.
+   Bind our own VBO/IBO (or write the game's buffers and restore immediately) for a solid test
+   mesh with the corrected `GL_UNSIGNED_INT` indices, prove it is visible and reversible, and
+   only then upload the authored arm. Keep all host calls out of the shim.
 2. **Capture the missing state.** At the `count=1188` draw, log the current program, the
    six attribute offsets, the index-buffer offset/type, the `bone_transforms` uniform block
    and the material/texture bindings. This turns the buffer layout into a complete VAO spec.
