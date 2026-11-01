@@ -11,6 +11,7 @@
  * Modes, read once from <state_dir>/hand-mode.txt:
  *   "suppress"  draw the hand passes with count zero
  *   "cube"      draw a solid test cube through the same program instead
+ *   "arm"       draw the authored Berdly arm from <state_dir>/hand-mesh.bin
  *   anything else (or no file)  pass every draw through unchanged
  *
  * Cube mode is the geometry-replacement proof. The first hand draw creates a
@@ -38,7 +39,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.3.0"
+#define MOD_VERSION "0.4.0"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -50,6 +51,9 @@ int _fltused = 0;
 #define CUBE_VERTEX_COUNT 24
 #define CUBE_VBO_BYTES (CUBE_VERTEX_COUNT * 72)
 #define CUBE_IBO_BYTES (CUBE_INDEX_COUNT * 4)
+
+#define ARM_HEADER_BYTES 48
+#define ARM_MAX_FILE_BYTES (4u * 1024u * 1024u)
 
 #define GL_TRIANGLES 4u
 #define GL_FLOAT 0x1406u
@@ -97,7 +101,7 @@ static is_enabled_fn g_is_enabled;
 static enable_fn g_enable;
 static disable_fn g_disable;
 
-static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube */
+static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm */
 static unsigned long g_hand_draws;
 static unsigned long g_substituted;
 static int g_active;
@@ -108,8 +112,15 @@ static unsigned g_vao;
 static unsigned char g_cube_vbo[CUBE_VBO_BYTES];
 static unsigned int g_cube_ibo[CUBE_INDEX_COUNT];
 
+/* The arm's binary is installed beside the mode file. It is read once, before
+ * the VAO is built, and copied into GL buffers immediately. */
+static unsigned char g_arm_file[ARM_MAX_FILE_BYTES];
+static unsigned g_arm_vertex_count;
+static unsigned g_arm_index_count;
+static unsigned g_geometry_count;
+
 /* Read-only diagnostics for a debugger; never part of the mod API. */
-HYPR_EXPORT volatile unsigned long long hypr_hand_debug[16];
+HYPR_EXPORT volatile unsigned long long hypr_hand_debug[20];
 
 static void log_message(const char *level, const char *message) {
     if (g_host && g_host->log) g_host->log(g_host->context, level, MOD_ID, message);
@@ -145,6 +156,7 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
     if (fgets(word, (int)sizeof word, file)) {
         if (has_prefix(word, "suppress")) mode = 1;
         else if (has_prefix(word, "cube")) mode = 2;
+        else if (has_prefix(word, "arm")) mode = 3;
     }
     fclose(file);
     return mode;
@@ -153,6 +165,7 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
 static const char *mode_name(unsigned mode) {
     if (mode == 1) return "suppress";
     if (mode == 2) return "cube";
+    if (mode == 3) return "arm";
     return "pass-through";
 }
 
@@ -263,6 +276,43 @@ static void resolve_gl(void) {
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
 }
 
+/* Read and validate <state_dir>/hand-mesh.bin. The file is a little-endian
+ * header followed by 72-byte vertex records and u32 indices; it is our own
+ * converted asset, not game data. */
+static int load_arm_mesh(void) {
+    char path[1024];
+    if (!state_path(g_host, "hand-mesh.bin", path, sizeof path)) return 0;
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    /* This CRT exposes fopen/fread but not fseek/ftell. A single bounded read
+     * is enough: the mesh is well under the 4 MiB ceiling. */
+    size_t size = fread(g_arm_file, 1, ARM_MAX_FILE_BYTES, file);
+    fclose(file);
+    if (size < ARM_HEADER_BYTES || size >= ARM_MAX_FILE_BYTES) return 0;
+
+    static const char magic[8] = {'H', 'Y', 'P', 'R', 'M', 'E', 'S', 'H'};
+    for (unsigned i = 0; i < 8; ++i)
+        if (g_arm_file[i] != (unsigned char)magic[i]) return 0;
+
+    unsigned version = 0, vertices = 0, indices = 0, stride = 0;
+    memcpy(&version, g_arm_file + 8, 4);
+    memcpy(&vertices, g_arm_file + 12, 4);
+    memcpy(&indices, g_arm_file + 16, 4);
+    memcpy(&stride, g_arm_file + 20, 4);
+    if (version != 1 || stride != 72 || !vertices || !indices) return 0;
+    if ((unsigned long)size !=
+        ARM_HEADER_BYTES + (unsigned long)vertices * 72ul + (unsigned long)indices * 4ul)
+        return 0;
+
+    g_arm_vertex_count = vertices;
+    g_arm_index_count = indices;
+    hypr_hand_debug[16] = vertices;
+    hypr_hand_debug[17] = indices;
+    hypr_hand_debug[18] = 1;
+    hypr_hand_debug[19] = (unsigned long long)size;
+    return 1;
+}
+
 /* Build the private VAO on the render thread, at the first owned draw. It uses
  * the measured hand layout: six float attributes at offsets 0/12/24/32/48/60,
  * stride 72, and a 32-bit index buffer. If anything is unavailable the draws
@@ -289,6 +339,23 @@ static void prepare_geometry(void) {
         !g_enable_vertex_attrib_array || !g_get_integerv)
         return;
 
+    const void *vertex_data = g_cube_vbo;
+    long long vertex_bytes = CUBE_VBO_BYTES;
+    const void *index_data = g_cube_ibo;
+    long long index_bytes = CUBE_IBO_BYTES;
+    unsigned index_count = CUBE_INDEX_COUNT;
+    if (g_mode == 3) {
+        if (!g_arm_vertex_count || !g_arm_index_count) {
+            hypr_hand_debug[18] = 2;
+            return;
+        }
+        vertex_data = g_arm_file + ARM_HEADER_BYTES;
+        vertex_bytes = (long long)g_arm_vertex_count * 72;
+        index_data = g_arm_file + ARM_HEADER_BYTES + vertex_bytes;
+        index_bytes = (long long)g_arm_index_count * 4;
+        index_count = g_arm_index_count;
+    }
+
     unsigned array = 0;
     unsigned buffer = 0;
     g_gen_vertex_arrays(1, &array);
@@ -302,7 +369,7 @@ static void prepare_geometry(void) {
 
     g_bind_vertex_array(array);
     g_bind_buffer(GL_ARRAY_BUFFER, buffer);
-    g_buffer_data(GL_ARRAY_BUFFER, CUBE_VBO_BYTES, g_cube_vbo, 0x88E4u); /* GL_STATIC_DRAW */
+    g_buffer_data(GL_ARRAY_BUFFER, vertex_bytes, vertex_data, 0x88E4u); /* GL_STATIC_DRAW */
 
     static const char *const names[5] = {"in_position", "in_normal", "in_uv0", "in_uv1",
                                           "in_tangent"};
@@ -322,18 +389,19 @@ static void prepare_geometry(void) {
     }
 
     g_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, element);
-    g_buffer_data(GL_ELEMENT_ARRAY_BUFFER, CUBE_IBO_BYTES, g_cube_ibo, 0x88E4u);
+    g_buffer_data(GL_ELEMENT_ARRAY_BUFFER, index_bytes, index_data, 0x88E4u);
 
     g_bind_vertex_array((unsigned)previous);
 
     g_vao = array;
+    g_geometry_count = index_count;
     hypr_hand_debug[2] = 1;
     hypr_hand_debug[13] = (unsigned long long)program;
     hypr_hand_debug[14] = g_get_error ? g_get_error() : 0;
     g_geometry_state = 1;
 }
 
-static void draw_cube(void) {
+static void draw_substitute(void) {
     int previous = 0;
     if (g_get_integerv) g_get_integerv(GL_VERTEX_ARRAY_BINDING, &previous);
     unsigned char depth_on = 0;
@@ -345,7 +413,7 @@ static void draw_cube(void) {
         g_disable(0x0B44u);
     }
     g_bind_vertex_array(g_vao);
-    g_original_draw(GL_TRIANGLES, CUBE_INDEX_COUNT, GL_UNSIGNED_INT, NULL);
+    g_original_draw(GL_TRIANGLES, (int)g_geometry_count, GL_UNSIGNED_INT, NULL);
     g_bind_vertex_array((unsigned)previous);
     if (g_enable) {
         if (cull_on) g_enable(0x0B44u);
@@ -368,10 +436,10 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
         hypr_hand_debug[4] = g_hand_draws;
         hypr_hand_debug[3] = (unsigned)g_geometry_state;
         hypr_hand_debug[6] = g_mode;
-        if (g_mode == 2) {
+        if (g_mode == 2 || g_mode == 3) {
             prepare_geometry();
             if (g_geometry_state == 1) {
-                draw_cube();
+                draw_substitute();
                 return;
             }
         }
@@ -406,6 +474,20 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     g_original_draw = (draw_elements_fn)original;
     g_mode = read_mode(host);
     build_cube();
+    if (g_mode == 3) {
+        /* Load before patching: this runs on the mod thread, not inside the
+         * engine's draw call, so no file or loader work happens on the render
+         * thread. */
+        if (!load_arm_mesh()) {
+            log_message("warn", "arm mode: hand-mesh.bin missing or invalid; forwarding draws");
+        } else {
+            char mesh_message[160];
+            snprintf(mesh_message, sizeof mesh_message,
+                     "arm mesh loaded: %u vertices, %u indices, %llu bytes",
+                     g_arm_vertex_count, g_arm_index_count, hypr_hand_debug[19]);
+            log_message("info", mesh_message);
+        }
+    }
 
     void *replacement = (void *)&hand_draw_shim;
     if (host->image_write(host->context, HAND_DISPATCH_RVA, &replacement,

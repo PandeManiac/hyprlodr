@@ -350,6 +350,32 @@ The cube is deliberately crude and currently oversized and too close to the came
 and pivot must be fitted to the hand's model space before the authored arm mesh can replace it.
 Depth test and culling are disabled only for this draw and restored immediately after.
 
+## Authored arm stage (verified visible)
+
+`example.hand-hook` 0.4.0's `arm` mode reads `hand-mesh.bin` from the mod state
+directory during **mod initialization**, never inside the engine's draw call,
+validates the `HYPRMESH` header (version, stride 72, counts and exact file size),
+and uploads the vertices and indices into the same private VAO layout as the
+cube. No game buffer is touched.
+
+`tools/assets/convert_glb_to_hand_mesh.py` converts `berdly_arm.runtime16.glb`
+into that binary: positions in hand space, authored normals, u32 indices, and a
+known-opaque hand-atlas UV pair copied from the live hand vertex. The working
+proof transform is scale 0.6 with offset (-0.0733, -0.0523, 0.0375), giving
+bounds x -0.144..0.144, y -0.131..0.157, z -0.309..0.422.
+
+Live counters: 17,322 vertices and 25,620 indices (8,540 triangles, 1,349,712
+bytes) uploaded; **12,112 of 12,112 owned draws substituted**; GL error 0 after
+prepare and after draw; the game stayed alive. The screenshot shows the authored
+winged claw silhouette, with its palm and spread digits, lit by the game's hand
+material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
+gone.
+
+This is real authored geometry, but not yet final: it is oversized and centred
+instead of lower-right; it samples the game's gold hand atlas instead of a blue
+feather texture; and it is static bind-pose geometry, not yet driven by the
+baked actions. Those are the next three stages.
+
 ## Next experiments, in order
 
 1. **Substitute geometry through the verified hook.** The shim now owns the two hand draws.

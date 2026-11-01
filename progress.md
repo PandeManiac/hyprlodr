@@ -1,5 +1,24 @@
 # Session progress
 
+## 2026-11-01 (fifteenth pass: authored arm visible in game)
+
+**The 17,322-vertex authored Berdly arm now draws in HYPER DEMON.** It is loaded
+from `hand-mesh.bin` during mod initialization, validated, and uploaded through
+the same private VAO that proved the cube. Debug counters show 12,112 of 12,112
+hand draws substituted, 25,620 indices drawn, GL error 0, and the game alive.
+The screenshot shows the winged claw silhouette with authored palm and finger
+geometry, lit by the game's hand material; the stock arm is gone. Evidence:
+`docs/evidence/2026-11-01-hand-arm.json` (frame hash only, game content not
+committed).
+
+**Not final yet:** the arm is oversized and centered rather than lower-right;
+it samples the gold hand atlas rather than a blue feather texture; and it is
+static bind pose, with none of the seven baked actions or feather springs
+applied. The converter is `tools/assets/convert_glb_to_hand_mesh.py`.
+
+**Next:** fit the lower-right first-person pose, then bind a blue feather
+texture and drive the mesh from the baked actions.
+
 ## 2026-11-01 (fourteenth pass: visible cube replacement)
 
 **The hand draw now renders our geometry, visibly.** The cube path was failing because

@@ -1,0 +1,80 @@
+{
+  "schema": "hyprlodr.evidence/1",
+  "date": "2026-11-01",
+  "subject": "authored 17k-vertex Berdly arm drawn in game through the hand hook",
+  "mod": {
+    "id": "example.hand-hook",
+    "version": "0.4.0",
+    "source": "examples/hand_hook.c"
+  },
+  "asset": {
+    "source": "assets/berdly-arm/berdly_arm.runtime16.glb",
+    "converter": "tools/assets/convert_glb_to_hand_mesh.py",
+    "vertices": 17322,
+    "indices": 25620,
+    "triangles": 8540,
+    "bytes": 1349712,
+    "stride": 72,
+    "format": "HYPRMESH v1: 48-byte header, 18-float records (position, normal, uv0, uv1, tangent, bitangent), u32 indices",
+    "uv": "known-opaque hand-atlas pair (0.0643, 0.7835) and uv1 (0.023678, 0.092198)",
+    "transform": {
+      "scale": 0.6,
+      "offset": [
+        -0.0733,
+        -0.0523,
+        0.0375
+      ]
+    },
+    "bbox_min": [
+      -0.144116,
+      -0.131097,
+      -0.308643
+    ],
+    "bbox_max": [
+      0.144091,
+      0.156938,
+      0.422002
+    ]
+  },
+  "mechanism": {
+    "loading": "hand-mesh.bin read and validated during mod initialization, never on the render thread",
+    "upload": "same private VAO/VBO/IBO layout as the cube; engine buffers untouched",
+    "draw": "authored index count of 25,620 in place of the hand's 1,188",
+    "attribute_locations": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "program": 89
+  },
+  "live_debug": {
+    "hand_draws_seen": 12112,
+    "draws_substituted": 12112,
+    "geometry_ready": 1,
+    "mode": 3,
+    "arm_vertices": 17322,
+    "arm_indices": 25620,
+    "arm_load_state": 1,
+    "error_after_prepare": 0,
+    "error_after_draw": 0,
+    "game_alive": true
+  },
+  "visual_result": {
+    "stock_arm_visible": false,
+    "authored_arm_visible": true,
+    "appearance": "a winged claw silhouette with a raised palm and spread digits, centered and oversized, lit by the game's hand material",
+    "screenshot_sha256": "ab51aa60111fb8add6312c453a515a8ab42bf1d614790c8d260c08ce199582e7",
+    "screenshot_bytes": 155558,
+    "screenshot_committed": false,
+    "reason_not_committed": "the frame contains game content"
+  },
+  "limitations": [
+    "The arm is oversized and centered; it must be scaled down and moved to the lower right.",
+    "It samples the game's gold hand atlas; a blue feather texture is not bound yet.",
+    "It is static bind-pose geometry; the baked actions and feather springs are not applied yet.",
+    "The binary is generated from the GLB and is installed into the mod state directory for testing, not committed."
+  ],
+  "next_step": "Fit scale and offset for a lower-right first-person pose, then bind our own blue feather texture and skin the mesh with the baked actions."
+}
