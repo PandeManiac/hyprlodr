@@ -185,9 +185,26 @@ The manifest is metadata for installers and humans; the **descriptor in the bina
 
 Validation is defensive: absolute paths, `..` segments, backslashes, symlinks, duplicate or case-colliding names, files outside `native/`, `assets/` and `config/`, oversized entries and suspicious compression ratios are all rejected before anything is written.
 
+## Worked example: `example.game-info`
+
+`examples/game_info.c` is the first mod that reads the game rather than only running beside it. It is the template for any data-driven mod:
+
+```c
+if (!host->build_matches(host->context)) return 0;          /* never read an unknown build */
+unsigned char bytes[12];
+if (host->image_read(host->context, RVA, bytes, sizeof bytes) != 0) return 0;
+if (fnv1a64(bytes, sizeof bytes) != EXPECTED_FNV) { /* log and stop */ }
+```
+
+It reads the loader's own `resource_path` anchor (RVA `0x36f640`, 12 bytes), recomputes its FNV-1a 64 hash and compares it with the constant recorded during reverse engineering. On the analysed build it logs `resource path anchor verified at rva 36f640` and publishes the `example.game-info` capability; on anything else it logs a mismatch or a refusal and reads nothing further. It logs a **hash, never the bytes**, so evidence stays free of game content.
+
+Verified in the real game on 2026-11-01: `image 4214784 bytes verified` followed by `resource path anchor verified at rva 36f640`, 7/7 mods initialized, 8/8 anchors. Evidence: `docs/evidence/2026-11-01-example-game-info.json`.
+
+Two loader scenarios run the same Linux build against synthetic images: a 64-byte image (read refused, run still succeeds) and a 3.4 MB image of `A` bytes (read succeeds, hash comparison rejects it).
+
 ## Compatibility
 
-ABI 3 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
+ABI 5 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
 
 ## Worked example: `example.uptime`
 

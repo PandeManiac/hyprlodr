@@ -17,6 +17,7 @@ import tempfile
 HOST = pathlib.Path(sys.argv[1])
 SAMPLES_DIR = pathlib.Path(sys.argv[2])
 FIXTURES_DIR = pathlib.Path(sys.argv[3])
+EXAMPLES_DIR = pathlib.Path(sys.argv[4]) if len(sys.argv) > 4 else SAMPLES_DIR.parent / "examples"
 
 SAMPLE_ORDER = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
 
@@ -32,8 +33,9 @@ class Runner:
         self.mods.mkdir()
 
     def add(self, *names, kind="fixture"):
+        directory = {"fixture": FIXTURES_DIR, "example": EXAMPLES_DIR}.get(kind, SAMPLES_DIR)
         for name in names:
-            source = (FIXTURES_DIR if kind == "fixture" else SAMPLES_DIR) / f"{name}.so"
+            source = directory / f"{name}.so"
             if not source.exists():
                 raise AssertionError(f"missing build artifact: {source}")
             shutil.copy(source, self.mods / source.name)
@@ -291,6 +293,51 @@ def image_access_refuses_out_of_range():
         messages = [e["message"] for e in events
                     if e["event"] == "log" and e["mod"] == "i.far"]
         check(any("image read refused" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("example_game_info_refuses_a_small_image")
+def example_game_info_refuses_a_small_image():
+    """The shipped ABI 5 example treats a refused read as normal, not fatal.
+
+    Its offsets target the real game, so a 64-byte image cannot satisfy them:
+    the read must be refused and the mod must still initialize.
+    """
+    runner = Runner()
+    try:
+        runner.add("example.game-info", kind="example")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, _ = runner.run(image_file=image)
+        check(proc.returncode == 0, f"the example must not fail the run: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "example.game-info"]
+        check(any("resource path read refused" in message for message in messages), messages)
+        check(any("image 64 bytes verified" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("example_game_info_detects_an_unknown_build")
+def example_game_info_detects_an_unknown_build():
+    """A readable image whose bytes are not the analysed build must be reported.
+
+    The synthetic image is large enough for the example's offset, so the read
+    succeeds and the mod's own hash comparison is what rejects it. That is the
+    path a mod takes on a patched build; it must log, not crash.
+    """
+    runner = Runner()
+    try:
+        runner.add("example.game-info", kind="example")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(b"\x41" * (0x36F640 + 12))
+        proc, events, _ = runner.run(image_file=image)
+        check(proc.returncode == 0, f"a mismatching build must not fail the run: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "example.game-info"]
+        check(any("resource path hash mismatch" in message for message in messages), messages)
+        check(not any("anchor verified" in message for message in messages), messages)
     finally:
         runner.close()
 

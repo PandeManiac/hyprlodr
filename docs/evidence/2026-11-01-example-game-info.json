@@ -1,0 +1,36 @@
+{
+  "kind": "first data-reading example mod in the real game",
+  "captured": "2026-11-01",
+  "mod": {
+    "id": "example.game-info",
+    "version": "1.0.0",
+    "what": "reads 12 bytes at RVA 0x36f640 through ABI 5 and verifies their FNV-1a 64 hash"
+  },
+  "game": {
+    "build_matches": true,
+    "anchors_matched": 8,
+    "anchors_total": 8,
+    "image_bytes": 4214784,
+    "image_bytes_hex": "0x405000"
+  },
+  "observed_events": [
+    {
+      "seq": 18,
+      "event": "log",
+      "mod": "example.game-info",
+      "message": "info: image 4214784 bytes verified"
+    },
+    {
+      "seq": 19,
+      "event": "log",
+      "mod": "example.game-info",
+      "message": "info: resource path anchor verified at rva 36f640"
+    }
+  ],
+  "meaning": "A shipped example mod read real game bytes at a fingerprinted offset and independently recomputed the verifier's anchor hash, so the bytes provably came from the running hyperdemon.exe. 7/7 mods initialized.",
+  "content_policy": "Only the hash and the RVA are recorded; the bytes themselves are never logged or committed.",
+  "limits": "Read-only and build-pinned: on a patched executable build_matches() is 0 and the example reads nothing.",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

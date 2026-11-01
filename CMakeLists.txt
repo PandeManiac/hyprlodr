@@ -47,6 +47,16 @@ set_target_properties(example_uptime PROPERTIES
   OUTPUT_NAME "example.uptime"
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/examples")
 
+# The first data-reading example: proves ABI 5 image access as a mod author would
+# use it, and is the only example that refuses to run against an unknown build.
+add_library(example_game_info SHARED examples/game_info.c)
+target_include_directories(example_game_info PRIVATE native/include)
+target_compile_options(example_game_info PRIVATE ${HYPRLODR_WARNINGS})
+set_target_properties(example_game_info PROPERTIES
+  PREFIX ""
+  OUTPUT_NAME "example.game-info"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/examples")
+
 # --- Error-case fixtures -------------------------------------------------------
 # Each fixture is the same source compiled with different identity macros.
 function(hyprlodr_fixture name)
@@ -139,7 +149,8 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/native/tests/loader_suite.py
       $<TARGET_FILE:hyprlodr-host>
       ${CMAKE_BINARY_DIR}/mods
-      ${CMAKE_BINARY_DIR}/fixtures)
+      ${CMAKE_BINARY_DIR}/fixtures
+      $<TARGET_FILE_DIR:example_game_info>)
   add_test(NAME package_suite
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/test_package.py
       $<TARGET_FILE:hyprlodr-host>

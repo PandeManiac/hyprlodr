@@ -90,6 +90,10 @@ mkdir -p "$OUT/examples"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.uptime.dll" \
   "$OUT/obj/example_uptime.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.uptime (in $OUT/examples, not copied into the game by default)"
+"$CC" "${CFLAGS[@]}" -c "$ROOT/examples/game_info.c" -o "$OUT/obj/example_game_info.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.game-info.dll" \
+  "$OUT/obj/example_game_info.obj" "$CRT_OBJ" "$K32"
+echo "  MOD example.game-info (in $OUT/examples, ABI 5 image reader)"
 
 # Stage the example as a real package, so the documented authoring path is the
 # path that is actually exercised rather than described.
