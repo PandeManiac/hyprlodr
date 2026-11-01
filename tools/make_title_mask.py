@@ -30,7 +30,12 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT = 853, 480
-BAND = HEIGHT // 2
+
+# Measured from the shipped mask, rows counted from the top of the texture: both words occupy
+# columns 12..842, the upper band rows 12..220 (cap height 209), the lower band rows 249..469
+# (cap height 221), separated by 28 blank rows. The replacement is placed on that same grid, so
+# it occupies exactly the space the original lettering occupied.
+RECTS = {"top": (12, 12, 220, 842), "bottom": (249, 12, 469, 842)}
 
 
 def ink_extent(text: str, font: ImageFont.FreeTypeFont) -> np.ndarray:
@@ -64,21 +69,24 @@ def scaled_word(path: Path, word: str, width: int, height: int) -> np.ndarray:
 
 
 def build(path: Path, top: str, bottom: str, scale: float) -> np.ndarray:
+    """Both words rendered into the measured rects, optionally scaled about their centres."""
     coverage = np.zeros((HEIGHT, WIDTH), dtype=np.uint8)
-    bleed = 1.02 * scale
-    fill = 0.92 * scale
-    for index, word in enumerate((top, bottom)):
-        line = scaled_word(path, word, int(WIDTH * bleed), int(BAND * fill))
-        top_row = index * BAND + (BAND - line.shape[0]) // 2
-        left = (WIDTH - line.shape[1]) // 2
-        src_x0 = max(0, -left)
-        dst_x0 = max(0, left)
-        width = min(line.shape[1] - src_x0, WIDTH - dst_x0)
-        if width <= 0:
+    for word, (y0, x0, y1, x1) in zip((top, bottom), (RECTS["top"], RECTS["bottom"])):
+        height, width = y1 - y0 + 1, x1 - x0 + 1
+        if scale != 1.0:
+            centre_y, centre_x = y0 + height / 2.0, x0 + width / 2.0
+            height, width = int(round(height * scale)), int(round(width * scale))
+            y0 = int(round(centre_y - height / 2.0))
+            x0 = int(round(centre_x - width / 2.0))
+        line = scaled_word(path, word, width, height)
+        dst_y0, dst_x0 = max(0, y0), max(0, x0)
+        dst_y1 = min(HEIGHT, y0 + line.shape[0])
+        dst_x1 = min(WIDTH, x0 + line.shape[1])
+        if dst_y1 <= dst_y0 or dst_x1 <= dst_x0:
             continue
-        rows = np.clip(np.arange(top_row, top_row + line.shape[0]), 0, HEIGHT - 1)
-        block = coverage[rows, dst_x0:dst_x0 + width]
-        coverage[rows, dst_x0:dst_x0 + width] = np.maximum(block, line[:, src_x0:src_x0 + width])
+        block = coverage[dst_y0:dst_y1, dst_x0:dst_x1]
+        coverage[dst_y0:dst_y1, dst_x0:dst_x1] = np.maximum(
+            block, line[dst_y0 - y0:dst_y1 - y0, dst_x0 - x0:dst_x1 - x0])
     return coverage
 
 
@@ -91,7 +99,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--preview", type=Path)
     parser.add_argument("--target-ink", type=float,
                         help="fit the glyph scale until this fraction of pixels is inked "
-                             "(the shipped mask measures 0.428)")
+                             "(the shipped mask measures 0.428); without it the rects are used exactly")
     args = parser.parse_args(argv)
 
     scale = 1.0

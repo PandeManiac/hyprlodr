@@ -523,3 +523,64 @@ outlines matched, not silhouettes at one normalised scale.
 fits its glyph scale to that number (`--target-ink`, which converged at scale 1.029). Offline the
 generated mask measures 0.424, and the texture read back from the running game measures 0.424
 against the original's 0.428, so the replacement no longer reads lighter than the original title.
+
+## The mask's exact geometry, measured (2026-11-01)
+
+Measured from the captured mask (ink = alpha < 128), rows counted from the top of the texture:
+
+| | rows | cap height | columns | ink inside the band |
+|---|---|---|---|---|
+| upper word | 12..220 | 209 | 12..842 (831) | 0.425 |
+| lower word | 249..469 | 221 | 12..842 (831) | 0.459 |
+
+Rows 221..248 are blank, so the gap between the words is **28 rows**, and the margins are 12 rows
+above, 10 below, 12 left and 10 right. This corrects an earlier note that put the gap at rows
+233..247: that number came from a coarser scan and is superseded.
+
+The generator now places the replacement's ink box on exactly this grid (`RECTS`), so the new
+lettering occupies the space the original occupied instead of being centred approximately. At the
+exact rects the replacement inks 0.378 of the canvas, because four letters cover less area than
+five; `--target-ink 0.428` grows the box about its centre to reach the original's density and
+converges at scale 1.065, ink 0.425.
+
+## Typeface: what the measurement cannot settle (2026-11-01)
+
+Two successive tests, both honest about their limits:
+
+**Test 1, silhouette IoU after normalising each word to the band's ink box.** Georgia Bold 0.677,
+Tinos Bold 0.638, Georgia 0.561, Mongolian Baiti 0.552, Goethe Bold 0.448, Consolas 0.350,
+Hack 0.332.
+
+**Test 2, each font at the original's own cap height (209/221 px) with letter tracking solved over
+-50..+24 px, no glyph distortion at all.** Here the field collapses: Georgia 0.680, Mongolian Baiti
+0.672, Tinos Regular 0.669, Goethe Bold 0.663. Four different faces land within 0.017 of each other.
+
+So the honest conclusion is that **silhouette comparison cannot identify the title's typeface**. The
+only defensible claim is the one the data supports: it is a bold serif from the pack, and Georgia
+Bold is a good stand-in, not a proven match. Settling it would need glyph-outline matching - stroke
+skeleton, terminal shapes, bowl curvature - rather than filled silhouettes at a single scale.
+
+**Retraction:** in test 2 the DEMON column reported 0.000 for most fonts. That was a bug in my
+harness, not a measurement: the font was sized from `HYPER`'s bounding box, so `DEMON`'s cap height
+missed a 4 px tolerance and every candidate was discarded. The DEMON column from that run is void;
+the HYPER column, which is what the ranking above uses, sized and compared the same word throughout.
+
+**A note on stroke contrast.** The original has stem/cap 0.196 and bar/cap 0.091 (upper word),
+0.186/0.127 (lower): a high-contrast serif. At cap height Georgia Bold measures 0.250 stem (heavier
+than the original), Georgia 0.160, Tinos Bold 0.222, Goethe Bold 0.188. That spread shows the
+replacement is in the right class without identifying the face either.
+
+## On-demand frame capture (2026-11-01)
+
+Fixed frame numbers cannot follow menu navigation, because how many frames a screen lasts depends on
+load time. Writing a serial number into `<game>/hyprlodr-dump-request` now makes the next presented
+frame dump itself; the marker is only read, never deleted, because the project's minimal Windows
+headers declare neither `DeleteFileA` nor `FILE_SHARE_DELETE`.
+
+**Measured negative:** input injection does not reach the game under this harness. With the window
+located in the X tree (`hyperdemon`, 1920x1080) and given X input focus, a real XTest click at the
+centre of `OPTIONS` (371,532) and a subsequent `Escape` both left the title screen unchanged across
+three capture points (frames 483, 553, 621). Xvfb `:99` runs without a window manager, so the game
+never acquires focus through the normal path. The menu round-trip is therefore **unverified**; what
+is verified is that the mask persists over at least 140 consecutive frames while its iridescent fill
+keeps animating.

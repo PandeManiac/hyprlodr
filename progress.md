@@ -1,5 +1,28 @@
 # Session progress
 
+## 2026-11-01 (exact geometry, on-demand capture, and a clean typeface verdict)
+
+**The mask's geometry is now known exactly and matched.** Upper word rows 12..220 (cap 209), lower
+rows 249..469 (cap 221), both columns 12..842, 28 blank rows between, margins 12/10/12/10. The
+generator places the replacement on that grid; the earlier "gap rows 233..247" note is superseded.
+
+**The typeface question is closed as unanswerable by silhouette.** At the original's own cap height
+with tracking solved and no glyph distortion, Georgia 0.680, Mongolian Baiti 0.672, Tinos Regular
+0.669 and Goethe Bold 0.663 all cluster, so filled-outline IoU cannot identify the face. Georgia
+Bold stays as a good stand-in, not a proven match. Also retracted: the DEMON column of that run
+reported 0.000 for most fonts because the font was sized from HYPER's bbox and DEMON's cap height
+missed a 4px tolerance - a harness bug, not a result.
+
+**On-demand frame capture works.** A serial number written to `hyprlodr-dump-request` dumps the next
+presented frame, which fixed frame numbers cannot do because screen duration depends on load time.
+
+**Blocked: menu navigation.** With the window found in the X tree and focused, an XTest click on
+OPTIONS and a following Escape both left the title unchanged across frames 483/553/621 - Xvfb has no
+window manager, so the game never takes focus. The round-trip stays unverified. What is verified:
+the mask held over 140+ consecutive frames with its fill animating, and the hook now re-resolves the
+texture if the engine drops it instead of uploading into a dead name.
+
+
 ## 2026-11-01 (the pack's fonts, and matching the title's weight)
 
 **All eleven packed fonts are extracted and named**, after fixing a swapped length/offset pair in my

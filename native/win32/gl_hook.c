@@ -878,10 +878,27 @@ static void apply_title_mask(void) {
     gl_int previous = 0;
     get_integerv(GL_TEXTURE_BINDING_2D, &previous);
     bind(GL_TEXTURE_2D, g_title_mask_texture);
+    /* Texture names are allocation counters, so a title rebuilt after leaving and re-entering the
+     * menu can hand the mask a new name. If the resolved texture no longer measures 853x480 it was
+     * dropped: forget it and let the next frame resolve again, rather than uploading into a dead
+     * name and silently leaving the original lettering on screen. */
+    {
+        gl_int live_width = 0, live_height = 0;
+        get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &live_width);
+        get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &live_height);
+        if (live_width != HYPRLODR_TITLE_MASK_WIDTH || live_height != HYPRLODR_TITLE_MASK_HEIGHT) {
+            bind(GL_TEXTURE_2D, (gl_uint)previous);
+            g_title_mask_texture = 0;
+            log_body("\"event\":\"title_mask_stale\"");
+            return;
+        }
+    }
     upload(GL_TEXTURE_2D, 0, 0, 0, HYPRLODR_TITLE_MASK_WIDTH, HYPRLODR_TITLE_MASK_HEIGHT, GL_RGBA,
            GL_UNSIGNED_BYTE, pixels);
     bind(GL_TEXTURE_2D, (gl_uint)previous);
 }
+
+static unsigned g_dump_serial;
 
 static BOOL WINAPI shim_swap_buffers(void *device) {
     swap_buffers_fn real = (swap_buffers_fn)real_for("wglSwapBuffers");
@@ -914,6 +931,35 @@ static BOOL WINAPI shim_swap_buffers(void *device) {
         gl_int viewport[4] = {0, 0, 0, 0};
         if (get_integerv) get_integerv(GL_VIEWPORT, viewport);
         dump_frame(g_frames, viewport[2], viewport[3]);
+    }
+    /* On-demand capture: the harness writes a serial number into hyprlodr-dump-request and the next
+     * presented frame is dumped. Fixed frame numbers cannot follow menu navigation, because how
+     * long a screen lasts depends on load time. The marker is only read, never deleted: the minimal
+     * Windows headers here declare neither DeleteFileA nor FILE_SHARE_DELETE. */
+    {
+        char marker[1024];
+        snprintf(marker, sizeof marker, "%s\\hyprlodr-dump-request", g_game_dir);
+        HANDLE request = g_game_dir[0]
+            ? CreateFileA(marker, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                          OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
+            : INVALID_HANDLE_VALUE;
+        if (request != INVALID_HANDLE_VALUE) {
+            char text[32];
+            DWORD read = 0;
+            memset(text, 0, sizeof text);
+            ReadFile(request, text, (DWORD)sizeof text - 1u, &read, NULL);
+            CloseHandle(request);
+            unsigned serial = 0;
+            for (DWORD index = 0; index < read && text[index] >= '0' && text[index] <= '9'; ++index)
+                serial = serial * 10u + (unsigned)(text[index] - '0');
+            if (serial > g_dump_serial) {
+                g_dump_serial = serial;
+                get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
+                gl_int viewport[4] = {0, 0, 0, 0};
+                if (get_integerv) get_integerv(GL_VIEWPORT, viewport);
+                dump_frame(g_frames, viewport[2], viewport[3]);
+            }
+        }
     }
     if (real) return real(device);
     return 1;
