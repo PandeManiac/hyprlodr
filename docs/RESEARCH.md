@@ -167,3 +167,44 @@ s = (s + 1 + (int)(signed char)c) & 0xffff
 - The real game has been launched with HYPRLODR installed and the fingerprint verified; what remains unobserved is gameplay, audio quality and any scoring/online behaviour. See `docs/TESTING.md`.
 - Nothing is known yet about shader, mesh or texture formats.
 - No address-dependent technique is implemented yet. The build fingerprint that must gate one now exists, but no extension point has been established.
+
+## OpenGL renderer and in-process capture (2026-11-01)
+
+**Observed** (`/proc/<pid>/maps` of the live game, Proton Experimental): the graphics
+stack is `opengl32.dll` (Wine) → `opengl32.so` → `libGLX_mesa.so`/`libGL.so`. No
+Vulkan, DXGI, D3D or DXVK module is mapped, and the executable contains no Vulkan or
+SPIR-V strings; the earlier `glfw`/`WGL` strings in the image are the live renderer,
+not leftovers.
+
+**Observed** (`strings` of the shipped executable): `shaders`, `skull_giga.vert` and
+the complete WGL/EGL/OSMesa error text of GLFW. **Inferred:** the renderer is GLFW +
+OpenGL, and at least one shader (`skull_giga.vert`) is loaded by name from the asset
+container.
+
+**Observed** (in-process capture, `native/win32/gl_hook.c`, evidence
+`docs/evidence/2026-11-01-gl-capture.json`): `KERNEL32!GetProcAddress` and
+`opengl32!wglGetProcAddress` can be shimmed by symbol across 49 modules without
+disturbing the game, and `wglSwapBuffers` — which the engine *does* resolve through
+`GetProcAddress` — is called with a live context. From that callback the capture read
+`GL_VERSION = 4.6 (Compatibility Profile) Mesa 26.2.5`, `GL_RENDERER = AMD Radeon RX
+9070 XT (radeonsi, gfx1201)`, the viewport (1280×720, then 1920×1080) and the last
+draw's bound 2D texture, and wrote a 1920×1080 frame to disk
+(`docs/evidence/2026-11-01-gl-frame.png`).
+
+**Observed, and the limiting result:** the engine asks for no `gl*` name through
+either patched path. The only lookups seen are `wglChoosePixelFormat`,
+`wglSetPixelFormat`, `wglDescribePixelFormat` and `wglSwapBuffers`, all through
+`GetProcAddress`. There are no delay-load imports (`delay_imports rva=0`) and
+re-patching every 250 ms for 20 s changes nothing, so a clobbered import slot is
+rejected. At swap time `GL_CURRENT_PROGRAM` reads `-1` on a compatibility-profile
+context.
+
+**Inferred:** the engine either draws through fixed-function/compatibility state or
+through a GL dispatch table installed before the proxy's `DllMain`. **Not
+established:** the title's draw calls, its program semantics, whether its letters are
+geometry, masks or atlas quads, and which shader (if any) produces the iridescent
+material.
+
+**Consequence:** the title cannot yet be replaced in the game's own rendering path.
+The capture instrument and the 1920×1080 in-process readback are the verified
+foundation for the next step.

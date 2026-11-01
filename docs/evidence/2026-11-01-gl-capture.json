@@ -1,0 +1,62 @@
+{
+  "kind": "in-process OpenGL capture",
+  "captured": "2026-11-01",
+  "attach": {
+    "gl_capture": "installed",
+    "gl_capture_detail": "GetProcAddress+wglGetProcAddress slots=29 modules=49"
+  },
+  "frame": {
+    "frame": 1,
+    "width": 1280,
+    "height": 720,
+    "program": -1,
+    "texture": 0,
+    "version": "4.6 (Compatibility Profile) Mesa 26.2.5-arch1.1",
+    "renderer": "AMD Radeon RX 9070 XT (radeonsi, gfx1201, ACO, DRM 3.64)"
+  },
+  "frame_late": {
+    "frame": 120,
+    "width": 1920,
+    "height": 1080,
+    "program": -1,
+    "texture": 111,
+    "version": "4.6 (Compatibility Profile) Mesa 26.2.5-arch1.1"
+  },
+  "frame_dump": {
+    "ok": true,
+    "file": "docs/evidence/2026-11-01-gl-frame.png",
+    "note": "1920x1080 readback of the game's own startup splash, decoded from hyprlodr-frame.bmp"
+  },
+  "lookups_observed": [
+    {
+      "via": "getproc",
+      "name": "wglChoosePixelFormat",
+      "has_shim": false
+    },
+    {
+      "via": "getproc",
+      "name": "wglSetPixelFormat",
+      "has_shim": false
+    },
+    {
+      "via": "getproc",
+      "name": "wglDescribePixelFormat",
+      "has_shim": false
+    },
+    {
+      "via": "getproc",
+      "name": "wglSwapBuffers",
+      "has_shim": false
+    }
+  ],
+  "negative": {
+    "gl_name_requests": 0,
+    "delay_imports_rva": 0,
+    "repatch_changed_nothing": true,
+    "conclusion": "the engine's GL entry points do not come through KERNEL32!GetProcAddress or opengl32!wglGetProcAddress slots"
+  },
+  "not_achieved": "title draw calls, title shaders, title atlas, and therefore any title replacement",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

@@ -17,6 +17,7 @@
 #include "hypr_win32.h"
 #include "loader.h"
 #include "file_hook.h"
+#include "gl_hook.h"
 #include "game_anchors.h"
 #include "title_overlay.h"
 
@@ -338,9 +339,13 @@ static void write_attach_record(const char *stage, int status) {
     json_escape(file, hyprlodr_file_hook_status());
     fputs("\",\"file_hook_detail\":\"", file);
     json_escape(file, hyprlodr_file_hook_detail());
-    fprintf(file, "\",\"file_redirects\":%lu,\"file_opens_logged\":%d}\n",
+    fprintf(file, "\",\"file_redirects\":%lu,\"file_opens_logged\":%d,\"gl_capture\":\"",
             (unsigned long)hyprlodr_loader_redirect_count(g_loader),
             hyprlodr_file_hook_logged());
+    json_escape(file, hyprlodr_gl_hook_status());
+    fprintf(file, "\",\"gl_capture_detail\":\"");
+    json_escape(file, hyprlodr_gl_hook_detail());
+    fprintf(file, "\"}\n");
     fclose(file);
 }
 
@@ -357,11 +362,13 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     char log_path[1024];
     char state_root[1024];
     char files_log[1024];
+    char gl_log[1024];
     snprintf(mods_dir, sizeof mods_dir, "%s\\mods", g_game_dir);
     snprintf(disabled_file, sizeof disabled_file, "%s\\mods\\disabled.txt", g_game_dir);
     snprintf(log_path, sizeof log_path, "%s\\hyprlodr-events.jsonl", g_game_dir);
     snprintf(state_root, sizeof state_root, "%s\\hyprlodr-state", g_game_dir);
     snprintf(files_log, sizeof files_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
+    snprintf(gl_log, sizeof gl_log, "%s\\hyprlodr-gl.jsonl", g_game_dir);
 
     g_loader = hyprlodr_loader_create();
     if (!g_loader) {
@@ -405,6 +412,10 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * game performs while mods are still starting are observed too. Nothing is
      * patched unless the import table really contains that entry. */
     hyprlodr_file_hook_install(g_loader, files_log);
+    /* Research capture of the GL entry points GLFW resolves at run time. It only
+     * records; nothing in the renderer is replaced. */
+    hyprlodr_gl_hook_set_game_dir(g_game_dir);
+    (void)hyprlodr_gl_hook_install(gl_log);
 
     write_attach_record("attached", HYPRLODR_OK);
 
@@ -453,6 +464,11 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         char early_log[1024];
         snprintf(early_log, sizeof early_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
         (void)hyprlodr_file_hook_install_early(NULL, early_log);
+        /* GLFW resolves wglGetProcAddress through this slot during context
+         * creation, which happens long before the bootstrap thread runs. */
+        char early_gl_log[1024];
+        snprintf(early_gl_log, sizeof early_gl_log, "%s\\hyprlodr-gl.jsonl", g_game_dir);
+        (void)hyprlodr_gl_hook_install_early(early_gl_log);
         /* Never run mod code or file I/O for mods under the loader lock. */
         CreateThread(NULL, 0, bootstrap, NULL, 0, NULL);
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
