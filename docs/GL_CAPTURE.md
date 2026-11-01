@@ -66,3 +66,21 @@ shader or atlas, and drawing something on top is explicitly not the goal. The
 capture instrument is therefore the prerequisite, not the deliverable: it already
 proves in-process framebuffer and GL-state access works under Proton, which is
 what any texture-level glyph swap will need.
+
+## Confirmed: the engine's GL entry points are not reachable through IAT hooks
+
+The executable imports no GL library: no `opengl32`, no `vulkan-1`, no `d3d11`. Through the
+loader paths that can be patched it requests only `wglChoosePixelFormat`, `wglSetPixelFormat`,
+`wglDescribePixelFormat` and `wglSwapBuffers`. Patching every module's `GetProcAddress` (from any
+DLL), every module's `wglGetProcAddress`, and every direct `opengl32` import still yielded zero
+shader, program or draw events, while the same session rendered and swapped frames normally. Per
+draw tracing is therefore unobtainable this way for this engine; treat "no draw events" as a
+property of the engine, not of the hook.
+
+What does work is observation at `wglSwapBuffers` with GL 1.1 entry points, which `opengl32`
+exports directly and which need no engine cooperation:
+
+- `glGetString` / `glGetIntegerv` for version, renderer, viewport and bindings;
+- `glReadPixels` for whole frames;
+- `glBindTexture` + `glGetTexLevelParameteriv` + `glGetTexImage` to read every texture the
+  renderer has created, which is how the title's 853x480 mask texture was recovered.

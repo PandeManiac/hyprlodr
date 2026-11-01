@@ -53,6 +53,7 @@ typedef char gl_char;
 #define GL_COMPILE_STATUS 0x8B81u
 #define GL_LINK_STATUS 0x8B82u
 #define GL_TEXTURE_2D 0x0DE1u
+#define GL_TEXTURE0 0x84C0u
 #define GL_VERTEX_SHADER 0x8B31u
 #define GL_FRAGMENT_SHADER 0x8B30u
 
@@ -77,6 +78,34 @@ static char g_detail[256] = "";
  * without querying GL from inside a shim. */
 static gl_uint g_bound_texture;
 static gl_uint g_current_program;
+
+/* Which unit a binding belongs to, and how large each texture was uploaded. A
+ * title draw is interesting for the textures it reads, so both are needed. */
+#define HYPRLODR_TEXTURE_UNITS 8u
+#define HYPRLODR_MAX_TRACKED_TEXTURES 256u
+#define HYPRLODR_MAX_MARKED_SHADERS 512u
+#define HYPRLODR_MAX_DRAW_UNMARKED 400u
+#define HYPRLODR_MAX_DRAW_MARKED 200u
+
+static gl_uint g_active_unit;
+static gl_uint g_unit_texture[HYPRLODR_TEXTURE_UNITS];
+static gl_uint g_program_ids[256];
+
+typedef struct {
+    gl_uint id;
+    gl_int width;
+    gl_int height;
+    gl_enum format;
+} tracked_texture;
+
+static tracked_texture g_textures[HYPRLODR_MAX_TRACKED_TEXTURES];
+static unsigned g_texture_count;
+/* Shaders whose source carries the title's window constant, recorded at upload
+ * time so a draw can be attributed without parsing the log afterwards. */
+static gl_uint g_marked_shaders[HYPRLODR_MAX_MARKED_SHADERS];
+static unsigned g_marked_shader_count;
+static unsigned g_draw_unmarked;
+static unsigned g_draw_marked;
 
 /* ------------------------------------------------------------ small helpers */
 
@@ -263,41 +292,6 @@ static int prepare_layout(const uint8_t *base, pe_layout *layout) {
     return 0;
 }
 
-/* Locate the IAT slot for (dll substring, symbol) in one image.
- * 1 = found, 0 = not imported here, -1 = malformed table. */
-static int find_import_slot(const pe_layout *layout, const char *dll_filter, const char *symbol,
-                            void **slot) {
-    const uint8_t *descriptor = rva_to_ptr(layout, layout->import_rva);
-    if (!descriptor) return -1;
-    for (unsigned index = 0; index < HYPRLODR_MAX_IMPORT_DESCRIPTORS; ++index) {
-        const uint8_t *entry = descriptor + (size_t)index * HYPRLODR_IMPORT_DESCRIPTOR_BYTES;
-        uint32_t name_rva = read_u32(entry + 12);
-        uint32_t thunk_rva = read_u32(entry + 16);
-        uint32_t names_rva = read_u32(entry);
-        if (name_rva == 0) return 0;
-        const char *dll = (const char *)rva_to_ptr(layout, name_rva);
-        if (!dll || !contains_ignore_case(dll, dll_filter)) continue;
-        if (thunk_rva == 0 || names_rva == 0) return -1;
-        uint8_t *thunk = (uint8_t *)rva_to_ptr(layout, thunk_rva);
-        const uint8_t *names = rva_to_ptr(layout, names_rva);
-        if (!thunk || !names) return -1;
-        for (unsigned slot_index = 0; slot_index < HYPRLODR_MAX_IMPORT_SLOTS; ++slot_index) {
-            uint8_t *item = thunk + (size_t)slot_index * 8u;
-            uint64_t address = read_u64(item);
-            uint64_t name_value = read_u64(names + (size_t)slot_index * 8u);
-            if (address == 0 || name_value == 0) break;
-            if ((name_value >> 63) != 0) continue; /* import by ordinal */
-            const uint8_t *by_name = rva_to_ptr(layout, (uint32_t)(name_value & 0x7fffffffu));
-            if (!by_name) continue;
-            if (!equals_ignore_case((const char *)(by_name + 2), symbol)) continue;
-            *slot = item;
-            return 1;
-        }
-        return 0;
-    }
-    return 0;
-}
-
 /* 1 = patched, 2 = already ours, 0 = absent, -1 = cannot write. */
 static int patch_slot(void *slot, void *replacement, void **original) {
     if (read_u64((const uint8_t *)slot) == (uint64_t)(uintptr_t)replacement) return 2;
@@ -350,6 +344,7 @@ typedef void(WINAPI *link_fn)(gl_uint);
 typedef void(WINAPI *get_active_uniform_fn)(gl_uint, gl_uint, gl_sizei, gl_sizei *, gl_int *,
                                             gl_enum *, gl_char *);
 typedef void(WINAPI *bind_texture_fn)(gl_enum, gl_uint);
+typedef void(WINAPI *active_texture_fn)(gl_enum);
 typedef void(WINAPI *tex_image_fn)(gl_enum, gl_int, gl_int, gl_sizei, gl_sizei, gl_int, gl_enum,
                                    gl_enum, const void *);
 typedef void(WINAPI *tex_sub_image_fn)(gl_enum, gl_int, gl_int, gl_int, gl_sizei, gl_sizei, gl_enum,
@@ -362,6 +357,26 @@ typedef void(WINAPI *viewport_fn)(gl_int, gl_int, gl_sizei, gl_sizei);
 /* program -> attached shaders, so the log says which sources make a program. */
 static gl_uint g_program_shaders[256 * 8];
 static unsigned g_program_shader_counts[256];
+
+/* A program is "marked" when one of its shaders carried the title's constant.
+ * The stored id guards the slot against reuse by a different program. */
+static int program_is_marked(gl_uint program) {
+    unsigned slot = program & 0xffu;
+    if (!program || g_program_ids[slot] != program) return 0;
+    unsigned count = g_program_shader_counts[slot];
+    for (unsigned index = 0; index < count; ++index) {
+        gl_uint shader = g_program_shaders[slot * 8 + index];
+        for (unsigned mark = 0; mark < g_marked_shader_count; ++mark)
+            if (g_marked_shaders[mark] == shader) return 1;
+    }
+    return 0;
+}
+
+static const tracked_texture *texture_info(gl_uint id) {
+    for (unsigned index = 0; index < g_texture_count; ++index)
+        if (g_textures[index].id == id) return &g_textures[index];
+    return NULL;
+}
 
 static gl_uint WINAPI shim_create_shader(gl_enum type) {
     create_shader_fn real = (create_shader_fn)real_for("glCreateShader");
@@ -391,6 +406,16 @@ static void WINAPI shim_shader_source(gl_uint shader, gl_sizei count, const gl_c
             memcpy(raw + total, text, piece);
             total += piece;
         }
+    }
+    if (total < sizeof raw) raw[total] = '\0';
+    else raw[sizeof raw - 1] = '\0';
+    if (contains_ignore_case(raw, "854.0") &&
+        g_marked_shader_count < HYPRLODR_MAX_MARKED_SHADERS) {
+        g_marked_shaders[g_marked_shader_count++] = shader;
+        char marked[128];
+        snprintf(marked, sizeof marked,
+                 "\"event\":\"mark\",\"shader\":%u,\"why\":\"854.0\",\"bytes\":%u", shader, total);
+        log_body(marked);
     }
     unsigned escaped_length = escape_into(escaped, sizeof escaped, raw, total);
     int prefix_length = snprintf(prefix, sizeof prefix,
@@ -493,9 +518,19 @@ static void WINAPI shim_get_active_uniform(gl_uint program, gl_uint index, gl_si
     log_escaped_field(prefix, name);
 }
 
+static void WINAPI shim_active_texture(gl_enum unit) {
+    active_texture_fn real = (active_texture_fn)real_for("glActiveTexture");
+    if (real) real(unit);
+    gl_uint index = (gl_uint)(unit - GL_TEXTURE0);
+    g_active_unit = index < HYPRLODR_TEXTURE_UNITS ? index : 0u;
+}
+
 static void WINAPI shim_bind_texture(gl_enum target, gl_uint texture) {
     bind_texture_fn real = (bind_texture_fn)real_for("glBindTexture");
-    if (target == GL_TEXTURE_2D) g_bound_texture = texture;
+    if (target == GL_TEXTURE_2D) {
+        g_bound_texture = texture;
+        if (g_active_unit < HYPRLODR_TEXTURE_UNITS) g_unit_texture[g_active_unit] = texture;
+    }
     if (real) real(target, texture);
 }
 
@@ -512,6 +547,13 @@ static void WINAPI shim_tex_image_2d(gl_enum target, gl_int level, gl_int intern
              g_bound_texture, target, width, height, internal_format, format, type,
              pixels ? "true" : "false");
     log_body(body);
+    if (g_texture_count < HYPRLODR_MAX_TRACKED_TEXTURES) {
+        tracked_texture *info = &g_textures[g_texture_count++];
+        info->id = g_bound_texture;
+        info->width = width;
+        info->height = height;
+        info->format = format;
+    }
 }
 
 static void WINAPI shim_tex_sub_image_2d(gl_enum target, gl_int level, gl_int x, gl_int y,
@@ -534,17 +576,49 @@ static void WINAPI shim_use_program(gl_uint program) {
     if (real) real(program);
 }
 
+/* Marked draws get their own allowance: the menu issues far more unmarked draws
+ * per second than there are title draws in a session, so a shared cap would let
+ * the title be crowded out of its own capture. */
+static void log_draw(const char *kind, gl_enum mode, gl_int first, gl_sizei count) {
+    int marked = program_is_marked(g_current_program);
+    if (marked) {
+        if (g_draw_marked >= HYPRLODR_MAX_DRAW_MARKED) return;
+        ++g_draw_marked;
+    } else {
+        if (g_draw_unmarked >= HYPRLODR_MAX_DRAW_UNMARKED) return;
+        ++g_draw_unmarked;
+    }
+    char body[768];
+    int written = snprintf(body, sizeof body,
+                           "\"event\":\"%s\",\"kind\":\"%s\",\"program\":%u,\"mode\":%u,"
+                           "\"first\":%d,\"count\":%d,\"texture\":%u",
+                           marked ? "draw_title" : "draw", kind, g_current_program, mode, first,
+                           count, g_bound_texture);
+    if (written < 0) return;
+    if (written > (int)sizeof body - 1) written = (int)sizeof body - 1;
+    if (marked) {
+        for (gl_uint unit = 0; unit < HYPRLODR_TEXTURE_UNITS; ++unit) {
+            gl_uint id = g_unit_texture[unit];
+            const tracked_texture *info = texture_info(id);
+            int room = (int)sizeof body - written;
+            if (room < 64) break;
+            int piece = snprintf(body + written, (size_t)room,
+                                 ",\"unit%u\":{\"texture\":%u,\"width\":%d,\"height\":%d,\"format\":%u}",
+                                 unit, id, info ? info->width : -1, info ? info->height : -1,
+                                 info ? info->format : 0u);
+            if (piece < 0) break;
+            written += piece;
+        }
+    }
+    log_body(body);
+}
+
 static void WINAPI shim_draw_arrays(gl_enum mode, gl_int first, gl_sizei count) {
     draw_arrays_fn real = (draw_arrays_fn)real_for("glDrawArrays");
     if (real) real(mode, first, count);
     if (g_draw_records >= HYPRLODR_MAX_DRAW_RECORDS) return;
     ++g_draw_records;
-    char body[192];
-    snprintf(body, sizeof body,
-             "\"event\":\"draw\",\"kind\":\"arrays\",\"program\":%u,\"texture\":%u,\"mode\":%u,"
-             "\"first\":%d,\"count\":%d",
-             g_current_program, g_bound_texture, mode, first, count);
-    log_body(body);
+    log_draw("arrays", mode, first, count);
 }
 
 static void WINAPI shim_draw_elements(gl_enum mode, gl_sizei count, gl_enum type, const void *indices) {
@@ -552,12 +626,7 @@ static void WINAPI shim_draw_elements(gl_enum mode, gl_sizei count, gl_enum type
     if (real) real(mode, count, type, indices);
     if (g_draw_records >= HYPRLODR_MAX_DRAW_RECORDS) return;
     ++g_draw_records;
-    char body[192];
-    snprintf(body, sizeof body,
-             "\"event\":\"draw\",\"kind\":\"elements\",\"program\":%u,\"texture\":%u,\"mode\":%u,"
-             "\"count\":%d",
-             g_current_program, g_bound_texture, mode, count);
-    log_body(body);
+    log_draw("elements", mode, -1, count);
 }
 
 /* --- frame probe -----------------------------------------------------------
@@ -582,7 +651,6 @@ typedef BOOL(WINAPI *swap_buffers_fn)(void *);
 #define GL_UNSIGNED_BYTE 0x1401u
 
 static unsigned g_frames;
-static int g_frame_dumped;
 
 static void *gl11(const char *name) {
     if (!g_opengl_module) g_opengl_module = (void *)GetModuleHandleA("opengl32.dll");
@@ -630,9 +698,144 @@ static void write_bmp(const char *path, const unsigned char *rgba, int width, in
     CloseHandle(file);
 }
 
+/* --- texture readback ------------------------------------------------------
+ * The engine imports no GL library and resolves no gl* name through either
+ * patched loader path (measured), so per-call tracing cannot see its draw calls.
+ * The swap hook it does go through is still enough: at swap time the frame is
+ * finished, so binding each texture name and reading level 0 with GL 1.1
+ * entry points observes what the renderer actually uploaded or rendered into.
+ * Only observation is performed; the previous binding is restored. */
+#define GL_TEXTURE_WIDTH 0x1000u
+#define GL_TEXTURE_HEIGHT 0x1001u
+#define HYPRLODR_MAX_TEX_DUMP_BYTES (48u * 1024u * 1024u)
+#define HYPRLODR_TEX_SCAN_LIMIT 512u
+#define HYPRLODR_TEX_MAX_SIDE 4096u
+
+typedef void(WINAPI *get_tex_level_fn)(gl_enum, gl_int, gl_enum, gl_int *);
+typedef void(WINAPI *get_tex_image_fn)(gl_enum, gl_int, gl_enum, gl_enum, void *);
+
+static void dump_textures(int frame) {
+    get_tex_level_fn get_level = (get_tex_level_fn)gl11("glGetTexLevelParameteriv");
+    get_tex_image_fn get_image = (get_tex_image_fn)gl11("glGetTexImage");
+    get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
+    bind_texture_fn bind = (bind_texture_fn)gl11("glBindTexture");
+    if (!get_level || !get_image || !bind || !g_game_dir[0]) return;
+    gl_int previous = 0;
+    if (get_integerv) get_integerv(GL_TEXTURE_BINDING_2D, &previous);
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-tex-%d.bin", g_game_dir, frame);
+    HANDLE file = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    HANDLE heap = GetProcessHeap();
+    unsigned total = 0, kept = 0;
+    DWORD written = 0;
+    for (gl_uint id = 1; id <= HYPRLODR_TEX_SCAN_LIMIT && total < HYPRLODR_MAX_TEX_DUMP_BYTES; ++id) {
+        bind(GL_TEXTURE_2D, id);
+        gl_int width = 0, height = 0;
+        get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        get_level(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+        if (width < 64 || height < 32) continue;
+        if ((gl_uint)width > HYPRLODR_TEX_MAX_SIDE || (gl_uint)height > HYPRLODR_TEX_MAX_SIDE) continue;
+        size_t bytes = (size_t)width * (size_t)height * 4u;
+        if (total + (unsigned)bytes > HYPRLODR_MAX_TEX_DUMP_BYTES) break;
+        unsigned char *pixels = (unsigned char *)HeapAlloc(heap, 0, bytes);
+        if (!pixels) continue;
+        memset(pixels, 0, bytes);
+        get_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        uint32_t record[3];
+        record[0] = id;
+        record[1] = (uint32_t)width;
+        record[2] = (uint32_t)height;
+        WriteFile(file, record, sizeof record, &written, NULL);
+        WriteFile(file, pixels, (DWORD)bytes, &written, NULL);
+        HeapFree(heap, 0, pixels);
+        total += (unsigned)bytes;
+        ++kept;
+    }
+    CloseHandle(file);
+    bind(GL_TEXTURE_2D, (gl_uint)previous);
+    char body[160];
+    snprintf(body, sizeof body,
+             "\"event\":\"tex_dump\",\"frame\":%d,\"textures\":%u,\"bytes\":%u", frame, kept,
+             total);
+    log_body(body);
+}
+
+static void dump_frame(unsigned frame, int width, int height) {
+    if (!g_game_dir[0] || width <= 0 || height <= 0) return;
+    read_pixels_fn read_pixels = (read_pixels_fn)gl11("glReadPixels");
+    if (!read_pixels) return;
+    HANDLE heap = GetProcessHeap();
+    size_t bytes = (size_t)width * (size_t)height * 4u;
+    unsigned char *pixels = (unsigned char *)HeapAlloc(heap, 0, bytes);
+    if (!pixels) return;
+    read_pixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-frame-%u.bmp", g_game_dir, frame);
+    write_bmp(path, pixels, width, height);
+    HeapFree(heap, 0, pixels);
+    char body[128];
+    snprintf(body, sizeof body, "\"event\":\"frame_dump\",\"frame\":%u,\"ok\":true", frame);
+    log_body(body);
+}
+
+/* --- title mask replacement -------------------------------------------------
+ * Measured in-game: the title pass samples an 853x480 texture whose alpha holds
+ * the letterforms and whose RGB is zero everywhere, and its fragment shader uses
+ * (1.0 - alpha) times the background inside an 854x480 window. The engine
+ * resolves GL invisibly, so the mask is supplied exactly the way the game
+ * consumes it: by writing our glyph mask into that texture. The shader, the
+ * background texture, the window maths and the whole post chain stay the game's
+ * own. */
+#define HYPRLODR_TITLE_MASK_TEXTURE 81u
+#define HYPRLODR_TITLE_MASK_WIDTH 853
+#define HYPRLODR_TITLE_MASK_HEIGHT 480
+
+static int g_title_mask_state;
+
+static void apply_title_mask(void) {
+    if (g_title_mask_state < 0 || !g_game_dir[0]) return;
+    static unsigned char pixels[HYPRLODR_TITLE_MASK_WIDTH * HYPRLODR_TITLE_MASK_HEIGHT * 4];
+    tex_sub_image_fn upload = (tex_sub_image_fn)gl11("glTexSubImage2D");
+    bind_texture_fn bind = (bind_texture_fn)gl11("glBindTexture");
+    get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
+    if (!upload || !bind || !get_integerv) {
+        g_title_mask_state = -1;
+        return;
+    }
+    if (g_title_mask_state == 0) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s\\hyprlodr-title-mask.raw", g_game_dir);
+        HANDLE file = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, NULL);
+        if (file == INVALID_HANDLE_VALUE) {
+            g_title_mask_state = -1;
+            return;
+        }
+        DWORD read = 0;
+        ReadFile(file, pixels, (DWORD)sizeof pixels, &read, NULL);
+        CloseHandle(file);
+        if ((size_t)read != sizeof pixels) {
+            g_title_mask_state = -1;
+            log_body("\"event\":\"title_mask_bad_size\"");
+            return;
+        }
+        g_title_mask_state = 1;
+        log_body("\"event\":\"title_mask_loaded\"");
+    }
+    gl_int previous = 0;
+    get_integerv(GL_TEXTURE_BINDING_2D, &previous);
+    bind(GL_TEXTURE_2D, HYPRLODR_TITLE_MASK_TEXTURE);
+    upload(GL_TEXTURE_2D, 0, 0, 0, HYPRLODR_TITLE_MASK_WIDTH, HYPRLODR_TITLE_MASK_HEIGHT, GL_RGBA,
+           GL_UNSIGNED_BYTE, pixels);
+    bind(GL_TEXTURE_2D, (gl_uint)previous);
+}
+
 static BOOL WINAPI shim_swap_buffers(void *device) {
     swap_buffers_fn real = (swap_buffers_fn)real_for("wglSwapBuffers");
     ++g_frames;
+    if (g_frames >= 20) apply_title_mask();
     if (g_frames == 1 || g_frames == 120) {
         get_string_fn get_string = (get_string_fn)gl11("glGetString");
         get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
@@ -652,21 +855,14 @@ static BOOL WINAPI shim_swap_buffers(void *device) {
                  g_frames, viewport[2], viewport[3], program, texture, version ? version : "?",
                  renderer ? renderer : "?");
         log_body(body);
-        if (g_frames == 120 && !g_frame_dumped && viewport[2] > 0 && viewport[3] > 0) {
-            read_pixels_fn read_pixels = (read_pixels_fn)gl11("glReadPixels");
-            HANDLE heap = GetProcessHeap();
-            size_t bytes = (size_t)viewport[2] * (size_t)viewport[3] * 4u;
-            unsigned char *pixels = (unsigned char *)HeapAlloc(heap, 0, bytes);
-            if (pixels && read_pixels) {
-                read_pixels(0, 0, viewport[2], viewport[3], GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-                char path[1024];
-                snprintf(path, sizeof path, "%s\\hyprlodr-frame.bmp", g_game_dir);
-                write_bmp(path, pixels, viewport[2], viewport[3]);
-                g_frame_dumped = 1;
-                log_body("\"event\":\"frame_dump\",\"ok\":true");
-            }
-            if (pixels) HeapFree(heap, 0, pixels);
-        }
+    }
+    if (g_frames >= 120 && g_frames <= 720 && (g_frames % 180u) == 0u)
+        dump_textures((int)g_frames);
+    if (g_frames == 120 || g_frames == 300) {
+        get_integerv_fn get_integerv = (get_integerv_fn)gl11("glGetIntegerv");
+        gl_int viewport[4] = {0, 0, 0, 0};
+        if (get_integerv) get_integerv(GL_VIEWPORT, viewport);
+        dump_frame(g_frames, viewport[2], viewport[3]);
     }
     if (real) return real(device);
     return 1;
@@ -693,6 +889,7 @@ static gl_entry g_entries[] = {
     {"glGetProgramiv", (void *)(uintptr_t)&shim_get_program_iv, NULL},
     {"glGetProgramInfoLog", (void *)(uintptr_t)&shim_get_program_info_log, NULL},
     {"glGetActiveUniform", (void *)(uintptr_t)&shim_get_active_uniform, NULL},
+    {"glActiveTexture", (void *)(uintptr_t)&shim_active_texture, NULL},
     {"glBindTexture", (void *)(uintptr_t)&shim_bind_texture, NULL},
     {"glTexImage2D", (void *)(uintptr_t)&shim_tex_image_2d, NULL},
     {"glTexSubImage2D", (void *)(uintptr_t)&shim_tex_sub_image_2d, NULL},
@@ -789,19 +986,95 @@ static void log_delay_imports(const pe_layout *layout, const uint8_t *base) {
     (void)layout;
 }
 
+/* The engine resolves no GL name through either patched path (measured: only
+ * wglSwapBuffers was ever looked up, yet draws happened), which means opengl32 is
+ * linked in and its GL entry points arrive through the import table. Patching
+ * those slots is what makes shader and draw recording possible at all. */
+static unsigned patch_direct_gl_imports(const pe_layout *layout) {
+    const uint8_t *descriptor = rva_to_ptr(layout, layout->import_rva);
+    if (!descriptor) return 0;
+    unsigned changed = 0;
+    for (unsigned index = 0; index < HYPRLODR_MAX_IMPORT_DESCRIPTORS; ++index) {
+        const uint8_t *entry = descriptor + (size_t)index * HYPRLODR_IMPORT_DESCRIPTOR_BYTES;
+        uint32_t name_rva = read_u32(entry + 12);
+        uint32_t thunk_rva = read_u32(entry + 16);
+        uint32_t names_rva = read_u32(entry);
+        if (name_rva == 0) break;
+        const char *dll = (const char *)rva_to_ptr(layout, name_rva);
+        if (!dll || !contains_ignore_case(dll, "opengl32")) continue;
+        if (thunk_rva == 0 || names_rva == 0) break;
+        uint8_t *thunk = (uint8_t *)rva_to_ptr(layout, thunk_rva);
+        const uint8_t *names = rva_to_ptr(layout, names_rva);
+        if (!thunk || !names) break;
+        for (unsigned slot_index = 0; slot_index < HYPRLODR_MAX_IMPORT_SLOTS; ++slot_index) {
+            uint64_t name_value = read_u64(names + (size_t)slot_index * 8u);
+            if (name_value == 0) break;
+            if ((name_value >> 63) != 0) continue; /* import by ordinal */
+            const uint8_t *by_name = rva_to_ptr(layout, (uint32_t)(name_value & 0x7fffffffu));
+            if (!by_name) continue;
+            const char *symbol = (const char *)(by_name + 2);
+            void *shim = shim_for(symbol);
+            if (!shim || !real_for(symbol)) continue;
+            int result = patch_slot(thunk + (size_t)slot_index * 8u, shim, NULL);
+            if (result == 1) {
+                ++changed;
+                char body[128];
+                snprintf(body, sizeof body, "\"event\":\"direct_import\",\"name\":\"%s\"", symbol);
+                log_body(body);
+            }
+        }
+        break; /* a module imports opengl32 at most once */
+    }
+    return changed;
+}
+
+/* Patch every import slot for `symbol`, whichever DLL it was imported from.
+ * Proton routes loader calls through kernelbase.dll, so filtering on "kernel32"
+ * misses exactly the slot a loader resolves its GL entry points through. */
+static unsigned patch_symbol_any_dll(const pe_layout *layout, const char *symbol, void *replacement,
+                                     void **original) {
+    const uint8_t *descriptor = rva_to_ptr(layout, layout->import_rva);
+    if (!descriptor) return 0;
+    unsigned patched = 0;
+    void *first_original = NULL;
+    for (unsigned index = 0; index < HYPRLODR_MAX_IMPORT_DESCRIPTORS; ++index) {
+        const uint8_t *entry = descriptor + (size_t)index * HYPRLODR_IMPORT_DESCRIPTOR_BYTES;
+        uint32_t name_rva = read_u32(entry + 12);
+        uint32_t thunk_rva = read_u32(entry + 16);
+        uint32_t names_rva = read_u32(entry);
+        if (name_rva == 0) break;
+        if (thunk_rva == 0 || names_rva == 0) continue;
+        uint8_t *thunk = (uint8_t *)rva_to_ptr(layout, thunk_rva);
+        const uint8_t *names = rva_to_ptr(layout, names_rva);
+        if (!thunk || !names) continue;
+        for (unsigned slot_index = 0; slot_index < HYPRLODR_MAX_IMPORT_SLOTS; ++slot_index) {
+            uint64_t address = read_u64(thunk + (size_t)slot_index * 8u);
+            uint64_t name_value = read_u64(names + (size_t)slot_index * 8u);
+            if (address == 0 || name_value == 0) break;
+            if ((name_value >> 63) != 0) continue; /* import by ordinal */
+            const uint8_t *by_name = rva_to_ptr(layout, (uint32_t)(name_value & 0x7fffffffu));
+            if (!by_name) continue;
+            if (!equals_ignore_case((const char *)(by_name + 2), symbol)) continue;
+            void *previous = NULL;
+            int result = patch_slot(thunk + (size_t)slot_index * 8u, replacement, &previous);
+            if (result == -1) continue;
+            if (result == 1 || result == 2) ++patched;
+            if (result == 1 && !first_original && previous && previous != replacement)
+                first_original = previous;
+        }
+    }
+    if (original && first_original && !*original) *original = first_original;
+    return patched;
+}
+
 static unsigned patch_targets_in(const pe_layout *layout) {
     unsigned patched = 0;
-    void *slot = NULL;
-    if (find_import_slot(layout, "kernel32", "GetProcAddress", &slot) == 1) {
-        int result = patch_slot(slot, (void *)(uintptr_t)&shim_get_proc, (void **)&g_original_get_proc);
-        if (result == 1 || result == 2) ++patched;
-    }
-    slot = NULL;
-    if (find_import_slot(layout, "opengl32", "wglGetProcAddress", &slot) == 1) {
-        int result = patch_slot(slot, (void *)(uintptr_t)&shim_wgl_get_proc,
-                                (void **)&g_original_wgl_get_proc);
-        if (result == 1 || result == 2) ++patched;
-    }
+    patched += patch_symbol_any_dll(layout, "GetProcAddress", (void *)(uintptr_t)&shim_get_proc,
+                                    (void **)&g_original_get_proc);
+    patched += patch_symbol_any_dll(layout, "wglGetProcAddress",
+                                    (void *)(uintptr_t)&shim_wgl_get_proc,
+                                    (void **)&g_original_wgl_get_proc);
+    patched += patch_direct_gl_imports(layout);
     return patched;
 }
 

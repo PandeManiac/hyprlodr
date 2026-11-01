@@ -410,3 +410,49 @@ Why this matters: the lettering is addressed *by name inside the pack*, so a rep
 be a same-tag payload served under the same name — which is exactly what the `_Fiopen`
 redirect layer is for. What remains unknown is the record's tag and its payload layout, and the
 pack (`asset/asset`, 306,794,369 B) is still undecoded, so neither can be read offline.
+
+## Confirmed in-game: the title's mask texture, and a replacement drawn by the original pass (2026-11-01)
+
+**The title's lettering is one texture, and it has been read out of the running game.** Binding
+every texture name at `wglSwapBuffers` and reading level 0 with GL 1.1 entry points found a
+texture of exactly **853x480** whose **RGB is zero everywhere** and whose **alpha channel is the
+`HYPER` / `DEMON` letterforms** — 256 alpha levels, 42.8% of pixels inked, two bands separated by
+a horizontal gap at rows 233..247. That is the texture `title_vs` samples: the fragment shader
+takes `1.0 - alpha` as the mask and multiplies it by the full-screen background inside its
+854x480 window. The window constant and the texture size agree, which closes the loop between the
+shader text and the live renderer.
+
+**Why this took a new instrument.** The executable imports no GL library at all: its import table
+lists kernel32, user32, MSVCP140, OpenAL32 and friends, but no `opengl32`, no `vulkan-1`, no
+`d3d11`. Through the loader paths that can be patched it asks only for `wglChoosePixelFormat`,
+`wglSetPixelFormat`, `wglDescribePixelFormat` and `wglSwapBuffers`. So the engine resolves its GL
+entry points in a way no IAT hook can see, and per-draw tracing — shader sources, draw calls,
+texture uploads — is unobtainable from user mode with this approach. That is a measured negative,
+not an assumption: patching every module's `GetProcAddress` (whatever DLL it comes from), every
+`wglGetProcAddress`, and every direct `opengl32` import still produced **zero** shader, program or
+draw events across full sessions. The swap hook it does use is enough to observe renderer state,
+and that is what produced the mask.
+
+**The replacement reuses the original pass.** Since the mask is an ordinary 853x480 RGBA texture
+and the engine never re-uploads it, writing a different glyph mask into that same texture name
+makes the game's own title pass draw the new words: same `title_vs`, same `854x480` window maths,
+same animated background texture, same `post_title` copy and the same post chain. Nothing is
+composited on top of the finished frame and no second renderer exists.
+
+- `tools/make_title_mask.py` renders `HYPR` / `LODR` into that exact texture layout using one of
+  the game's own fonts (`--font`), writing alpha = `255 - coverage` (letters are the transparent
+  part, matching the measured mask) and flipping the rows, because the upload path treats row 0 as
+  the bottom row. Without the flip the words render inverted, which was observed before fixing it.
+- The loader (`native/win32/gl_hook.c`) reads `hyprlodr-title-mask.raw` from the game directory
+  and uploads it into the title texture from frame 20 onwards, restoring the previous binding.
+
+**Verified in HYPER DEMON** (world-space captures at 1920x1080, frames 120 and 300 of the same
+session): the title area shows **`HYPR` above `LODR`**, upright, filled by the animated iridescent
+background, inside the original oversized letterforms, with the menu row `PLAY OPTIONS TRAINING
+CLIPS LEADERBOARDS EXIT` untouched and still laid out between the two words. The texture read back
+after the game had drawn with it contains our mask (ink 0.312 against the original's 0.428).
+
+**Still hypothesis, not confirmed:** which of the pack's fonts the *original* mask was drawn with
+(the glyph shapes resemble a bold Didone serif; the packed font at record 303,451,631 reproduces
+the shapes closely but this is not proven), whether the shipped mask is stored packed or built at
+load time, and how the game would animate or re-render the mask if the title were re-entered.

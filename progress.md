@@ -1,5 +1,34 @@
 # Session progress
 
+## 2026-11-01 (the title's mask texture, found in-game, replaced, and seen working)
+
+**The title's lettering is a single 853x480 texture, and it is now read, replaced and verified in
+the running game.** Reading every texture back at `wglSwapBuffers` found a texture whose RGB is
+zero everywhere and whose alpha holds the `HYPER`/`DEMON` letterforms: two bands, a gap at rows
+233..247, 42.8% inked, 256 alpha levels. The shader's own 854x480 window constant and the texture
+size agree, which ties the decrypted source to the live renderer.
+
+**Instrument, and a real negative.** The executable imports no GL library — no `opengl32`, no
+`vulkan-1`, no `d3d11` — and through every patchable loader path asks only for
+`wglChoosePixelFormat`, `wglSetPixelFormat`, `wglDescribePixelFormat`, `wglSwapBuffers`. I widened
+the hook to patch `GetProcAddress` from any DLL and every direct `opengl32` import; the result was
+still zero shader/program/draw events while frames rendered. Per-draw tracing is not available this
+way for this engine, and that is now documented as measured rather than assumed. Texture readback
+through the swap hook is, and it produced the mask.
+
+**The replacement runs through the game's own title pass.** The mask is an ordinary texture the
+engine never re-uploads, so writing our glyph mask into that same texture name makes `title_vs`,
+the 854x480 window maths, the animated background texture, the `post_title` copy and the whole
+post chain draw the new words. `tools/make_title_mask.py` renders `HYPR`/`LODR` in a packed font
+into that exact layout (alpha = 255 - coverage, rows flipped for the upload path), and the loader
+uploads it from frame 20 each session.
+
+**Verified in the game:** at 1920x1080, frames 120 and 300 of one session show `HYPR` above
+`LODR`, upright, filled by the animated iridescent background in the original oversized serif,
+with `PLAY OPTIONS TRAINING CLIPS LEADERBOARDS EXIT` intact between them. The texture read back
+after drawing contains our mask (ink 0.312 vs the original 0.428). An inverted first attempt is
+recorded above the fix, since that is what established the upload path is bottom-up.
+
 ## 2026-11-01 (the title's fragment shader is read, and it corrects the geometry theory)
 
 **The `title_vs` program is now fully understood, and it overturns tonight's earlier claim.** The
