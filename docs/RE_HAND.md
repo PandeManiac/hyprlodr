@@ -360,9 +360,9 @@ cube. No game buffer is touched.
 
 `tools/assets/convert_glb_to_hand_mesh.py` converts `berdly_arm.runtime16.glb`
 into that binary: positions in hand space, authored normals, u32 indices, and a
-known-opaque hand-atlas UV pair copied from the live hand vertex. The working
-proof transform is scale 0.6 with offset (-0.0733, -0.0523, 0.0375), giving
-bounds x -0.144..0.144, y -0.131..0.157, z -0.309..0.422.
+known-opaque hand-atlas UV pair copied from the live hand vertex. The current verified
+transform is scale 0.34, offset (-0.0715, -0.1442, -0.0800), and a 180-degree
+X remap, giving bounds x -0.112..0.052, y -0.263..-0.100, z -0.298..0.116.
 
 Live counters: 17,322 vertices and 25,620 indices (8,540 triangles, 1,349,712
 bytes) uploaded; **12,112 of 12,112 owned draws substituted**; GL error 0 after
@@ -371,10 +371,36 @@ winged claw silhouette, with its palm and spread digits, lit by the game's hand
 material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
 gone.
 
-This is real authored geometry, but not yet final: it is oversized and centred
-instead of lower-right; it samples the game's gold hand atlas instead of a blue
-feather texture; and it is static bind-pose geometry, not yet driven by the
-baked actions. Those are the next three stages.
+This is real authored geometry, but not yet final: it samples the game's gold
+hand atlas instead of a blue feather texture, and it is static bind-pose
+geometry, not yet driven by the baked actions.
+
+### Orientation fix (verified live)
+
+The first uploads kept the glTF accessor's coordinates unchanged. The exporter
+writes the authored mesh on a **Z-long** axis with the claws at **-Z**; in the
+live hand pass **+Z is screen-up**, so those uploads put the claws at the near/
+bottom end and made the hand face the player.
+
+Three controlled in-game tests established the mapping:
+
+| Remap | Result |
+|---|---|
+| none | vertical arm, claws at the bottom/near end (wrong) |
+| `R_x(90)`, `(x, y, z) -> (x, -z, y)` | horizontal arm across the bottom (rejected) |
+| `R_x(180)`, `(x, y, z) -> (x, -y, -z)` | vertical arm, claws at the far/top end, wrist through the bottom edge (accepted) |
+
+The accepted transform also lowers the mesh (offset Z -0.080) so the wrist
+exits the frame instead of floating. Normals are rotated with the same matrix.
+Live counters: **12,096 of 12,096** hand draws substituted, 17,322 vertices and
+25,620 indices, GL error 0, game alive. The screenshot shows the authored arm
+entering from the bottom with the claws pointing into the gameplay area; it is
+recorded by hash in `docs/evidence/2026-11-01-hand-orientation.json` (the frame
+itself is not committed because it contains game content).
+
+The transform is applied to static geometry, so it inherits the game's hand
+world/view transform each frame and stays camera-locked. It is still bind-pose
+geometry: the seven baked actions and feather springs are not applied yet.
 
 ## Next experiments, in order
 

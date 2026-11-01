@@ -1,5 +1,26 @@
 # Session progress
 
+## 2026-11-01 (sixteenth pass: arm orientation corrected)
+
+**The authored arm now points into the gameplay area instead of back at the
+player.** The converter had uploaded the glTF accessor unchanged: the mesh is
+Z-long with claws at -Z, while the live hand pass treats +Z as screen-up. The
+raw draw therefore put the claws at the near/bottom end. A 90-degree X remap was
+tested live and laid the arm horizontally, ruling out a simple quarter-turn. A
+180-degree X remap keeps the long axis vertical, moves the palm and claws to the
+far/top end, and puts the wrist through the bottom edge like the stock arm.
+
+The accepted transform is scale 0.34, offset (-0.0715, -0.1442, -0.0800), and
+`--rotate-x 180`; normals rotate too. Live counters were **12,096 of 12,096**
+draws substituted, 17,322 vertices / 25,620 indices, GL error 0, and the game
+alive. The frame hash and the three orientation tests are recorded in
+`docs/evidence/2026-11-01-hand-orientation.json`; no game frame is committed.
+
+**Still not final:** it samples the gold hand atlas, is static bind pose, and is
+lower-centre rather than lower-right. The next stage is the authored blue
+material, followed by skinning the baked actions and feather springs. The game
+mode was restored to `pass` after the test.
+
 ## 2026-11-01 (fifteenth pass: authored arm visible in game)
 
 **The 17,322-vertex authored Berdly arm now draws in HYPER DEMON.** It is loaded

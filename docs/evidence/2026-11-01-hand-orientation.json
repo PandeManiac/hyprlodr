@@ -1,0 +1,108 @@
+{
+  "schema": "hyprlodr.evidence/1",
+  "date": "2026-11-01",
+  "subject": "first-person Berdly arm orientation corrected to match the stock hand",
+  "mod": {
+    "id": "example.hand-hook",
+    "version": "0.4.0",
+    "source": "examples/hand_hook.c"
+  },
+  "asset": {
+    "source": "assets/berdly-arm/berdly_arm.runtime16.glb",
+    "converter": "tools/assets/convert_glb_to_hand_mesh.py",
+    "vertices": 17322,
+    "indices": 25620,
+    "triangles": 8540,
+    "bytes": 1349712,
+    "stride": 72,
+    "transform": {
+      "scale": 0.34,
+      "offset": [
+        -0.0715,
+        -0.1442,
+        -0.08
+      ],
+      "rotate_x_degrees": 180
+    },
+    "bbox_min": [
+      -0.111629,
+      -0.262768,
+      -0.297885
+    ],
+    "bbox_max": [
+      0.051688,
+      -0.099548,
+      0.116148
+    ]
+  },
+  "axis_evidence": {
+    "stock_hand_vbo": {
+      "vertices": 238,
+      "bbox_min": [
+        -0.0991,
+        -0.1961,
+        -0.0843
+      ],
+      "bbox_max": [
+        0.0429,
+        0.1958,
+        0.0399
+      ],
+      "principal_axis": [
+        -0.181,
+        0.983,
+        0.003
+      ],
+      "principal_span": 0.4028,
+      "note": "The stock hand's long axis is Y, and its screen direction runs from the bottom edge to the palm/claws."
+    },
+    "glb_static_mesh": {
+      "bbox_min": [
+        -0.118026,
+        -0.131329,
+        -0.569357
+      ],
+      "bbox_max": [
+        0.362319,
+        0.304679,
+        0.640837
+      ],
+      "long_axis": "Z",
+      "claw_end": "-Z"
+    },
+    "test_0_degrees": "Raw Z-long mesh rendered vertically with the claws at the near/bottom end.",
+    "test_90_degrees": "R_x(90) mapped the long axis to Y and laid the arm horizontally across the bottom of the frame, ruling out a simple quarter-turn.",
+    "test_180_degrees": "R_x(180) kept the long axis vertical, moved the claws to the far/top end and the wrist through the bottom edge, matching the stock arm's visible direction."
+  },
+  "live_debug": {
+    "hand_draws_seen": 12096,
+    "draws_substituted": 12096,
+    "geometry_ready": 1,
+    "mode": 3,
+    "arm_vertices": 17322,
+    "arm_indices": 25620,
+    "arm_load_state": 1,
+    "program": 89,
+    "error_after_prepare": 0,
+    "error_after_draw": 0,
+    "game_alive": true,
+    "read_method": "GDB read of hypr_hand_debug at RVA 0x6010 in the running process"
+  },
+  "visual_result": {
+    "stock_arm_visible": false,
+    "authored_arm_visible": true,
+    "placement": "lower centre; wrist leaves the bottom edge, palm and claws point to the far/top end of the gameplay view",
+    "screenshot_sha256": "4029d74b75ab088fabf54ebc01a1741f71aab2dd079f9f31b50ae45a4020b7cc",
+    "screenshot_committed": false,
+    "reason_not_committed": "the frame contains game content",
+    "control_screenshot_sha256": "b565488ced237361c6716b29e53ed921381f1fb3fa7bcca9cdaf9f36474d5e33",
+    "control_note": "Earlier pass-through control shows the stock arm; no game frame is committed."
+  },
+  "limitations": [
+    "The mesh is still static bind-pose geometry; the seven baked actions and feather springs are not applied.",
+    "It still samples the game's gold hand atlas; the authored blue feather texture is not bound.",
+    "The lower-centre placement follows the stock arm's screen position but has not yet been shifted to a lower-right composition.",
+    "The transform is empirically verified in game; the exact hand world/view matrix has not been captured from the executable."
+  ],
+  "next_step": "Preserve this orientation and placement, then bind the authored blue feather material and skin the runtime16 mesh to the baked locomotion actions."
+}

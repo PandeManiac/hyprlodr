@@ -25,12 +25,21 @@ Each vertex is 18 floats, matching the layout measured from the live hand draw:
 The GLB is the validated 16-bone runtime arm, so the source geometry is our own
 authored asset; no game geometry is read or embedded. Tangents are a stable
 placeholder; the baked rig and actions are not used by this first static upload.
+
+The glTF exporter keeps the authored mesh on a Z-long axis with the claws at
+-Z. In the live hand pass +Z is screen-up, so the raw mesh renders vertically
+with the claws at the near/bottom end. The default 180 degree X remap
+(x, y, z) -> (x, -y, -z) flips that long axis, putting the claws at the far/top
+end and the wrist at the bottom, matching the stock arm's direction. A 90
+degree remap was tested live and laid the arm horizontally, so it is not the
+correct quarter-turn. Normals are rotated by the same matrix.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import struct
 from pathlib import Path
 
@@ -89,7 +98,16 @@ class Accessors:
         ]
 
 
-def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float, float, float]) -> None:
+def rotate_x(vector: tuple[float, ...], degrees: float) -> tuple[float, ...]:
+    """Rotate a 3-vector about +X; other components pass through unchanged."""
+    radians = math.radians(degrees)
+    cosine, sine = math.cos(radians), math.sin(radians)
+    x, y, z = vector[:3]
+    return (x, y * cosine - z * sine, y * sine + z * cosine)
+
+
+def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float, float, float],
+            rotate_x_degrees: float = 180.0) -> None:
     doc, binary = read_glb(glb)
     accessors = Accessors(doc, binary)
     if len(doc.get("meshes", [])) != 1:
@@ -108,6 +126,8 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
             raise SystemExit("primitive attribute counts differ")
         base = len(vertices)
         for position, normal, uv in zip(positions, normals, uvs):
+            position = rotate_x(position, rotate_x_degrees)
+            normal = rotate_x(normal, rotate_x_degrees)
             record = struct.pack(
                 "<18f",
                 position[0] * scale + offset[0],
@@ -170,6 +190,7 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
         "stride": STRIDE,
         "scale": scale,
         "offset": list(offset),
+        "rotate_x_degrees": rotate_x_degrees,
         "bbox_min": [round(value, 6) for value in bbox_min],
         "bbox_max": [round(value, 6) for value in bbox_max],
         "bytes": out.stat().st_size,
@@ -188,11 +209,14 @@ def main() -> None:
     parser.add_argument("--glb", type=Path, default=DEFAULT_GLB)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--meta", type=Path, default=DEFAULT_META)
-    parser.add_argument("--scale", type=float, default=0.6)
-    parser.add_argument("--offset", type=float, nargs=3, default=(-0.0733, -0.0523, 0.0375),
+    parser.add_argument("--scale", type=float, default=0.34)
+    parser.add_argument("--offset", type=float, nargs=3,
+                        default=(-0.0715, -0.1442, -0.0800),
                         metavar=("X", "Y", "Z"))
+    parser.add_argument("--rotate-x", type=float, default=180.0, metavar="DEGREES",
+                        help="flip the exported -Z long axis into screen-up +Z (default 180)")
     args = parser.parse_args()
-    convert(args.glb, args.out, args.meta, args.scale, tuple(args.offset))
+    convert(args.glb, args.out, args.meta, args.scale, tuple(args.offset), args.rotate_x)
 
 
 if __name__ == "__main__":
