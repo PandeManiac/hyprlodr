@@ -1,5 +1,9 @@
 # Session progress
 
+## 2026-11-01 (ABI 5)
+
+**Mods can read the running game image.** ABI 5 adds `image_size()`, `build_matches()` and `image_read()` to the host API. Reads are refused unless the host proved the executable is the analysed build, and refused when the range is not entirely inside the image (the check also rejects a length that would wrap). The proxy supplies its mapped module plus the 8/8-anchor result; the Linux host supplies a file via `--image-file` so the semantics are tested against real fixtures: a 64-byte image returns exactly `0x1011121314151617` at offset 16, no image is refused, and offset 4096 is refused. Verified in the real game: the `i.image` fixture logged `image header 4d5a9000` with `build_matches=true` and 8/8 anchors, i.e. the bytes came out of the mapped `hyperdemon.exe` (evidence in `docs/evidence/2026-11-01-abi5-image.json`). Read-only by design: writing to the image is a separate capability with a much higher blast radius and is not part of this ABI.
+
 ## 2026-11-01 (continued)
 
 **Rollback bug fixed and covered.** `state_remove()` deleted a key and the journal could not restore it, because rollback looked the key up in the table it had just been removed from. Rollback now re-inserts the previous value and owner when the entry is gone, and leaves the "drop what the mod added" path untouched. New scenario `state_remove_rolled_back_on_failure`: a failing mod removes another mod's key and adds its own, and the keeper verifies through the public ABI from `shutdown()` — which the loader runs after rollback — that the value came back and the failed mod's key did not survive.

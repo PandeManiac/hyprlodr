@@ -1,0 +1,26 @@
+{
+  "kind": "ABI 5 in-game image access",
+  "captured": "2026-11-01",
+  "game": {
+    "exe": "S:\\\\steamapps\\\\common\\\\hyperdemon\\\\hyperdemon.exe",
+    "build_matches": true,
+    "anchors_matched": 8,
+    "anchors_total": 8,
+    "module_base": "0x0000000140000000"
+  },
+  "mod": {
+    "id": "i.image",
+    "note": "reads 8 bytes at image offset 0 through host_api.image_read()"
+  },
+  "observed_event": {
+    "seq": 16,
+    "event": "log",
+    "mod": "i.image",
+    "message": "info: image header 4d5a9000"
+  },
+  "meaning": "A mod read the real running image through the host API. 4d5a is the DOS header signature, so the bytes can only come from the mapped executable; the read was gated by build_matches (8/8 anchors).",
+  "limits": "Read-only, and only when the fingerprint matches. The same API refuses reads in a host without a verified image (loader scenario image_access_refused_without_image) and refuses out-of-range offsets (image_access_refuses_out_of_range).",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

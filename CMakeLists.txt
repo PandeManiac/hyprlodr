@@ -116,6 +116,10 @@ hyprlodr_fixture(redirect_mod FIX_ID="r.redirect"
 hyprlodr_fixture(redirect_fail FIX_ID="r.failing"
   FIX_REDIRECT_FROM="shader/x.glsl" FIX_REDIRECT_TO="C:/hyprlodr/other.bin" FIX_FAIL=1)
 
+# ABI 5 read-only image access: one read inside the fixture image, one past its end
+hyprlodr_fixture(image_reader FIX_ID="i.reader" FIX_IMAGE_READ=16)
+hyprlodr_fixture(image_reader_far FIX_ID="i.far" FIX_IMAGE_READ=4096)
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

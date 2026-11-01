@@ -24,10 +24,11 @@
 #  define HYPR_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Bumped to 4: the host API gained file_redirect(), so a mod can point a path
- * the game opens at a file it ships. Earlier ABIs are rejected: mods are
- * recompiled against this header. */
-#define HYPRLODR_ABI_VERSION 4u
+/* Bumped to 5: the host API gained read-only access to the verified game image,
+ * so a mod can inspect the running game instead of only running beside it. ABI 4
+ * added file_redirect(). Earlier ABIs are rejected: mods are recompiled against
+ * this header. */
+#define HYPRLODR_ABI_VERSION 5u
 #define HYPRLODR_PLUGIN_ENTRY "hyprlodr_plugin_query"
 
 /* True when the descriptor is large enough to contain `field`. */
@@ -64,6 +65,18 @@ typedef struct hyprlodr_host_api {
      * Hosts without file control (the synthetic test host, for example) may
      * return non-zero; a mod should treat that as "override unavailable". */
     int (*file_redirect)(void *context, const char *suffix, const char *replacement_path);
+    /* --- ABI 5 additions --- */
+    /* Bytes of the running game image that may be read. 0 when the host has no
+     * image to offer (the synthetic test host, for example). */
+    size_t (*image_size)(void *context);
+    /* Non-zero when the image is the exact build the verifier describes. Every
+     * read is refused while this is 0, so a mod can never act on addresses that
+     * came from a different executable. */
+    int (*build_matches)(void *context);
+    /* Copy `length` bytes at `offset` in the game image into `destination`.
+     * Returns 0 on success; non-zero when refused: no image, unknown build,
+     * zero length, or a range that is not entirely inside the image. */
+    int (*image_read)(void *context, uint64_t offset, void *destination, size_t length);
 } hyprlodr_host_api;
 
 /* True when the host API is large enough to contain `field`. */

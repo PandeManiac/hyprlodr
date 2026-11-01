@@ -20,7 +20,7 @@ Details and evidence: `docs/RESEARCH.md`, `docs/TESTING.md`, `docs/ROADMAP.md`.
 
 ## What works today
 
-- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 4)** with a single export per mod, a per-mod persistent data directory created before initialization, and suffix-based file redirection.
+- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 5)** with a single export per mod, a per-mod persistent data directory, suffix-based file redirection, and read-only access to the running image that is refused unless the build fingerprint matches.
 - **Deterministic loader**: discovery, descriptor validation, semantic-version constraints, conflicts, disabled mods, lexicographic tie-breaks, cycle/missing-dependency detection, partial-failure rollback, reverse-order shutdown.
 - **Structured event log** (JSON Lines) with sequential event numbers, plus a JSON summary from the host.
 - **Five mandatory sample mods** compiled independently through the public header.

@@ -76,6 +76,11 @@ mkdir -p "$OUT/tests"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" \
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
+# ABI 5 fixture: reads the running image header. Used for the real-game proof;
+# it is not part of the Wine suite, whose host has no verified image.
+"$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/image_mod.c" -o "$OUT/obj/image_mod.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/image_mod.dll" \
+  "$OUT/obj/image_mod.obj" "$CRT_OBJ" "$K32"
 
 
 

@@ -46,7 +46,8 @@ class Runner:
         path.write_text(text)
         return path
 
-    def run(self, seed=None, disable=(), disabled_file=None, state_root=None, redirect_probes=()):
+    def run(self, seed=None, disable=(), disabled_file=None, state_root=None, redirect_probes=(),
+            image_file=None):
         log = self.tmp / "events.jsonl"
         if log.exists():
             log.unlink()
@@ -61,6 +62,8 @@ class Runner:
             args += ["--disabled-file", str(disabled_file)]
         for probe in redirect_probes:
             args += ["--redirect-probe", probe]
+        if image_file:
+            args += ["--image-file", str(image_file)]
         proc = subprocess.run(args, capture_output=True, text=True)
         events = []
         if log.exists():
@@ -234,6 +237,60 @@ def state_remove_rolled_back_on_failure():
                     if e["event"] == "log" and e["mod"] == "k.keeper"
                     and e["message"] == "info: shutdown state verified"]
         check(verified, f"keeper did not observe restored state: {events}")
+    finally:
+        runner.close()
+
+
+@scenario("image_access_reads_the_verified_image")
+def image_access_reads_the_verified_image():
+    """ABI 5: a mod reads bytes the host declares to be the game image.
+
+    The fixture image is 64 bytes, so a read at offset 16 must return bytes
+    0x10..0x17. The loader only offers reads when the host says build_matches.
+    """
+    runner = Runner()
+    try:
+        runner.add("image_reader")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, summary = runner.run(image_file=image)
+        check(proc.returncode == 0, f"image read run failed: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.reader"]
+        check("image 1011121314151617" in " ".join(messages),
+              f"expected the bytes at offset 16, saw {messages}")
+        check(not any("refused" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("image_access_refused_without_image")
+def image_access_refused_without_image():
+    runner = Runner()
+    try:
+        runner.add("image_reader")
+        proc, events, _ = runner.run()
+        check(proc.returncode == 0, f"a refused read must not fail the mod: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.reader"]
+        check(any("image read refused" in message for message in messages), messages)
+        check(not any("image 0" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("image_access_refuses_out_of_range")
+def image_access_refuses_out_of_range():
+    runner = Runner()
+    try:
+        runner.add("image_reader_far")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, _ = runner.run(image_file=image)
+        check(proc.returncode == 0, f"out-of-range read must be refused, not fatal: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.far"]
+        check(any("image read refused" in message for message in messages), messages)
     finally:
         runner.close()
 

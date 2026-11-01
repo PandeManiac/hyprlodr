@@ -9,6 +9,10 @@
  *              initialization runs, so packaging tools can cross-check a
  *              manifest against the real ABI without executing mod code
  *
+ * --image-file PATH maps that file as the "game image" for ABI 5 tests: mods can
+ * then read it through host_api.image_read(), exactly as they would read the game
+ * in the proxy. The file is not executable and build_matches is set to true.
+ *
  * --redirect-probe PATH asks the loader which file it would open instead of
  * PATH, exactly as the in-game file hook would, and reports it in the summary.
  * That is what lets the Linux suite assert ABI 4 redirection without Windows.
@@ -34,6 +38,7 @@ static void usage(const char *argv0) {
             "  --describe           print descriptors and exit without initializing\n"
             "  --redirect-probe P   report which file would open instead of P\n"
             "                       (repeatable, up to 8; ABI 4 file redirection)\n"
+            "  --image-file PATH    offer PATH as the game image to mods (ABI 5)\n"
             "  -h, --help           show this help\n",
             argv0);
 }
@@ -120,10 +125,54 @@ static void print_summary(const hyprlodr_loader *loader, int status, const char 
     printf("}\n");
 }
 
+/* --- ABI 5 image fixture ----------------------------------------------------- */
+static unsigned char *image_bytes;
+static size_t image_size;
+
+/* Read a file into memory so mods can read it through host_api.image_read().
+ * The Windows host links HYPRLODR's minimal CRT, which has no seeking, so the
+ * option is Linux-only: the in-game image comes from the proxy instead. */
+#ifndef HYPRLODR_MINIMAL_WIN32
+static int load_image_file(const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return -1;
+    if (fseek(file, 0, SEEK_END) != 0) {
+        fclose(file);
+        return -1;
+    }
+    long length = ftell(file);
+    if (length <= 0 || length > (16L * 1024L * 1024L)) {
+        fclose(file);
+        return -1;
+    }
+    rewind(file);
+    unsigned char *buffer = (unsigned char *)malloc((size_t)length);
+    if (!buffer) {
+        fclose(file);
+        return -1;
+    }
+    if (fread(buffer, 1, (size_t)length, file) != (size_t)length) {
+        free(buffer);
+        fclose(file);
+        return -1;
+    }
+    fclose(file);
+    image_bytes = buffer;
+    image_size = (size_t)length;
+    return 0;
+}
+#else
+static int load_image_file(const char *path) {
+    (void)path;
+    return -1; /* no --image-file support in the minimal-CRT host */
+}
+#endif
+
 int main(int argc, char **argv) {
     const char *log_path = "hyprlodr-events.jsonl";
     const char *disabled_file = NULL;
     const char *state_root = NULL;
+    const char *image_file = NULL;
     unsigned seed = 0;
     int describe = 0;
     int ok = 1;
@@ -147,6 +196,7 @@ int main(int argc, char **argv) {
             if (hyprlodr_loader_disable(loader, argv[++i]) != HYPRLODR_OK) ok = 0;
         }        else if (!strcmp(arg, "--disabled-file") && i + 1 < argc) disabled_file = argv[++i];
         else if (!strcmp(arg, "--state-root") && i + 1 < argc) state_root = argv[++i];
+        else if (!strcmp(arg, "--image-file") && i + 1 < argc) image_file = argv[++i];
         else if (!strcmp(arg, "--seed") && i + 1 < argc) seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(arg, "--redirect-probe") && i + 1 < argc) {
             if (probe_count == HYPRLODR_MAX_PROBES) {
@@ -171,6 +221,11 @@ int main(int argc, char **argv) {
         }
     }
 
+    if (ok && image_file && load_image_file(image_file) != 0) {
+        fprintf(stderr, "hyprlodr-host: cannot read --image-file %s\n", image_file);
+        ok = 0;
+    }
+
     if (!ok) {
         fprintf(stderr, "hyprlodr-host: invalid arguments\n");
         hyprlodr_loader_destroy(loader);
@@ -183,6 +238,13 @@ int main(int argc, char **argv) {
         status = hyprlodr_loader_set_state_root(loader, state_root);
     if (status == HYPRLODR_OK && disabled_file)
         status = hyprlodr_loader_disable_file(loader, disabled_file);
+    if (status == HYPRLODR_OK && image_file) {
+        hyprlodr_image image;
+        image.base = image_bytes;
+        image.size = image_size;
+        image.build_matches = 1; /* the test harness declares this the image */
+        status = hyprlodr_loader_set_image(loader, &image);
+    }
     if (status == HYPRLODR_OK) status = hyprlodr_loader_resolve(loader);
 
     if (describe) {

@@ -30,6 +30,17 @@ int hyprlodr_loader_disable_file(hyprlodr_loader *loader, const char *path);
 /* Event log destination (JSON Lines). Must be set before resolve. */
 int hyprlodr_loader_set_log(hyprlodr_loader *loader, const char *path);
 
+/* The running game image a host can offer to mods (ABI 5). Reads are refused
+ * unless build_matches is non-zero, so a mod can never act on offsets taken from
+ * a different executable. Passing NULL clears the image. */
+typedef struct {
+    const void *base;
+    size_t size;
+    int build_matches;
+} hyprlodr_image;
+
+int hyprlodr_loader_set_image(hyprlodr_loader *loader, const hyprlodr_image *image);
+
 /* Root for per-mod persistent directories. Each initialized mod gets
  * <root>/<mod-id>, created before its initialize() runs and exposed through
  * host_api.state_dir(). Unset by default, in which case state_dir() is NULL. */

@@ -329,6 +329,19 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     /* Per-mod writable directories live beside the loader's own files. */
     hyprlodr_loader_set_state_root(g_loader, state_root);
 
+    /* ABI 5: offer the running image to mods, but only when the fingerprint
+     * proves this executable is the build the verifier describes. A mod can then
+     * inspect real code and data; a different build yields build_matches=0 and
+     * every read is refused. */
+    inspect_main_module();
+    hyprlodr_image image;
+    image.base = g_module.base;
+    image.size = (size_t)g_module.size_of_image;
+    image.build_matches = g_module.parsed &&
+                          g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
+                          g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    hyprlodr_loader_set_image(g_loader, &image);
+
     /* Intercept the game's own CreateFileA calls before the delay, so opens the
      * game performs while mods are still starting are observed too. Nothing is
      * patched unless the import table really contains that entry. */

@@ -56,6 +56,29 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
 #ifdef FIX_STATE_KEY
     if (host->state_set(host->context, FIX_STATE_KEY, FIX_STATE_VALUE) != 0) return -1;
 #endif
+#ifdef FIX_IMAGE_READ
+    /* ABI 5: read the running image through the host. The suite compares the
+     * logged value with the bytes it supplied, so a wrong offset or a silently
+     * refused read cannot pass. */
+    if (!HYPRLODR_HOST_API_HAS(host, image_read) || !host->image_read) {
+        host->log(host->context, "error", FIX_ID, "image_read unavailable");
+        return -1;
+    }
+    {
+        unsigned char bytes[8];
+        for (int index = 0; index < 8; ++index) bytes[index] = 0;
+        if (host->image_read(host->context, (uint64_t)FIX_IMAGE_READ, bytes, sizeof bytes) != 0) {
+            host->log(host->context, "warn", FIX_ID, "image read refused");
+        } else {
+            unsigned long long value = 0;
+            for (int index = 0; index < 8; ++index)
+                value = (value << 8) | (unsigned long long)bytes[index];
+            char message[64];
+            snprintf(message, sizeof message, "image %016llx", value);
+            host->log(host->context, "info", FIX_ID, message);
+        }
+    }
+#endif
 #ifdef FIX_STATE_REMOVE
     if (host->state_remove(host->context, FIX_STATE_REMOVE) != 0) {
         host->log(host->context, "error", FIX_ID, "state_remove failed");

@@ -114,6 +114,7 @@ struct hyprlodr_loader {
     /* Written once, after every mod has initialized, before any game thread can
      * observe a redirect. Readers check it first and only then read the table. */
     volatile int redirects_published;
+    hyprlodr_image image;
     hyprlodr_undo undo[HYPRLODR_MAX_UNDO];
     size_t undo_count;
     char dirs[HYPRLODR_MAX_DIRS][HYPRLODR_PATH_MAX];
@@ -529,6 +530,28 @@ static int api_is_loaded(void *ctx, const char *mod_id) {
     return index >= 0 && l->plugins[index].initialized;
 }
 
+/* --- ABI 5: read-only access to the verified game image --------------------- */
+static size_t api_image_size(void *ctx) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    return (l && l->image.build_matches) ? l->image.size : 0;
+}
+
+static int api_build_matches(void *ctx) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    return (l && l->image.build_matches) ? 1 : 0;
+}
+
+static int api_image_read(void *ctx, uint64_t offset, void *destination, size_t length) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l || !destination || length == 0) return -1;
+    if (!l->image.build_matches || !l->image.base) return -2;
+    if (offset > (uint64_t)l->image.size) return -3;
+    /* The subtraction also rejects a length that would wrap past the image. */
+    if (length > l->image.size - (size_t)offset) return -3;
+    memcpy(destination, (const uint8_t *)l->image.base + (size_t)offset, length);
+    return 0;
+}
+
 static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     hyprlodr_host_api api;
     memset(&api, 0, sizeof api);
@@ -544,6 +567,9 @@ static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     api.is_loaded = api_is_loaded;
     api.state_dir = api_state_dir;
     api.file_redirect = api_file_redirect;
+    api.image_size = api_image_size;
+    api.build_matches = api_build_matches;
+    api.image_read = api_image_read;
     return api;
 }
 
@@ -908,6 +934,19 @@ int hyprlodr_loader_disable_file(hyprlodr_loader *loader, const char *path) {
         (void)hyprlodr_loader_disable(loader, start);
     }
     fclose(file);
+    return HYPRLODR_OK;
+}
+
+int hyprlodr_loader_set_image(hyprlodr_loader *loader, const hyprlodr_image *image) {
+    if (!loader) return HYPRLODR_ERR_ARG;
+    if (!image) {
+        memset(&loader->image, 0, sizeof loader->image);
+        return HYPRLODR_OK;
+    }
+    loader->image = *image;
+    /* An image without a base cannot be read, and claiming a match without one
+     * would let a mod walk a dangling pointer. */
+    if (!loader->image.base) loader->image.build_matches = 0;
     return HYPRLODR_OK;
 }
 

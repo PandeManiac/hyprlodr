@@ -1,4 +1,4 @@
-# Mod API (ABI 4)
+# Mod API (ABI 5)
 
 A HYPRLODR mod is a native shared library (`mods/<name>.dll` on Windows, `.so` on Linux) exporting exactly one symbol.
 
@@ -68,6 +68,24 @@ if (HYPRLODR_HOST_API_HAS(host, file_redirect) && host->file_redirect) {
 - Redirects are recorded as `file_redirect` events and become active only after **every** mod has initialized, so a half-initialized set never changes what the game reads. On initialization failure the journal removes them again; on shutdown they stop applying immediately.
 - Which opens the host can redirect depends on that host. The Linux test host exposes `--redirect-probe PATH`; the Windows proxy patches the game's own import slots. Measure, do not assume: the shipped `hyperdemon.exe` performed no narrow-path opens at all in a real run (see `docs/TESTING.md`), so redirection is currently proven against the stand-in host and not yet against the game's asset loader.
 
+## Game image access (ABI 5)
+
+A mod may read the running game image, but only when the host has proved the executable is the build the verifier describes:
+
+```c
+if (HYPRLODR_HOST_API_HAS(host, image_read) && host->image_read && host->build_matches(host->context)) {
+    unsigned char header[8];
+    if (host->image_read(host->context, 0, header, sizeof header) == 0) {
+        /* header[0..1] == "MZ" */
+    }
+    size_t size = host->image_size(host->context);  /* 0 when no image is offered */
+}
+```
+
+- `build_matches()` is 0 unless every fingerprint anchor matched, in which case **every read is refused**. This is the gate that stops a mod acting on offsets from a different executable.
+- A read is refused when the range is not entirely inside the image (including a length that would wrap), or the length is zero. Refusal is a normal return value, not a crash: treat it as "not available".
+- The API is read-only. Nothing here lets a mod patch the game, and nothing is exposed unless the host supplies an image at all — the synthetic test host returns 0 from `image_size()`.
+
 ## Rules
 
 - **One export.** `hyprlodr_plugin_query` must return a pointer to storage that lives for the whole process (usually `static`). All descriptor strings are owned by the mod and must also remain valid.
@@ -111,6 +129,9 @@ All calls take `host->context`. Every function may return failure; treat failure
 | `capability_has(context, name)` | Non-zero if the capability exists. |
 | `is_loaded(context, mod_id)` | Non-zero if that mod is currently initialized. |
 | `file_redirect(context, suffix, replacement_path)` | Open `replacement_path` instead whenever the game opens a path ending in `suffix` (ABI 4). |
+| `image_size(context)` | Bytes of the running image a mod may read; 0 when the host offers none (ABI 5). |
+| `build_matches(context)` | Non-zero only when the image is the exact verified build (ABI 5). |
+| `image_read(context, offset, dst, length)` | Copy bytes from the image; refused when the build is unverified or the range is outside it (ABI 5). |
 
 State set during `initialize` is journaled: if initialization fails, every change is undone automatically, including state the failed mod *deleted* — a removed entry is re-inserted with its previous value and owner (scenario `state_remove_rolled_back_on_failure`). State written during `shutdown` is not journaled.
 

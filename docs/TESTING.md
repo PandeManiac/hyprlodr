@@ -20,7 +20,7 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
-## Loader scenarios (native, 29/29 passing)
+## Loader scenarios (native, 32/32 passing)
 
 | Scenario | Asserts |
 |---|---|
@@ -53,6 +53,9 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 | `state_remove_rolled_back_on_failure` | A failing mod deletes another mod's key and adds one of its own; after rollback the keeper observes the deleted value restored and the added key gone (asserted from its `shutdown()`, i.e. through the public ABI) |
 | `file_redirect_registration` | Exact match, wrong file, case-insensitive match, relative path, non-boundary suffix and prefix path — six probes against the published registry |
 | `file_redirect_rolled_back_with_failing_mod` | A redirect registered by a mod that then fails is not published |
+| `image_access_reads_the_verified_image` | A mod reads 8 bytes at offset 16 of a 64-byte image supplied by the host and logs `0x1011121314151617` |
+| `image_access_refused_without_image` | With no image, the read is refused, the mod logs it and the run still succeeds |
+| `image_access_refuses_out_of_range` | An offset past the end is refused instead of reading past the buffer |
 
 The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`) applies to the loader, host, samples and fixtures.
 
