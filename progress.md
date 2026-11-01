@@ -1,5 +1,25 @@
 # Session progress
 
+## 2026-11-01 (the pack is decoded: fonts and material graphs read from real plaintext)
+
+**The cipher is validated and the pack is readable, which unblocks the title.** The probe now
+finds the resolver's parallel `std::string` key arrays (runs of `0x20`-byte elements that are
+strictly ascending) and pairs them with record arrays by count: a 24-entry key array
+`[6eye, bronze, …, hyper, hyper2, ..., unranked2]` matches a 24-entry record array whose offsets
+chain exactly, so name → `(offset, size, tag)` is index-aligned. Validation is objective: for
+each record of a newly seen `tag 4096` array, exactly **one** of the 1024 keystreams puts an
+sfnt magic at `+0x18`, and a complete 22-table TrueType directory follows with every table
+in-bounds — one-in-1024 per record, four records tested, so the cipher, the tables, the state
+recurrence and the `0x18` payload header are confirmed against shipped data. Two new tags
+appeared that the static dispatch reading did not show: **`tag 4096` is TrueType font** (11
+records) and **`tag 8` is a named-graph type** whose `hyper`/`hyper2` payloads decrypt to graphs
+mentioning `projection`, `retrieval`, `entity`. Consequence: the title's lettering is text drawn
+with these fonts under an entity skinned by a `hyper` graph, so the replacement can use the
+game's own glyph path and material. Also fixed in passing: both memory walks now step past
+unmapped holes instead of ending the scan (measured: no change on this image, it was already
+covering 282 regions / 722 MB). Open question: the `0x18` header decrypts to the same short string
+across records while everything after it is valid — unexplained, not used.
+
 ## 2026-11-01 (the live asset record table is now readable)
 
 New `native/win32/asset_probe.c` finds the game's 0x58-byte asset records in process memory

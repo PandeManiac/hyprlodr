@@ -1,8 +1,8 @@
 # The `asset/asset` pack: format, cipher, and what is still unknown
 
-Status: the **read path is reversed and implemented** (`tools/re/pack_crypt.py`); the
-name→offset **index is not yet located**, so no real slice has been decrypted and the
-implementation is unverified against game plaintext.
+Status: the **read path is reversed, implemented and validated against real plaintext**
+(`tools/re/pack_crypt.py`). The index is read live from the running process, names are recovered
+from a parallel key array, and a slice decrypts to a verifiable TrueType font.
 
 ## Confirmed: the pack is encrypted, not compressed
 
@@ -163,6 +163,40 @@ rendered or confirmed to contain glyphs.
 So the "coverage mask" interpretation of that window is not supported; the bytes are decrypted
 correctly (the key family is fixed by the zero run), but what they belong to is unexplained.
 Treat "the title is a stencil mask" as a hypothesis from the screenshots, not a confirmed fact.
+
+## Confirmed: the cipher is validated against real plaintext
+
+The pack is decoded. Two things were missing and both are now answered: the live
+`(offset, size)` records (from the probe's memory scan) and the fact that a slice's plaintext
+can be recognised objectively, so the CRC seed never has to be guessed.
+
+**Method.** The resolver binary-searches `std::string` keys, but the records it returns carry
+empty names, so the keys live in a parallel array. The probe now also finds runs of *strictly
+ascending* `0x20`-byte `std::string` elements (a `std::vector<std::string>`), and pairs them with
+a record array by count. One such pair is a **24-entry key array**
+`[6eye, bronze, gold, hand1bones, …, hyper, hyper2, silver, soratheye, sorathmask,
+sorathtexture, sorathvector, unranked, unranked2]` matched to a 24-entry record array whose
+offsets chain exactly, giving index-aligned name → `(offset, size, tag)`.
+
+**The validation is objective, not a score.** For the eleven records of a newly seen
+`tag 4096` array, scanning all 1024 keystreams for an sfnt magic in the first 32 bytes gives
+**exactly one seed each**, and at that seed the magic sits at **`+0x18`** and a full 22-table
+TrueType directory follows with every table inside the slice:
+
+```
+off=303451631 size=219736 tag=4096 seed=0x3f2  sfnt at +0x18, 22 tables
+  DSIG GDEF GPOS GSUB LTSH OS/2 VDMX cmap cvt  fpgm gasp glyf hdmx head hhea
+  hmtx loca maxp meta name post prep
+```
+
+One seed out of 1024 producing a self-consistent 22-entry table directory is not chance, so:
+the cipher, the table-derived tables, the state recurrence and the 0x18-byte payload header are
+all confirmed against shipped data, and `tag 4096` is **TrueType font**.
+
+**Open question (not explained).** With the correct seed the first `0x18` bytes decrypt to the
+same short string across unrelated records (`…x3_as`, then `02 00`), while everything after
+`+0x18` is valid. Either the header is encoded differently from the payload or it is written
+after decryption; the bytes after it are what matter and they are correct.
 
 ## Unverified
 

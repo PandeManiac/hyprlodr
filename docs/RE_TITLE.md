@@ -188,6 +188,30 @@ distinguishes texture-like from mesh-like content — which is exactly the fork 
 replacement needs. Proven by the container still being undecoded: the string cannot be read
 statically beyond its presence.
 
+## Confirmed: the game's fonts are pack records, and the title names are material graphs
+
+With the pack readable (see `RE_PACK.md`) the title's neighbourhood is now identifiable, and two
+new type tags appeared that the static dispatch reading did not show:
+
+- **`tag 4096` is a TrueType font** (eleven records, each a `0x18` header plus a full 22-table
+  sfnt). So the glyph shapes the menu and title are drawn with are *data*, not code.
+- **`tag 8`** is a second named-graph type. The 24 names `6eye, bronze, gold, hand1bones,
+  hand1fract, hand1nerves, hand1spec, hand1veins, hand1veinsgem, hand2, hand2bones, hand2fract,
+  hand2nerves, hand2spec, hand2veins, **hyper**, **hyper2**, silver, soratheye, sorathmask,
+  sorathtexture, sorathvector, unranked, unranked2` map one-to-one onto 24 contiguous records,
+  and the `hyper` / `hyper2` payloads decrypt to graphs whose sub-object names include
+  `projection`, `retrieval` and `entity`.
+
+**Consequence for the replacement.** `HYPER`/`DEMON` are absent from the executable because the
+lettering is *text drawn with these fonts* under an entity whose skin is one of the `hyper`
+graphs — not a wordmark bitmap. A replacement that renders `HYPR`/`LODR` should therefore go
+through the same font/glyph path and the same material, which is exactly the reuse the brief
+requires; nothing needs a text overlay.
+
+**Not yet established:** which of the eleven fonts the title uses, and whether the title's *string*
+also comes from the pack (a `tag 4` length-prefixed string) or is assembled by the lobby entity.
+The `hyper` material graph is the place to look next, now that it decrypts.
+
 ## Where this leaves the title (state of knowledge)
 
 - The title is content behind `entity_lobby_dagger_hyper*` (kind 4), resolved as

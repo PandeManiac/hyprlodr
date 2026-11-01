@@ -29,11 +29,26 @@
 #define HYPRLODR_ASSET_PACK_BYTES 306794369ull
 #define HYPRLODR_ASSET_NAME_MAX 96u
 /* Record arrays are small; a runaway scan would only slow the game down. */
-#define HYPRLODR_ASSET_MAX_RECORDS 400u
+#define HYPRLODR_ASSET_MAX_RECORDS 4000u
 /* Raw dumps of the first few accepted records: they settle where the name field
  * actually starts when the std::string probe does not match. */
 #define HYPRLODR_ASSET_DUMP_MAX 24u
 #define HYPRLODR_ASSET_SCAN_BYTES (1536ull * 1024ull * 1024ull)
+/* The resolver binary-searches std::string keys, and the records it returns carry
+ * empty names, so the keys must live in a parallel array: a std::vector<std::string>
+ * is 0x20 bytes per element with size at +0x10 and capacity at +0x18. */
+#define HYPRLODR_KEY_STRIDE 0x20u
+#define HYPRLODR_KEY_MIN 4u
+/* Eight strictly ascending names in a row is far beyond coincidence; a lone
+ * std::string-shaped window in unrelated memory is common. */
+#define HYPRLODR_KEY_RUN_MIN 8u
+#define HYPRLODR_KEY_MAX_EMIT 600u
+#define HYPRLODR_KEY_MAX_ARRAYS 192u
+/* The key vector and the record vector of one kind table are separate allocations
+ * pointed at by the same table struct, so a pointer to a known key array locates
+ * its record array and therefore the record of a known key. */
+#define HYPRLODR_REF_MAX 64u
+#define HYPRLODR_REF_WINDOW 0x30u
 #define HYPRLODR_ASSET_ATTEMPTS 40u
 #define HYPRLODR_ASSET_FIRST_DELAY_MS 4000u
 #define HYPRLODR_ASSET_ATTEMPT_MS 1000u
@@ -41,6 +56,11 @@
 static char g_log_path[1024] = "";
 static char g_status[32] = "idle";
 static unsigned g_records = 0;
+static unsigned g_key_arrays = 0;
+static unsigned g_keys = 0;
+static unsigned long long g_key_bases[HYPRLODR_KEY_MAX_ARRAYS];
+static unsigned g_key_base_count = 0;
+static unsigned g_refs = 0;
 
 static void set_status(const char *text) {
     snprintf(g_status, sizeof g_status, "%s", text);
@@ -95,16 +115,8 @@ static int record_parses(const unsigned char *record) {
     if (offset < HYPRLODR_ASSET_HEADER || length < HYPRLODR_ASSET_HEADER) return 0;
     if ((unsigned long long)offset + (unsigned long long)length > HYPRLODR_ASSET_PACK_BYTES)
         return 0;
-    switch (tag) {
-        case 1u:
-        case 2u:
-        case 4u:
-        case 0x20u:
-        case 0x100u:
-            return 1;
-        default:
-            return 0;
-    }
+    if (tag > 0xffffu) return 0;
+    return 1;
 }
 
 static void emit(FILE *log, const unsigned char *record) {
@@ -195,6 +207,103 @@ static int region_readable(const MEMORY_BASIC_INFORMATION64A *info) {
     return (info->Protect & wanted) != 0;
 }
 
+/* Heap strings are followed through their pointer, so the target has to be
+ * proven readable before it is dereferenced. */
+static int readable(const void *pointer, size_t length) {
+    MEMORY_BASIC_INFORMATION64A info;
+    unsigned long long base;
+    unsigned long long span;
+
+    if (VirtualQuery(pointer, &info, sizeof info) != sizeof info) return 0;
+    if (!region_readable(&info)) return 0;
+    base = (unsigned long long)(size_t)info.BaseAddress;
+    span = info.RegionSize;
+    if ((unsigned long long)(size_t)pointer + length > base + span) return 0;
+    return 1;
+}
+
+/* Reads one 0x20-byte std::string element of the key array. Returns 0 unless it
+ * holds a plausible asset key, i.e. printable ASCII with no spaces. */
+static int key_element(const unsigned char *element, char *out, size_t capacity) {
+    unsigned long long length = load_u64(element + 0x10);
+    unsigned long long room = load_u64(element + 0x18);
+    const unsigned char *chars;
+    size_t index;
+
+    if (out && capacity) out[0] = '\0';
+    if (!out || capacity <= HYPRLODR_KEY_MIN) return 0;
+    if (length < HYPRLODR_KEY_MIN || length > HYPRLODR_ASSET_NAME_MAX) return 0;
+    if (room < length || room > 0x10000ull) return 0;
+    if (room <= 15u) {
+        chars = element;
+    } else {
+        chars = (const unsigned char *)(size_t)load_u64(element);
+        if (!chars || !readable(chars, (size_t)length)) return 0;
+    }
+    for (index = 0; index < (size_t)length; ++index) {
+        unsigned char c = chars[index];
+        if (c < 0x21 || c > 0x7eu) return 0;
+    }
+    if (capacity <= (size_t)length) return 0;
+    memcpy(out, chars, (size_t)length);
+    out[length] = '\0';
+    return 1;
+}
+
+static void emit_key_run(FILE *log, const unsigned char *base, unsigned count) {
+    char name[HYPRLODR_ASSET_NAME_MAX + 2];
+    unsigned index;
+    unsigned emitted = count < HYPRLODR_KEY_MAX_EMIT ? count : HYPRLODR_KEY_MAX_EMIT;
+
+    if (g_key_arrays >= HYPRLODR_KEY_MAX_ARRAYS) return;
+    ++g_key_arrays;
+    if (g_key_base_count < HYPRLODR_KEY_MAX_ARRAYS) {
+        g_key_bases[g_key_base_count++] = (unsigned long long)(size_t)base;
+    }
+    g_keys += count;
+    fprintf(log, "{\"event\":\"key_array\",\"addr\":\"0x%llx\",\"count\":%u}\n",
+            (unsigned long long)(size_t)base, count);
+    for (index = 0; index < emitted; ++index) {
+        if (!key_element(base + (size_t)index * HYPRLODR_KEY_STRIDE, name, sizeof name)) break;
+        fprintf(log, "{\"event\":\"key\",\"addr\":\"0x%llx\",\"index\":%u,\"name\":\"%s\"}\n",
+                (unsigned long long)(size_t)base, index, name);
+    }
+}
+
+/* Finds runs of strictly ascending keys. Sorting is what separates the real key
+ * vector from the many 0x20-byte windows that happen to look like a std::string. */
+static void scan_keys_region(const unsigned char *base, size_t span, FILE *log) {
+    const size_t run_min = (size_t)HYPRLODR_KEY_RUN_MIN * HYPRLODR_KEY_STRIDE;
+    size_t index = 0;
+
+    if (span < run_min) return;
+    while (index + run_min <= span) {
+        const unsigned char *element = base + index;
+        char first[HYPRLODR_ASSET_NAME_MAX + 2];
+        char next[HYPRLODR_ASSET_NAME_MAX + 2];
+        unsigned count = 1;
+
+        if (g_key_arrays >= HYPRLODR_KEY_MAX_ARRAYS) return;
+        if (!key_element(element, first, sizeof first)) {
+            index += 8u;
+            continue;
+        }
+        while (count < HYPRLODR_KEY_MAX_EMIT &&
+               index + (size_t)(count + 1u) * HYPRLODR_KEY_STRIDE <= span &&
+               key_element(element + (size_t)count * HYPRLODR_KEY_STRIDE, next, sizeof next) &&
+               strcmp(next, first) > 0) {
+            memcpy(first, next, sizeof first);
+            ++count;
+        }
+        if (count >= HYPRLODR_KEY_RUN_MIN) {
+            emit_key_run(log, element, count);
+            index += (size_t)count * HYPRLODR_KEY_STRIDE;
+            continue;
+        }
+        index += 8u;
+    }
+}
+
 static unsigned scan_space(FILE *log, unsigned *regions_out, unsigned long long *bytes_out) {
     const unsigned long long limit = 0x00007ffffffeffffull;
     unsigned long long address = 0x10000ull;
@@ -207,7 +316,10 @@ static unsigned scan_space(FILE *log, unsigned *regions_out, unsigned long long 
         unsigned long long base;
         unsigned long long span;
 
-        if (VirtualQuery((const void *)(size_t)address, &info, sizeof info) != sizeof info) break;
+        if (VirtualQuery((const void *)(size_t)address, &info, sizeof info) != sizeof info) {
+            address += 0x1000ull;
+            continue;
+        }
         base = (unsigned long long)(size_t)info.BaseAddress;
         span = info.RegionSize;
         if (span == 0) {
@@ -218,12 +330,78 @@ static unsigned scan_space(FILE *log, unsigned *regions_out, unsigned long long 
             ++regions;
             scanned += span;
             (void)scan_region((const unsigned char *)(size_t)base, (size_t)span, log);
+            scan_keys_region((const unsigned char *)(size_t)base, (size_t)span, log);
         }
         address = base + span;
     }
     *regions_out = regions;
     *bytes_out = scanned;
     return g_records;
+}
+
+/* Second pass: find the table struct that owns a discovered key array by looking
+ * for the array's address as a stored pointer, and dump the pointers around it. */
+static int is_key_base(unsigned long long value) {
+    unsigned index;
+
+    for (index = 0; index < g_key_base_count; ++index) {
+        /* begin, and the end/capacity pointers, which are the other two words of
+         * the vector object: any of them identifies the owning table struct. */
+        if (value >= g_key_bases[index] && value <= g_key_bases[index] + 0x10000ull) return 1;
+    }
+    return 0;
+}
+
+static void scan_refs_region(const unsigned char *base, size_t span, FILE *log) {
+    size_t index;
+
+    if (g_refs >= HYPRLODR_REF_MAX || span < 2u * HYPRLODR_REF_WINDOW) return;
+    for (index = 0; index + sizeof(unsigned long long) <= span; index += 8u) {
+        unsigned long long value = load_u64(base + index);
+        size_t start;
+        size_t cursor;
+
+        if (!is_key_base(value)) continue;
+        if (g_refs >= HYPRLODR_REF_MAX) return;
+        ++g_refs;
+        start = index > HYPRLODR_REF_WINDOW ? index - HYPRLODR_REF_WINDOW : 0;
+        if (start + 2u * HYPRLODR_REF_WINDOW > span) start = span > 2u * HYPRLODR_REF_WINDOW
+                                                              ? span - 2u * HYPRLODR_REF_WINDOW
+                                                              : 0;
+        fprintf(log, "{\"event\":\"key_ref\",\"key\":\"0x%llx\",\"at\":\"0x%llx\",\"window\":\"0x%llx\","
+                     "\"quad\":[", value, (unsigned long long)(size_t)(base + index),
+                (unsigned long long)(size_t)(base + start));
+        for (cursor = 0; cursor + 8u <= 2u * HYPRLODR_REF_WINDOW; cursor += 8u) {
+            fprintf(log, "%s\"0x%llx\"", cursor ? "," : "", load_u64(base + start + cursor));
+        }
+        fprintf(log, "]}\n");
+    }
+}
+
+static void scan_refs_space(FILE *log) {
+    const unsigned long long limit = 0x00007ffffffeffffull;
+    unsigned long long address = 0x10000ull;
+
+    while (address < limit && g_refs < HYPRLODR_REF_MAX) {
+        MEMORY_BASIC_INFORMATION64A info;
+        unsigned long long base;
+        unsigned long long span;
+
+        if (VirtualQuery((const void *)(size_t)address, &info, sizeof info) != sizeof info) {
+            address += 0x1000ull;
+            continue;
+        }
+        base = (unsigned long long)(size_t)info.BaseAddress;
+        span = info.RegionSize;
+        if (span == 0) {
+            address = base + 0x1000ull;
+            continue;
+        }
+        if (region_readable(&info)) {
+            scan_refs_region((const unsigned char *)(size_t)base, (size_t)span, log);
+        }
+        address = base + span;
+    }
 }
 
 static DWORD WINAPI probe_thread(LPVOID unused) {
@@ -246,8 +424,14 @@ static DWORD WINAPI probe_thread(LPVOID unused) {
         g_records = 0;
         records = scan_space(log, &regions, &bytes);
         fprintf(log, "{\"event\":\"asset_scan\",\"attempt\":%u,\"regions\":%u,\"bytes\":%llu,"
-                     "\"records\":%u}\n", attempt, regions, bytes, records);
-        if (records) break;
+                     "\"records\":%u,\"key_arrays\":%u,\"keys\":%u}\n", attempt, regions,
+                bytes, records, g_key_arrays, g_keys);
+        if (records && g_key_arrays) break;
+    }
+    if (g_key_base_count) {
+        scan_refs_space(log);
+        fprintf(log, "{\"event\":\"ref_scan\",\"refs\":%u,\"key_bases\":%u}\n", g_refs,
+                g_key_base_count);
     }
     fclose(log);
     set_status(records ? "found" : "not_found");
