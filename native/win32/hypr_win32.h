@@ -48,6 +48,7 @@ typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
 #endif
 
 #define WINAPI __stdcall
+#define CALLBACK __stdcall
 
 #define DLL_PROCESS_ATTACH 1
 #define DLL_PROCESS_DETACH 0
@@ -58,6 +59,7 @@ typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
 #define GENERIC_READ 0x80000000u
 #define GENERIC_WRITE 0x40000000u
 #define CREATE_ALWAYS 2u
+#define OPEN_ALWAYS 4u
 #define OPEN_EXISTING 3u
 #define FILE_ATTRIBUTE_NORMAL 0x00000080u
 #define FILE_SHARE_READ 0x00000001u
@@ -164,6 +166,124 @@ HANDLE WINAPI CreateToolhelp32Snapshot(DWORD flags, DWORD process_id);
 BOOL WINAPI Module32First(HANDLE snapshot, MODULEENTRY32A *entry);
 BOOL WINAPI Module32Next(HANDLE snapshot, MODULEENTRY32A *entry);
 LPSTR WINAPI GetCommandLineA(void);
+DWORD WINAPI GetFileSize(HANDLE file, DWORD *high);
+
+/* --- user32/gdi32: the title overlay ----------------------------------------
+ * Only the entry points the overlay uses; this stays a minimal target, not a
+ * general purpose windows.h. */
+typedef void *HWND;
+typedef void *HDC;
+typedef void *HGDIOBJ;
+typedef void *HBITMAP;
+typedef void *HMENU;
+typedef void *HBRUSH;
+typedef void *HICON;
+typedef void *HCURSOR;
+typedef long long LPARAM;
+typedef unsigned long long WPARAM;
+typedef long long LRESULT;
+typedef DWORD COLORREF;
+typedef LRESULT (*WNDPROC)(HWND, UINT, WPARAM, LPARAM);
+
+typedef struct {
+    LONG left;
+    LONG top;
+    LONG right;
+    LONG bottom;
+} RECT;
+
+typedef struct {
+    LONG x;
+    LONG y;
+} POINT;
+
+typedef struct {
+    LONG cx;
+    LONG cy;
+} SIZE;
+
+typedef struct {
+    BYTE b;
+    BYTE g;
+    BYTE r;
+    BYTE reserved;
+} RGBQUAD;
+
+typedef struct {
+    DWORD biSize;
+    LONG biWidth;
+    LONG biHeight;
+    WORD biPlanes;
+    WORD biBitCount;
+    DWORD biCompression;
+    DWORD biSizeImage;
+    LONG biXPelsPerMeter;
+    LONG biYPelsPerMeter;
+    DWORD biClrUsed;
+    DWORD biClrImportant;
+} BITMAPINFOHEADER;
+
+typedef struct {
+    BITMAPINFOHEADER bmiHeader;
+    RGBQUAD bmiColors[1];
+} BITMAPINFO;
+
+typedef struct {
+    BYTE BlendOp;
+    BYTE BlendFlags;
+    BYTE SourceConstantAlpha;
+    BYTE AlphaFormat;
+} BLENDFUNCTION;
+
+typedef struct {
+    UINT style;
+    WNDPROC lpfnWndProc;
+    int cbClsExtra;
+    int cbWndExtra;
+    HINSTANCE hInstance;
+    HICON hIcon;
+    HCURSOR hCursor;
+    HBRUSH hbrBackground;
+    LPCSTR lpszMenuName;
+    LPCSTR lpszClassName;
+} WNDCLASSA;
+
+#define WS_POPUP 0x80000000u
+#define WS_EX_LAYERED 0x00080000u
+#define WS_EX_TRANSPARENT 0x00000020u
+#define WS_EX_TOPMOST 0x00000008u
+#define WS_EX_TOOLWINDOW 0x00000080u
+#define WS_EX_NOACTIVATE 0x08000000u
+#define SWP_NOACTIVATE 0x0010u
+#define SWP_SHOWWINDOW 0x0040u
+#define DIB_RGB_COLORS 0u
+
+WORD WINAPI RegisterClassA(const WNDCLASSA *window_class);
+HWND WINAPI CreateWindowExA(DWORD ex_style, LPCSTR class_name, LPCSTR window_name, DWORD style,
+                            int x, int y, int width, int height, HWND parent, HMENU menu,
+                            HINSTANCE instance, void *parameter);
+LRESULT WINAPI DefWindowProcA(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+BOOL WINAPI ShowWindow(HWND window, int command);
+BOOL WINAPI SetWindowPos(HWND window, HWND insert_after, int x, int y, int width, int height,
+                         UINT flags);
+BOOL WINAPI UpdateLayeredWindow(HWND window, HDC destination, POINT *destination_point,
+                                SIZE *size, HDC source, POINT *source_point, COLORREF color_key,
+                                BLENDFUNCTION *blend, DWORD flags);
+BOOL WINAPI DestroyWindow(HWND window);
+BOOL WINAPI GetWindowRect(HWND window, RECT *rect);
+BOOL WINAPI GetClientRect(HWND window, RECT *rect);
+BOOL WINAPI IsWindowVisible(HWND window);
+BOOL WINAPI EnumWindows(BOOL (*callback)(HWND, LPARAM), LPARAM parameter);
+DWORD WINAPI GetWindowThreadProcessId(HWND window, DWORD *process_id);
+short WINAPI GetAsyncKeyState(int key);
+HDC WINAPI GetDC(HWND window);
+int WINAPI ReleaseDC(HWND window, HDC device);
+HDC WINAPI CreateCompatibleDC(HDC device);
+BOOL WINAPI DeleteDC(HDC device);
+HBITMAP WINAPI CreateDIBSection(HDC device, const BITMAPINFO *info, UINT usage, void **bits,
+                                HANDLE section, DWORD offset);
+HGDIOBJ WINAPI SelectObject(HDC device, HGDIOBJ object);
+BOOL WINAPI DeleteObject(HGDIOBJ object);
 
 #ifdef __cplusplus
 }

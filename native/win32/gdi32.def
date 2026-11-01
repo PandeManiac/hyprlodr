@@ -1,0 +1,8 @@
+; GDI32 entry points HYPRLODR uses for the title overlay.
+LIBRARY GDI32.dll
+EXPORTS
+CreateCompatibleDC
+CreateDIBSection
+DeleteDC
+DeleteObject
+SelectObject

@@ -18,6 +18,7 @@
 #include "loader.h"
 #include "file_hook.h"
 #include "game_anchors.h"
+#include "title_overlay.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -245,6 +246,40 @@ static DWORD bootstrap_delay_ms(void) {
     return result;
 }
 
+/* `title_ms` in hyprlodr-config.json overrides how long the title overlay stays
+ * up; 0 (the default) means "until the player presses a key or clicks". */
+static unsigned bootstrap_title_ms(void) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-config.json", g_game_dir);
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    unsigned result = 0;
+    char line[512];
+    while (fgets(line, (int)sizeof line, file)) {
+        const char *key = find_literal(line, "\"title_ms\"");
+        if (!key) continue;
+        const char *cursor = key + strlen("\"title_ms\"");
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+        if (*cursor != ':') continue;
+        ++cursor;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (*cursor < '0' || *cursor > '9') continue;
+        unsigned long value = 0;
+        while (*cursor >= '0' && *cursor <= '9') {
+            value = value * 10ul + (unsigned long)(*cursor - '0');
+            if (value > 600000ul) {
+                value = 600000ul;
+                break;
+            }
+            ++cursor;
+        }
+        result = (unsigned)value;
+        break;
+    }
+    fclose(file);
+    return result;
+}
+
 static void write_attach_record(const char *stage, int status) {
     if (!g_anchors_checked) inspect_main_module();
     FILE *file = fopen(g_evidence_path, "w");
@@ -297,6 +332,8 @@ static void write_attach_record(const char *stage, int status) {
             fputc("0123456789abcdef"[g_module.base[HYPRLODR_GAME_TABLE_T0_RVA + index] & 0xf], file);
         }
     }
+    fputs("\",\"title_overlay\":\"", file);
+    json_escape(file, hyprlodr_title_overlay_status());
     fputs("\",\"file_hook\":\"", file);
     json_escape(file, hyprlodr_file_hook_status());
     fputs("\",\"file_hook_detail\":\"", file);
@@ -379,6 +416,21 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
 
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);
+
+    /* The title overlay is gated on *mods*, not on the loader being installed:
+     * a run with zero mods must show the game's own title screen. */
+    /* The loader's own cap is internal; asking for more ids than it can hold is
+     * harmless and keeps this call free of a private constant. */
+    const char *ids[128];
+    size_t initialized = hyprlodr_loader_order(g_loader, ids, sizeof ids / sizeof ids[0]);
+    if (status == HYPRLODR_OK && initialized > 0) {
+        char title_image[1024];
+        char title_log[1024];
+        snprintf(title_image, sizeof title_image, "%s\\hyprlodr-title.bmp", g_game_dir);
+        snprintf(title_log, sizeof title_log, "%s\\hyprlodr-title.jsonl", g_game_dir);
+        (void)hyprlodr_title_overlay_start(title_image, title_log, bootstrap_title_ms());
+    }
+
     write_attach_record(status == HYPRLODR_OK ? "mods_loaded" : "mods_failed", status);
     return 0;
 }

@@ -1,0 +1,35 @@
+{
+  "kind": "mod-gated title overlay in the real game",
+  "captured": "2026-11-01",
+  "one_mod": {
+    "mods_initialized": 6,
+    "title_log": [
+      {
+        "event": "title_overlay",
+        "status": "shown",
+        "width": 1288,
+        "height": 754
+      },
+      {
+        "event": "title_overlay",
+        "status": "hidden",
+        "width": 1288,
+        "height": 754
+      }
+    ],
+    "screenshot": "docs/evidence/2026-11-01-title-overlay.png",
+    "note": "overlay window sized 1288x754 over the game window; the wordmark is visible above the game's own title screen"
+  },
+  "zero_mods": {
+    "mods_initialized": 0,
+    "attach_title_overlay": "not_started",
+    "title_log": null,
+    "overlay_windows": 0,
+    "note": "with an empty mods directory nothing is created and the game's own title screen is what the player sees"
+  },
+  "mechanism": "topmost, click-through, per-pixel-alpha Win32 window (WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_TOPMOST|WS_EX_NOACTIVATE) owned by the game process via the proxy; 24/32-bit BMP art with brightness-derived alpha",
+  "limits": "an overlay window, not a change to what the game renders; the container format is still undecoded, so the game's own art is untouched",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

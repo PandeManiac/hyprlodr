@@ -326,6 +326,12 @@ FILE *fopen(const char *path, const char *mode) {
     if (mode[0] == 'r') {
         access = GENERIC_READ;
         disposition = OPEN_EXISTING;
+    } else if (mode[0] == 'a') {
+        /* Append: FILE_APPEND_DATA makes every WriteFile land at the end, and
+         * OPEN_ALWAYS keeps what is already there. Treating this as "w" would
+         * silently truncate, which is exactly what a log must never do. */
+        access = FILE_APPEND_DATA;
+        disposition = OPEN_ALWAYS;
     } else {
         access = GENERIC_WRITE;
         disposition = CREATE_ALWAYS;
@@ -339,7 +345,7 @@ FILE *fopen(const char *path, const char *mode) {
         return NULL;
     }
     file->handle = handle;
-    file->writable = access == GENERIC_WRITE;
+    file->writable = access != GENERIC_READ;
     return file;
 }
 

@@ -1,0 +1,20 @@
+; USER32 entry points HYPRLODR uses for the title overlay.
+; Converted to a .lib by llvm-dlltool in tools/build_windows.sh.
+LIBRARY USER32.dll
+EXPORTS
+CreateWindowExA
+DefWindowProcA
+DestroyWindow
+EnumWindows
+GetAsyncKeyState
+GetClientRect
+GetDC
+GetModuleHandleA
+GetWindowRect
+GetWindowThreadProcessId
+IsWindowVisible
+RegisterClassA
+ReleaseDC
+SetWindowPos
+ShowWindow
+UpdateLayeredWindow

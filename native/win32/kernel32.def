@@ -18,6 +18,7 @@ GetCurrentThreadId
 GetProcessHeap
 GetTickCount
 GetModuleFileNameA
+GetFileSize
 GetModuleHandleA
 GetProcAddress
 GetStdHandle

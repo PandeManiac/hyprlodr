@@ -25,6 +25,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from hyprl_diagnose import find_installations, sha256  # noqa: E402
 
 MANIFEST = "hyprlodr-install-manifest.json"
+
+# Title art shown above the game while at least one mod is loaded. Installed only
+# when the game does not already have one, so a user's own art survives upgrades.
+TITLE = "hyprlodr-title.bmp"
+TITLE_SOURCE = Path(__file__).resolve().parent.parent / "assets" / "title.bmp"
 PROXY = "OpenAL32.dll"
 ORIGINAL = "OpenAL32_real.dll"
 MOD_DIR = "mods"
@@ -136,6 +141,7 @@ def cmd_install(args) -> int:
     files: dict[str, dict] = {}
     backups: dict[str, str] = {}
     installed_mods: list[str] = []
+    title_created = False
     created_mods_dir = not (game / MOD_DIR).exists()
     original_created = False
     manifest_written = False
@@ -147,6 +153,8 @@ def cmd_install(args) -> int:
             (game / ORIGINAL).rename(game / PROXY)
         for name in installed_mods:
             (game / MOD_DIR / name).unlink(missing_ok=True)
+        if title_created:
+            (game / TITLE).unlink(missing_ok=True)
         restore_backups(game, backups)
         if manifest_written:
             manifest_path(game).unlink(missing_ok=True)
@@ -166,6 +174,15 @@ def cmd_install(args) -> int:
         proxy_hash = sha256(game / PROXY)
         files[PROXY] = {"sha256": proxy_hash, "installed_sha256": proxy_hash,
                         "role": "HYPRLODR proxy DLL"}
+
+        # The title overlay needs art in the game directory; the loader's own is a
+        # default, never an overwrite of something the user put there.
+        if TITLE_SOURCE.is_file() and not (game / TITLE).exists():
+            shutil.copy2(TITLE_SOURCE, game / TITLE)
+            title_hash = sha256(game / TITLE)
+            title_created = True
+            files[TITLE] = {"sha256": title_hash, "installed_sha256": title_hash,
+                            "role": "title screen art shown when mods are loaded"}
 
         if mods_source.is_dir():
             target = game / MOD_DIR
@@ -245,6 +262,13 @@ def cmd_uninstall(args) -> int:
         path.unlink()
     if kept:
         print("kept mod file(s) that changed since installation: " + ", ".join(sorted(kept)))
+    title_record = (manifest or {}).get("files", {}).get(TITLE, {}).get("installed_sha256")
+    if title_record and (game / TITLE).is_file():
+        if sha256(game / TITLE) == title_record:
+            (game / TITLE).unlink()
+            print(f"removed {TITLE}")
+        else:
+            print(f"kept {TITLE} (changed since installation)")
     restore_backups(game, (manifest or {}).get("backups", {}))
     if (manifest or {}).get("backups"):
         print("restored mod file(s) that existed before installation")
