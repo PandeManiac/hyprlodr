@@ -243,3 +243,17 @@ sha256sum "$GAME/OpenAL32.dll"    # expect 396f8873...420b4
 - No CI runs the Windows build automatically; `tools/build_windows.sh` and `tools/test_windows.sh` are the entry points a runner should call.
 - Sanitizers are not wired into the Linux build yet.
 - The package validator/packer and the desktop manager now exist, with their own suites (`package_suite`, `manager_suite`); they are no longer unverified areas.
+
+## In-game file I/O (2026-11-01)
+
+Reading `/proc/<pid>/fd` during a live session showed `asset/asset` held open by the game while the file hook logged nothing. The import table explains it: the game imports `MSVCP140!_Fiopen`, the C++ stream open, whose call into the UCRT never passes an import slot. After intercepting `_Fiopen` (and installing the hook from `DllMain` so the ~200 ms start-up window is covered), a plain run logged 14 opens:
+
+| t_ms | via | path |
+|---|---|---|
+| 4 | `_Fiopen` | `steamuser.log` |
+| 39 | `CreateFileA` | `\\.\pipe\wine_plugplay` |
+| 215 | `_Fiopen` | `asset/asset` |
+| 1257 | `_Fiopen` | `…/HyperDemon/training` (absent) |
+| 1266–1274 | `_Fiopen` | `…/HyperDemon/config`, `cache/scores`, `cache/names`, `user` |
+
+With a mod registering `asset/asset` → its own file, the same open came back `"redirected":true,"opened":"…\\hyprlodr-state\\r.asset\\asset.bin"`, 7/7 mods initialized and the game ran normally (the replacement was a hardlink, so the bytes were identical). Hook detail for that run: `CreateFileA=patched(7) fopen=patched(1) fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1) _wfopen_s=absent modules=39`.

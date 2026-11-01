@@ -1,0 +1,35 @@
+{
+  "kind": "in-game asset redirection through the game's own loader",
+  "captured": "2026-11-01",
+  "finding": "The asset container is opened via MSVCP140!_Fiopen (C++ stream open). CreateFileA/fopen/fopen_s/_wfopen slots were patched in 39 modules and logged no asset open, while /proc showed asset/asset held open; intercepting _Fiopen captured it at t_ms=215.",
+  "hook_detail": "CreateFileA=patched(7) fopen=patched(1) fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1) _wfopen_s=absent modules=39",
+  "capture": {
+    "seq": 3,
+    "t_ms": 215,
+    "via": "_Fiopen",
+    "redirected": false,
+    "requested": "asset/asset",
+    "opened": "asset/asset"
+  },
+  "redirect_experiment": {
+    "mod": "r.asset",
+    "suffix": "asset/asset",
+    "replacement": "<game>/hyprlodr-state/r.asset/asset.bin (hardlink to the original, identical bytes)",
+    "asset_bytes": 306794369,
+    "observed": {
+      "seq": 3,
+      "t_ms": 231,
+      "via": "_Fiopen",
+      "redirected": true,
+      "requested": "asset/asset",
+      "opened": "S:\\\\steamapps\\\\common\\\\hyperdemon\\\\hyprlodr-state\\\\r.asset\\\\asset.bin"
+    },
+    "mods_initialized": 7,
+    "redirects_published": 1,
+    "session_opens_logged": 14
+  },
+  "meaning": "A mod replaced the file the game's asset loader opened. Because the replacement was a hardlink to the same bytes, the game starting and running normally shows the substitution is transparent; a mod that ships different bytes now has a working path to change game content.",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

@@ -394,6 +394,13 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         DisableThreadLibraryCalls((HMODULE)instance);
         /* Chain, do not replace: Steam's crash handler stays in charge. */
         g_previous_filter = SetUnhandledExceptionFilter(hyprlodr_crash_filter);
+        /* Patch the executable's own import slots *now*: hyperdemon.exe opens its
+         * asset before the worker thread below gets scheduled, so a hook installed
+         * later silently misses the game's first (and often only) file I/O. The
+         * loader does not exist yet, which is fine: no redirect is published. */
+        char early_log[1024];
+        snprintf(early_log, sizeof early_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
+        (void)hyprlodr_file_hook_install_early(NULL, early_log);
         /* Never run mod code or file I/O for mods under the loader lock. */
         CreateThread(NULL, 0, bootstrap, NULL, 0, NULL);
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {

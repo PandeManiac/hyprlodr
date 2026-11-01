@@ -18,6 +18,13 @@
  * process: a host that cannot patch reports why through the status string. */
 int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path);
 
+/* Patch the main module from DllMain, before any game code runs. hyperdemon.exe
+ * opens assets during its own start-up, which raced the worker-thread install and
+ * made those opens invisible. `loader` may be NULL here because no redirect is
+ * published yet; hyprlodr_file_hook_install() completes the walk over every
+ * loaded module and is safe to call afterwards. Idempotent. */
+int hyprlodr_file_hook_install_early(hyprlodr_loader *loader, const char *log_path);
+
 /* "installed", "installed_no_log", "no_image", "create_file_a_not_imported", ...
  * Always non-NULL so it can be copied straight into the attach record. */
 const char *hyprlodr_file_hook_status(void);

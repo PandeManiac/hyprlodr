@@ -56,6 +56,9 @@ typedef HANDLE(WINAPI *create_file_fn)(LPCSTR name, DWORD access, DWORD share, v
 typedef FILE *(*fopen_fn)(const char *name, const char *mode);
 typedef int (*fopen_s_fn)(FILE **out, const char *name, const char *mode);
 typedef FILE *(*wfopen_fn)(const wchar_t *name, const wchar_t *mode);
+/* MSVC++ stream open: exported by MSVCP140.dll and imported by the game. It is
+ * the narrow (char) entry point, so no wide conversion is needed. */
+typedef FILE *(*fiopen_fn)(const char *name, int mode, int prot);
 typedef int (*wfopen_s_fn)(FILE **out, const wchar_t *name, const wchar_t *mode);
 
 typedef struct {
@@ -69,6 +72,7 @@ static create_file_fn g_original;
 static fopen_fn g_original_fopen;
 static fopen_s_fn g_original_fopen_s;
 static wfopen_fn g_original_wfopen;
+static fiopen_fn g_original_fiopen;
 static wfopen_s_fn g_original_wfopen_s;
 static hyprlodr_loader *g_loader;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
@@ -77,6 +81,10 @@ static unsigned g_logged;
  * a long session then says *when* the game touches a file, not just that it did. */
 static DWORD g_start_tick;
 static int g_installed;
+/* Set once the main module has been patched from DllMain, and once the module
+ * walk has completed, so each phase runs at most once. */
+static int g_started;
+static int g_complete;
 static const char *g_status = "not_attempted";
 /* Which targets were patched, so a host reports exactly what is intercepted. */
 static char g_detail[320] = "";
@@ -228,6 +236,22 @@ static FILE *intercept_fopen(const char *name, const char *mode) {
     return file;
 }
 
+/* The C++ stream entry point. This is the layer that sees the game's asset I/O:
+ * std::ifstream calls _Fiopen inside MSVCP140, and that call goes on to the UCRT
+ * by direct call, not through an import slot, so patching fopen/_wfopen slots can
+ * never observe it. A real run held asset/asset open while every other target
+ * logged zero opens, which is what pointed here. */
+static FILE *intercept_fiopen(const char *name, int mode, int prot) {
+    char replacement[HYPRLODR_REDIRECT_PATH_MAX];
+    int redirected = 0;
+    fiopen_fn original = g_original_fiopen;
+    if (!original) return NULL;
+    const char *effective = resolve_path(name, replacement, &redirected);
+    FILE *file = original(effective, mode, prot);
+    record_open(name, effective, "_Fiopen", redirected, file != NULL);
+    return file;
+}
+
 /* UTF-16 path -> UTF-8, so the registry (which is narrow) can match it. */
 static int wide_to_utf8(const wchar_t *wide, char *out, int capacity) {
     if (!wide) return 0;
@@ -344,12 +368,12 @@ static int find_import_slot(const pe_layout *pe, const char *dll_filter, const c
     return 0;
 }
 
-/* Patch one slot, keeping the resolved original for the shim. Returns 1 on
- * success, 0 when the slot is absent, -1 when it cannot be written. */
+/* Patch one slot, keeping the resolved original for the shim.
+ * 1 = patched now, 2 = already ours, 0 = slot absent, -1 = cannot write.
+ * The distinction keeps the per-target count honest across the two install
+ * phases, and never overwrites a saved original with the shim. */
 static int patch_slot(void *slot, void *replacement, void **original) {
-    /* Already ours (the main module is patched, then met again in the module
-     * walk): never overwrite the saved original with the shim. */
-    if (read_u64((const uint8_t *)slot) == (uint64_t)(uintptr_t)replacement) return 1;
+    if (read_u64((const uint8_t *)slot) == (uint64_t)(uintptr_t)replacement) return 2;
     DWORD previous = 0;
     *original = (void *)(uintptr_t)read_u64((const uint8_t *)slot);
     /* The shim may run on another thread the instant the slot changes: publish
@@ -380,6 +404,8 @@ static hook_target g_targets[] = {
      "fopen_s", 0, 0},
     {"crt-stdio", "_wfopen", (void *)(uintptr_t)&intercept_wfopen, (void **)&g_original_wfopen,
      "_wfopen", 0, 0},
+    {"msvcp140.dll", "?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z", (void *)(uintptr_t)&intercept_fiopen,
+     (void **)&g_original_fiopen, "_Fiopen", 0, 0},
     {"crt-stdio", "_wfopen_s", (void *)(uintptr_t)&intercept_wfopen_s,
      (void **)&g_original_wfopen_s, "_wfopen_s", 0, 0},
 };
@@ -426,9 +452,10 @@ static void patch_targets(const pe_layout *layout, hook_target *targets, size_t 
             continue;
         }
         if (found == 0) continue;
-        if (patch_slot(slot, targets[index].replacement, targets[index].original) == 1) {
+        int result = patch_slot(slot, targets[index].replacement, targets[index].original);
+        if (result > 0) {
             targets[index].state = 1;
-            ++targets[index].patched;
+            if (result == 1) ++targets[index].patched;
         } else {
             targets[index].state = -1;
         }
@@ -462,15 +489,44 @@ static unsigned patch_loaded_modules(hook_target *targets, size_t count) {
     return modules;
 }
 
-int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
-    if (g_installed) return 0;
-    if (!loader || !log_path || !*log_path) return fail_install("invalid_argument");
+/* Phase 1, called from DllMain: open the log and patch the main module. The
+ * game's own asset I/O starts within milliseconds of load, so waiting for the
+ * worker thread loses it. Only the executable's import slots are touched here;
+ * enumerating modules under the loader lock is left to phase 2. */
+int hyprlodr_file_hook_install_early(hyprlodr_loader *loader, const char *log_path) {
+    if (g_started) return g_installed ? 0 : -1;
+    if (!log_path || !*log_path) return -1;
+    g_started = 1;
     g_loader = loader;
     g_start_tick = GetTickCount();
 
     /* Open the log before patching, so this open cannot re-enter a shim. */
     g_log = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    pe_layout layout;
+    if (prepare_layout((const uint8_t *)GetModuleHandleA(NULL), &layout) != 0) {
+        g_status = "early_main_module_unparsed";
+        return -1;
+    }
+    hook_target *targets = g_targets;
+    const size_t target_count = sizeof g_targets / sizeof g_targets[0];
+    patch_targets(&layout, targets, target_count);
+    unsigned patched = 0;
+    for (size_t index = 0; index < target_count; ++index)
+        if (targets[index].patched) ++patched;
+    g_installed = (int)patched;
+    g_status = patched ? "installed_early_main_only" : "early_no_import_patched";
+    return patched ? 0 : -1;
+}
+
+int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
+    if (g_complete) return 0;
+    if (!loader || !log_path || !*log_path) return fail_install("invalid_argument");
+    g_loader = loader;
+    /* DllMain may already have patched the main module; this is idempotent. */
+    if (!g_started) (void)hyprlodr_file_hook_install_early(loader, log_path);
+    g_loader = loader;
 
     pe_layout layout;
     if (prepare_layout((const uint8_t *)GetModuleHandleA(NULL), &layout) != 0)
@@ -480,6 +536,7 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     const size_t target_count = sizeof g_targets / sizeof g_targets[0];
     patch_targets(&layout, targets, target_count);
     unsigned modules = patch_loaded_modules(targets, target_count);
+    g_installed = 0;
     for (size_t index = 0; index < target_count; ++index)
         if (targets[index].patched) ++g_installed;
 
@@ -506,6 +563,7 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
 
     if (g_installed == 0) return fail_install("no_import_patched");
     g_status = g_log == INVALID_HANDLE_VALUE ? "installed_no_log" : "installed";
+    g_complete = 1;
     return 0;
 }
 

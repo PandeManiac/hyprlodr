@@ -66,7 +66,8 @@ if (HYPRLODR_HOST_API_HAS(host, file_redirect) && host->file_redirect) {
 - The suffix must begin at a path separator (`level1.asset` matches `...\\data\\level1.asset`, not `...\\mylevel1.asset`). Matching folds ASCII case and treats `\` and `/` alike, because the game mixes both.
 - A duplicate suffix is refused: the first registration wins and stays, so two mods cannot silently fight over one path.
 - Redirects are recorded as `file_redirect` events and become active only after **every** mod has initialized, so a half-initialized set never changes what the game reads. On initialization failure the journal removes them again; on shutdown they stop applying immediately.
-- Which opens the host can redirect depends on that host. The Linux test host exposes `--redirect-probe PATH`; the Windows proxy patches the game's own import slots. Measure, do not assume: the shipped `hyperdemon.exe` performed no narrow-path opens at all in a real run (see `docs/TESTING.md`), so redirection is currently proven against the stand-in host and not yet against the game's asset loader.
+- Which opens the host can redirect depends on that host. The Linux test host exposes `--redirect-probe PATH`; the Windows proxy patches the game's own import slots.
+- **Proven on the game's real asset loader (2026-11-01).** The asset container is opened through `MSVCP140!_Fiopen` (the C++ stream open), not through `CreateFileA`/`fopen`/`_wfopen` — those slots are imported and patched, yet a live session opened `asset/asset` while they logged nothing. The proxy now intercepts `_Fiopen` too, and a mod that redirects `asset/asset` to its own file makes the game open that file: `"requested":"asset/asset","redirected":true,"opened":"…\\hyprlodr-state\\r.asset\\asset.bin"`. The probe used a hardlink to the original bytes, so the game running normally also proves the substitution is transparent. Evidence: `docs/evidence/2026-11-01-asset-redirect.json`.
 
 ## Game image access (ABI 5)
 
@@ -170,7 +171,7 @@ All calls take `host->context`. Every function may return failure; treat failure
 | `capability_register(context, name, provider_id)` | Publish a capability; duplicate names fail. |
 | `capability_has(context, name)` | Non-zero if the capability exists. |
 | `is_loaded(context, mod_id)` | Non-zero if that mod is currently initialized. |
-| `file_redirect(context, suffix, replacement_path)` | Open `replacement_path` instead whenever the game opens a path ending in `suffix` (ABI 4). |
+| `file_redirect(context, suffix, replacement_path)` | Open `replacement_path` instead whenever the game opens a path ending in `suffix` (ABI 4). Verified against the game's own asset container. |
 | `image_size(context)` | Bytes of the running image a mod may read; 0 when the host offers none (ABI 5). |
 | `build_matches(context)` | Non-zero only when the image is the exact verified build (ABI 5). |
 | `image_read(context, offset, dst, length)` | Copy bytes from the image; refused when the build is unverified or the range is outside it (ABI 5). |

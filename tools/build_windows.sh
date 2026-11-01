@@ -85,6 +85,10 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/image_mod.dll" \
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/image_writer.c" -o "$OUT/obj/image_writer.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/image_writer.dll" \
   "$OUT/obj/image_writer.obj" "$CRT_OBJ" "$K32"
+# ABI 4 on the real asset path: redirect the asset container to an identical file.
+"$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/asset_redirect.c" -o "$OUT/obj/asset_redirect.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/asset_redirect.dll" \
+  "$OUT/obj/asset_redirect.obj" "$CRT_OBJ" "$K32"
 
 
 
