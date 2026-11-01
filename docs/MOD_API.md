@@ -1,4 +1,4 @@
-# Mod API (ABI 3)
+# Mod API (ABI 4)
 
 A HYPRLODR mod is a native shared library (`mods/<name>.dll` on Windows, `.so` on Linux) exporting exactly one symbol.
 
@@ -52,6 +52,22 @@ if (HYPRLODR_HOST_API_HAS(host, state_dir) && host->state_dir) {
 - The directory is user data: it survives uninstall, upgrades and process restarts. Files written in one session are readable in the next (covered by the `state_dir_persists_across_runs` scenario). Never delete files you did not create.
 - `state_set`/`state_get` remain the in-memory channel for cross-mod coordination during one session; they are not persisted. The loader emits a `state_dir` event when it reserves a directory, and `state_dir_failed` if it cannot.
 
+## File redirection (ABI 4)
+
+`file_redirect()` asks the host to open a different file whenever the game opens a path ending in a suffix you own:
+
+```c
+if (HYPRLODR_HOST_API_HAS(host, file_redirect) && host->file_redirect) {
+    /* the game's own asset path -> a file this mod ships */
+    if (host->file_redirect(host->context, "data/level1.asset", "C:/mods/mine/level1.asset") != 0) return -1;
+}
+```
+
+- The suffix must begin at a path separator (`level1.asset` matches `...\\data\\level1.asset`, not `...\\mylevel1.asset`). Matching folds ASCII case and treats `\` and `/` alike, because the game mixes both.
+- A duplicate suffix is refused: the first registration wins and stays, so two mods cannot silently fight over one path.
+- Redirects are recorded as `file_redirect` events and become active only after **every** mod has initialized, so a half-initialized set never changes what the game reads. On initialization failure the journal removes them again; on shutdown they stop applying immediately.
+- Which opens the host can redirect depends on that host. The Linux test host exposes `--redirect-probe PATH`; the Windows proxy patches the game's own import slots. Measure, do not assume: the shipped `hyperdemon.exe` performed no narrow-path opens at all in a real run (see `docs/TESTING.md`), so redirection is currently proven against the stand-in host and not yet against the game's asset loader.
+
 ## Rules
 
 - **One export.** `hyprlodr_plugin_query` must return a pointer to storage that lives for the whole process (usually `static`). All descriptor strings are owned by the mod and must also remain valid.
@@ -94,8 +110,9 @@ All calls take `host->context`. Every function may return failure; treat failure
 | `capability_register(context, name, provider_id)` | Publish a capability; duplicate names fail. |
 | `capability_has(context, name)` | Non-zero if the capability exists. |
 | `is_loaded(context, mod_id)` | Non-zero if that mod is currently initialized. |
+| `file_redirect(context, suffix, replacement_path)` | Open `replacement_path` instead whenever the game opens a path ending in `suffix` (ABI 4). |
 
-State set during `initialize` is journaled: if initialization fails, every change is undone automatically. State written during `shutdown` is not journaled.
+State set during `initialize` is journaled: if initialization fails, every change is undone automatically, including state the failed mod *deleted* — a removed entry is re-inserted with its previous value and owner (scenario `state_remove_rolled_back_on_failure`). State written during `shutdown` is not journaled.
 
 ## Lifecycle guarantees
 

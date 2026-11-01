@@ -24,9 +24,10 @@
 #  define HYPR_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Bumped to 3: the host API gained state_dir(), so a mod can persist its own
- * files. Earlier ABIs are rejected: mods are recompiled against this header. */
-#define HYPRLODR_ABI_VERSION 3u
+/* Bumped to 4: the host API gained file_redirect(), so a mod can point a path
+ * the game opens at a file it ships. Earlier ABIs are rejected: mods are
+ * recompiled against this header. */
+#define HYPRLODR_ABI_VERSION 4u
 #define HYPRLODR_PLUGIN_ENTRY "hyprlodr_plugin_query"
 
 /* True when the descriptor is large enough to contain `field`. */
@@ -50,6 +51,19 @@ typedef struct hyprlodr_host_api {
      * initialize() runs. NULL when the host was started without a state root,
      * so check before writing. The path stays valid until shutdown(). */
     const char *(*state_dir)(void *context);
+    /* --- ABI 4 additions --- */
+    /* Ask the host to open `replacement_path` instead whenever the game opens a
+     * file whose path ends with `suffix`, matched case-insensitively and with
+     * \\ and / treated as the same separator. The suffix must start at a path
+     * separator, so "asset/asset" matches "<game>\\asset\\asset" but not
+     * "<game>\\xasset/asset".
+     *
+     * Registration is only meaningful while initialize() runs: the host
+     * publishes the registry once every mod has initialized, and a redirect
+     * registered by a mod that fails is rolled back with its other changes.
+     * Hosts without file control (the synthetic test host, for example) may
+     * return non-zero; a mod should treat that as "override unavailable". */
+    int (*file_redirect)(void *context, const char *suffix, const char *replacement_path);
 } hyprlodr_host_api;
 
 /* True when the host API is large enough to contain `field`. */

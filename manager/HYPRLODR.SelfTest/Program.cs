@@ -33,6 +33,9 @@ internal static class Program
         Register("loader_refuses_double_install", () => LoaderDoubleInstall(sample));
         Register("loader_uninstall_restores_original", () => LoaderUninstall(sample));
         Register("loader_refuses_changed_proxy", () => LoaderChangedProxy(sample));
+        Register("loader_preserves_existing_mod", LoaderPreservesExistingMod);
+        Register("loader_install_rolls_back", LoaderInstallRollsBack);
+        Register("loader_uninstall_keeps_changed_mod", LoaderUninstallKeepsChangedMod);
         Register("catalog_reads_registry_and_disabled", () => CatalogRead(sample));
         Register("catalog_order_matches_loader", () => CatalogOrder(sample));
         Register("catalog_detects_missing_dependency", () => CatalogMissingDependency(sample));
@@ -489,6 +492,85 @@ internal static class Program
             Check(!result.Ok, "uninstall should refuse a changed proxy");
             Check(result.Message.Contains("changed since installation", StringComparison.Ordinal), result.Message);
             Check(File.Exists(Path.Combine(game, "OpenAL32_real.dll")), "original must not be removed when refusing");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void LoaderPreservesExistingMod()
+    {
+        var root = NewTemp();
+        try
+        {
+            var game = MakeSteamTree(root);
+            var build = MakeBuildTree(Path.Combine(root, "build"));
+            var mods = Path.Combine(game, LoaderInstaller.ModsDirectoryName);
+            Directory.CreateDirectory(mods);
+            var existing = Path.Combine(mods, "a.palette.dll");
+            File.WriteAllText(existing, "user mod bytes");
+
+            var installer = new LoaderInstaller();
+            Check(installer.Install(game, build).Ok, "install failed");
+            Check(File.ReadAllText(existing) == "mod a.palette", "install did not place the build's mod");
+            var manifest = LoaderInstaller.ReadManifest(Path.Combine(game, LoaderInstaller.ManifestName));
+            Check(manifest is not null && manifest.Backups.ContainsKey("mods/a.palette.dll"),
+                  "the pre-existing mod was not recorded as a backup");
+
+            var removed = installer.Uninstall(game);
+            Check(removed.Ok, removed.Message);
+            Check(File.ReadAllText(existing) == "user mod bytes",
+                  "uninstall did not restore the mod the user already had");
+            Check(!File.Exists(Path.Combine(mods, "b.audio.dll")), "installed mod left behind");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void LoaderInstallRollsBack()
+    {
+        var root = NewTemp();
+        try
+        {
+            var game = MakeSteamTree(root);
+            var build = MakeBuildTree(Path.Combine(root, "build"));
+            // A file where the mods directory belongs fails the copy step after the
+            // proxy has already been replaced, so rollback must undo that too.
+            var blocker = Path.Combine(game, LoaderInstaller.ModsDirectoryName);
+            File.WriteAllText(blocker, "not a directory");
+
+            var result = new LoaderInstaller().Install(game, build);
+            Check(!result.Ok, "install should fail when mods is not a directory");
+            Check(result.Message.Contains("rolled back", StringComparison.Ordinal), result.Message);
+            Check(File.ReadAllText(Path.Combine(game, "OpenAL32.dll")) == "original library bytes",
+                  "the proxy was left in place after a failed install");
+            Check(!File.Exists(Path.Combine(game, "OpenAL32_real.dll")),
+                  "a backup library was left behind after a failed install");
+            Check(!File.Exists(Path.Combine(game, LoaderInstaller.ManifestName)),
+                  "a manifest was left behind after a failed install");
+            Check(File.ReadAllText(blocker) == "not a directory",
+                  "the file that blocked the install was damaged");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void LoaderUninstallKeepsChangedMod()
+    {
+        var root = NewTemp();
+        try
+        {
+            var game = MakeSteamTree(root);
+            var build = MakeBuildTree(Path.Combine(root, "build"));
+            var installer = new LoaderInstaller();
+            Check(installer.Install(game, build).Ok, "install failed");
+            var mod = Path.Combine(game, LoaderInstaller.ModsDirectoryName, "b.audio.dll");
+            File.WriteAllText(mod, "tampered by the user");
+
+            var result = installer.Uninstall(game);
+            Check(result.Ok, result.Message);
+            Check(File.Exists(mod) && File.ReadAllText(mod) == "tampered by the user",
+                  "uninstall deleted a mod that changed since installation");
+            Check(!File.Exists(Path.Combine(game, LoaderInstaller.ModsDirectoryName, "a.palette.dll")),
+                  "an untouched mod was not removed");
+            Check(File.ReadAllText(Path.Combine(game, "OpenAL32.dll")) == "original library bytes",
+                  "original library was not restored");
         }
         finally { Directory.Delete(root, true); }
     }

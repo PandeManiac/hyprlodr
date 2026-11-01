@@ -16,6 +16,7 @@
 
 #include "hypr_win32.h"
 #include "loader.h"
+#include "file_hook.h"
 #include "game_anchors.h"
 
 #include <stdio.h>
@@ -283,7 +284,13 @@ static void write_attach_record(const char *stage, int status) {
             fputc("0123456789abcdef"[g_module.base[HYPRLODR_GAME_TABLE_T0_RVA + index] & 0xf], file);
         }
     }
-    fputs("\"}\n", file);
+    fputs("\",\"file_hook\":\"", file);
+    json_escape(file, hyprlodr_file_hook_status());
+    fputs("\",\"file_hook_detail\":\"", file);
+    json_escape(file, hyprlodr_file_hook_detail());
+    fprintf(file, "\",\"file_redirects\":%lu,\"file_opens_logged\":%d}\n",
+            (unsigned long)hyprlodr_loader_redirect_count(g_loader),
+            hyprlodr_file_hook_logged());
     fclose(file);
 }
 
@@ -294,22 +301,17 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * still prove which executable ran and whether it matches the analysis; the
      * mod start-up delay below is about the game being ready, not about us. */
     g_delay_ms = bootstrap_delay_ms();
-    write_attach_record("attached", HYPRLODR_OK);
-
-    if (g_delay_ms) Sleep(g_delay_ms);
-
-    /* Rewriting the record with this stage proves the process outlived the
-     * delay; a record still reading "attached" means it did not. */
-    write_attach_record("initializing", HYPRLODR_OK);
 
     char mods_dir[1024];
     char disabled_file[1024];
     char log_path[1024];
     char state_root[1024];
+    char files_log[1024];
     snprintf(mods_dir, sizeof mods_dir, "%s\\mods", g_game_dir);
     snprintf(disabled_file, sizeof disabled_file, "%s\\mods\\disabled.txt", g_game_dir);
     snprintf(log_path, sizeof log_path, "%s\\hyprlodr-events.jsonl", g_game_dir);
     snprintf(state_root, sizeof state_root, "%s\\hyprlodr-state", g_game_dir);
+    snprintf(files_log, sizeof files_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
 
     g_loader = hyprlodr_loader_create();
     if (!g_loader) {
@@ -326,6 +328,19 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     hyprlodr_loader_disable_file(g_loader, disabled_file);
     /* Per-mod writable directories live beside the loader's own files. */
     hyprlodr_loader_set_state_root(g_loader, state_root);
+
+    /* Intercept the game's own CreateFileA calls before the delay, so opens the
+     * game performs while mods are still starting are observed too. Nothing is
+     * patched unless the import table really contains that entry. */
+    hyprlodr_file_hook_install(g_loader, files_log);
+
+    write_attach_record("attached", HYPRLODR_OK);
+
+    if (g_delay_ms) Sleep(g_delay_ms);
+
+    /* Rewriting the record with this stage proves the process outlived the
+     * delay; a record still reading "attached" means it did not. */
+    write_attach_record("initializing", HYPRLODR_OK);
 
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);

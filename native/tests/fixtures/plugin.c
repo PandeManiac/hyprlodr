@@ -56,6 +56,12 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
 #ifdef FIX_STATE_KEY
     if (host->state_set(host->context, FIX_STATE_KEY, FIX_STATE_VALUE) != 0) return -1;
 #endif
+#ifdef FIX_STATE_REMOVE
+    if (host->state_remove(host->context, FIX_STATE_REMOVE) != 0) {
+        host->log(host->context, "error", FIX_ID, "state_remove failed");
+        return -1;
+    }
+#endif
 #ifdef FIX_STATE_COUNTER
     /* Persistence across processes: increment a counter kept in our own state
      * directory. Two host runs must observe 1 then 2. */
@@ -108,6 +114,19 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
     fclose(state_file);
     host->log(host->context, "info", FIX_ID, state_path);
 #endif
+#ifdef FIX_REDIRECT_FROM
+    /* ABI 4: point a game path at a file this mod owns. Registration happens
+     * while initialize() runs; the host publishes it after every mod started. */
+    if (!HYPRLODR_HOST_API_HAS(host, file_redirect) || !host->file_redirect) {
+        host->log(host->context, "error", FIX_ID, "file_redirect unavailable");
+        return -1;
+    }
+    if (host->file_redirect(host->context, FIX_REDIRECT_FROM, FIX_REDIRECT_TO) != 0) {
+        host->log(host->context, "error", FIX_ID, "file_redirect refused");
+        return -1;
+    }
+    host->log(host->context, "info", FIX_ID, "registered a file redirect");
+#endif
 #ifdef FIX_REQUIRE_STATE
     const char *value = host->state_get(host->context, FIX_REQUIRE_STATE);
     if (!value || strcmp(value, FIX_REQUIRE_VALUE) != 0) {
@@ -134,6 +153,24 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
 }
 
 static FIX_UNUSED void mod_shutdown(const hyprlodr_host_api *host) {
+#ifdef FIX_SHUTDOWN_REQUIRE_STATE
+    /* Runs after a failed mod was rolled back, so this observes whether the
+     * loader really restored the state the failed mod touched. */
+    const char *value = host->state_get(host->context, FIX_SHUTDOWN_REQUIRE_STATE);
+    if (!value || strcmp(value, FIX_SHUTDOWN_REQUIRE_VALUE) != 0) {
+        host->log(host->context, "error", FIX_ID, "state was not restored after rollback");
+        return;
+    }
+#endif
+#ifdef FIX_SHUTDOWN_REQUIRE_ABSENT
+    if (host->state_get(host->context, FIX_SHUTDOWN_REQUIRE_ABSENT) != NULL) {
+        host->log(host->context, "error", FIX_ID, "state written by the failed mod survived rollback");
+        return;
+    }
+#endif
+#if defined(FIX_SHUTDOWN_REQUIRE_STATE) || defined(FIX_SHUTDOWN_REQUIRE_ABSENT)
+    host->log(host->context, "info", FIX_ID, "shutdown state verified");
+#endif
     host->log(host->context, "info", FIX_ID, "fixture shutdown");
 }
 

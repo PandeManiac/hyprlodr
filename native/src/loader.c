@@ -47,6 +47,8 @@
 #define HYPRLODR_MAX_DISABLED 128
 #define HYPRLODR_ID_MAX 128
 #define HYPRLODR_PATH_MAX 1024
+#define HYPRLODR_MAX_REDIRECTS 32
+#define HYPRLODR_REDIRECT_SUFFIX_MAX 256
 
 typedef struct {
     char *key;
@@ -59,6 +61,20 @@ typedef struct {
     char *provider;
 } hyprlodr_capability;
 
+/* File redirection, ABI 4. Registered entries are owned here; the published
+ * table is a flat copy the in-process file hook can read on game threads. */
+typedef struct {
+    char *suffix;
+    char *path;
+    char *owner;
+} hyprlodr_redirect;
+
+typedef struct {
+    char suffix[HYPRLODR_REDIRECT_SUFFIX_MAX];
+    char path[HYPRLODR_PATH_MAX];
+    char owner[HYPRLODR_ID_MAX];
+} hyprlodr_redirect_live;
+
 typedef struct {
     void *library;
     const hyprlodr_plugin_descriptor *descriptor;
@@ -69,7 +85,11 @@ typedef struct {
     int disabled;
 } hyprlodr_loaded_plugin;
 
-enum { HYPRLODR_UNDO_STATE = 1, HYPRLODR_UNDO_CAPABILITY = 2 };
+enum {
+    HYPRLODR_UNDO_STATE = 1,
+    HYPRLODR_UNDO_CAPABILITY = 2,
+    HYPRLODR_UNDO_REDIRECT = 3
+};
 
 typedef struct {
     int kind;
@@ -87,6 +107,13 @@ struct hyprlodr_loader {
     size_t state_count;
     hyprlodr_capability capabilities[HYPRLODR_MAX_CAPABILITIES];
     size_t capability_count;
+    hyprlodr_redirect redirects[HYPRLODR_MAX_REDIRECTS];
+    size_t redirect_count;
+    hyprlodr_redirect_live redirect_live[HYPRLODR_MAX_REDIRECTS];
+    size_t redirect_live_count;
+    /* Written once, after every mod has initialized, before any game thread can
+     * observe a redirect. Readers check it first and only then read the table. */
+    volatile int redirects_published;
     hyprlodr_undo undo[HYPRLODR_MAX_UNDO];
     size_t undo_count;
     char dirs[HYPRLODR_MAX_DIRS][HYPRLODR_PATH_MAX];
@@ -384,6 +411,117 @@ static const char *api_state_dir(void *ctx) {
     return l->plugins[index].state_dir[0] ? l->plugins[index].state_dir : NULL;
 }
 
+/* --- ABI 4 file redirection --------------------------------------------------
+ * Windows paths are case-insensitive and the game mixes separators, so matching
+ * folds ASCII case and treats \\ and / alike. The suffix must begin at a
+ * separator boundary; a suffix that starts with a separator carries its own.
+ */
+static int ascii_lower(int c) {
+    return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
+}
+
+static int is_separator(int c) { return c == '\\' || c == '/'; }
+
+static int suffix_matches(const char *path, const char *suffix) {
+    size_t path_length = strlen(path);
+    size_t suffix_length = strlen(suffix);
+    if (suffix_length == 0 || suffix_length > path_length) return 0;
+    const char *tail = path + (path_length - suffix_length);
+    for (size_t i = 0; i < suffix_length; ++i) {
+        int a = ascii_lower((unsigned char)tail[i]);
+        int b = ascii_lower((unsigned char)suffix[i]);
+        if (a == b) continue;
+        if (is_separator(a) && is_separator(b)) continue;
+        return 0;
+    }
+    if (suffix_length == path_length) return 1;
+    if (is_separator((unsigned char)suffix[0])) return 1;
+    return is_separator((unsigned char)tail[-1]);
+}
+
+static void copy_text(char *destination, size_t capacity, const char *source) {
+    size_t length = source ? strlen(source) : 0;
+    if (length >= capacity) length = capacity - 1;
+    if (length) memcpy(destination, source, length);
+    destination[length] = '\0';
+}
+
+static int api_file_redirect(void *ctx, const char *suffix, const char *replacement_path) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l || !suffix || !*suffix || !replacement_path || !*replacement_path) return -1;
+    if (strlen(suffix) >= HYPRLODR_REDIRECT_SUFFIX_MAX) return -1;
+    if (strlen(replacement_path) >= HYPRLODR_PATH_MAX) return -1;
+    if (l->redirect_count == HYPRLODR_MAX_REDIRECTS) return -1;
+    for (size_t i = 0; i < l->redirect_count; ++i)
+        if (!strcmp(l->redirects[i].suffix, suffix)) return -1;
+    if (undo_push(l, HYPRLODR_UNDO_REDIRECT, suffix, NULL, NULL) != 0) return -1;
+
+    const char *owner = l->current_mod[0] ? l->current_mod : "host";
+    char *key = hyprlodr_strdup(suffix);
+    char *value = hyprlodr_strdup(replacement_path);
+    char *holder = hyprlodr_strdup(owner);
+    if (!key || !value || !holder) {
+        free(key);
+        free(value);
+        free(holder);
+        return -1;
+    }
+    hyprlodr_redirect *entry = &l->redirects[l->redirect_count++];
+    entry->suffix = key;
+    entry->path = value;
+    entry->owner = holder;
+    char message[HYPRLODR_REDIRECT_SUFFIX_MAX + HYPRLODR_PATH_MAX + 8];
+    snprintf(message, sizeof(message), "%s -> %s", suffix, replacement_path);
+    event(l, "file_redirect", owner, message);
+    return 0;
+}
+
+/* Freeze the registry into the flat table the file hook reads. */
+static void publish_redirects(hyprlodr_loader *l) {
+    if (l->redirects_published) return;
+    l->redirect_live_count = 0;
+    for (size_t i = 0; i < l->redirect_count; ++i) {
+        hyprlodr_redirect_live *live = &l->redirect_live[l->redirect_live_count++];
+        copy_text(live->suffix, sizeof live->suffix, l->redirects[i].suffix);
+        copy_text(live->path, sizeof live->path, l->redirects[i].path);
+        copy_text(live->owner, sizeof live->owner, l->redirects[i].owner);
+    }
+    /* Release, set last: a reader that acquires this flag sees a complete table. */
+    __atomic_store_n(&l->redirects_published, 1, __ATOMIC_RELEASE);
+    if (l->redirect_live_count) {
+        char message[64];
+        snprintf(message, sizeof(message), "%zu file redirect(s) active", l->redirect_live_count);
+        event(l, "file_redirects_published", "", message);
+    }
+}
+
+/* The file hook reads this from arbitrary game threads while mods initialize,
+ * so the flag is the synchronisation point: acquire pairs with the release store
+ * in publish_redirects(). */
+static int redirects_published(const hyprlodr_loader *l) {
+    return __atomic_load_n(&((hyprlodr_loader *)l)->redirects_published, __ATOMIC_ACQUIRE);
+}
+
+int hyprlodr_loader_redirect_path(const hyprlodr_loader *l, const char *requested, char *out,
+                                  size_t capacity) {
+    if (!l || !requested || !out || capacity == 0) return 0;
+    if (!redirects_published(l)) return 0;
+    for (size_t i = 0; i < l->redirect_live_count; ++i) {
+        const hyprlodr_redirect_live *live = &l->redirect_live[i];
+        if (!suffix_matches(requested, live->suffix)) continue;
+        size_t length = strlen(live->path);
+        if (length + 1u > capacity) return 0;
+        memcpy(out, live->path, length + 1u);
+        return 1;
+    }
+    return 0;
+}
+
+size_t hyprlodr_loader_redirect_count(const hyprlodr_loader *l) {
+    if (!l || !redirects_published(l)) return 0;
+    return l->redirect_live_count;
+}
+
 static int api_is_loaded(void *ctx, const char *mod_id) {
     hyprlodr_loader *l = (hyprlodr_loader *)ctx;
     if (!mod_id) return 0;
@@ -405,6 +543,7 @@ static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     api.state_remove = api_state_remove;
     api.is_loaded = api_is_loaded;
     api.state_dir = api_state_dir;
+    api.file_redirect = api_file_redirect;
     return api;
 }
 
@@ -414,27 +553,55 @@ static void rollback_current(hyprlodr_loader *l, const char *mod_id) {
     while (l->undo_count > 0) {
         hyprlodr_undo *u = &l->undo[--l->undo_count];
         if (u->kind == HYPRLODR_UNDO_STATE) {
+            size_t index = l->state_count;
             for (size_t i = 0; i < l->state_count; ++i) {
-                if (strcmp(l->state[i].key, u->key)) continue;
-                if (u->previous_value) {
-                    char *value = hyprlodr_strdup(u->previous_value);
-                    char *owner = hyprlodr_strdup(u->previous_owner);
-                    if (value) {
-                        free(l->state[i].value);
-                        l->state[i].value = value;
-                    }
-                    free(l->state[i].owner);
-                    l->state[i].owner = owner;
-                } else {
-                    free(l->state[i].key);
-                    free(l->state[i].value);
-                    free(l->state[i].owner);
-                    memmove(&l->state[i], &l->state[i + 1],
-                            (l->state_count - i - 1) * sizeof l->state[0]);
-                    --l->state_count;
+                if (!strcmp(l->state[i].key, u->key)) {
+                    index = i;
+                    break;
                 }
-                ++restored;
-                break;
+            }
+            if (!u->previous_value) {
+                /* The key did not exist before this mod ran: drop what it added. */
+                if (index < l->state_count) {
+                    free(l->state[index].key);
+                    free(l->state[index].value);
+                    free(l->state[index].owner);
+                    memmove(&l->state[index], &l->state[index + 1],
+                            (l->state_count - index - 1) * sizeof l->state[0]);
+                    --l->state_count;
+                    ++restored;
+                }
+            } else if (index < l->state_count) {
+                char *value = hyprlodr_strdup(u->previous_value);
+                char *owner = u->previous_owner ? hyprlodr_strdup(u->previous_owner) : NULL;
+                if (value && (!u->previous_owner || owner)) {
+                    free(l->state[index].value);
+                    free(l->state[index].owner);
+                    l->state[index].value = value;
+                    l->state[index].owner = owner;
+                    ++restored;
+                } else {
+                    free(value);
+                    free(owner);
+                }
+            } else if (l->state_count < HYPRLODR_MAX_PAIRS) {
+                /* state_remove() deleted the key, so the value is gone from the
+                 * table: restore the previous binding as a fresh entry instead
+                 * of silently dropping it. */
+                char *key = hyprlodr_strdup(u->key);
+                char *value = hyprlodr_strdup(u->previous_value);
+                char *owner = u->previous_owner ? hyprlodr_strdup(u->previous_owner) : NULL;
+                if (key && value && (!u->previous_owner || owner)) {
+                    l->state[l->state_count].key = key;
+                    l->state[l->state_count].value = value;
+                    l->state[l->state_count].owner = owner;
+                    ++l->state_count;
+                    ++restored;
+                } else {
+                    free(key);
+                    free(value);
+                    free(owner);
+                }
             }
         } else if (u->kind == HYPRLODR_UNDO_CAPABILITY) {
             for (size_t i = 0; i < l->capability_count; ++i) {
@@ -447,13 +614,25 @@ static void rollback_current(hyprlodr_loader *l, const char *mod_id) {
                 ++restored;
                 break;
             }
+        } else if (u->kind == HYPRLODR_UNDO_REDIRECT) {
+            for (size_t i = 0; i < l->redirect_count; ++i) {
+                if (strcmp(l->redirects[i].suffix, u->key)) continue;
+                free(l->redirects[i].suffix);
+                free(l->redirects[i].path);
+                free(l->redirects[i].owner);
+                memmove(&l->redirects[i], &l->redirects[i + 1],
+                        (l->redirect_count - i - 1) * sizeof l->redirects[0]);
+                --l->redirect_count;
+                ++restored;
+                break;
+            }
         }
         free(u->key);
         free(u->previous_value);
         free(u->previous_owner);
     }
     char msg[128];
-    snprintf(msg, sizeof(msg), "rolled back %zu state/capability change(s)", restored);
+    snprintf(msg, sizeof(msg), "rolled back %zu host change(s)", restored);
     event(l, "rollback", mod_id, msg);
 }
 
@@ -1010,12 +1189,17 @@ int hyprlodr_loader_init(hyprlodr_loader *loader) {
         undo_clear(l);
         event(l, "initialize_ok", d->id, "");
     }
+    /* Every mod that owns a redirect has initialized, so the table can be read
+     * by the file hook from now on. */
+    publish_redirects(l);
     return HYPRLODR_OK;
 }
 
 void hyprlodr_loader_shutdown(hyprlodr_loader *loader) {
     if (!loader || loader->shutdown_done) return;
     loader->shutdown_done = 1;
+    /* Mods are signing out: their redirects must stop applying at once. */
+    __atomic_store_n(&loader->redirects_published, 0, __ATOMIC_RELEASE);
     shutdown_initialized(loader);
     event(loader, "shutdown_complete", "", "");
 }
@@ -1056,6 +1240,11 @@ void hyprlodr_loader_destroy(hyprlodr_loader *l) {
     for (size_t i = 0; i < l->capability_count; ++i) {
         free(l->capabilities[i].name);
         free(l->capabilities[i].provider);
+    }
+    for (size_t i = 0; i < l->redirect_count; ++i) {
+        free(l->redirects[i].suffix);
+        free(l->redirects[i].path);
+        free(l->redirects[i].owner);
     }
     undo_clear(l);
     if (l->log) fclose(l->log);

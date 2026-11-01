@@ -55,9 +55,9 @@ Kahn-style selection over enabled mods. Each round scans plugins in **mod-id ord
 
 ### Failure handling
 
-Before each `initialize()` the loader starts an undo journal. Every `state_set`, `state_remove` and `capability_register` records the previous value. If `initialize()` returns non-zero:
+Before each `initialize()` the loader starts an undo journal. Every `state_set`, `state_remove`, `capability_register` and `file_redirect` records the previous value. If `initialize()` returns non-zero:
 
-1. the journal is replayed backwards, removing or restoring exactly what that mod touched;
+1. the journal is replayed backwards, removing or restoring exactly what that mod touched (a key the mod *removed* is re-inserted with its previous value and owner, because it is no longer in the table to be updated);
 2. the resolved order is truncated to the successfully initialized prefix;
 3. those mods are shut down in reverse order with normal `shutdown` events;
 4. an `error` event reports the failure code.
@@ -89,6 +89,23 @@ No CRT dependency means no CRT start-up requirements, no msvcrt version skew, an
 - Evidence: `<game>/hyprlodr-attach.json` records PID, proxy directory, real executable path, ABI, and status; `<game>/hyprlodr-events.jsonl` records the mod lifecycle.
 - `DLL_PROCESS_DETACH` with `reserved == NULL` (explicit unload) runs shutdown. Process termination shut-down runs no mod code.
 
-## Why OpenAL32 rather than a hook
+## File interception (ABI 4)
 
-The executable statically imports `OpenAL32.dll`, so the Windows loader resolves it from the application directory before any game code runs — a hook-free, address-free integration point that survives game updates. Address-based hooks would need fingerprints and compatibility gates; none are used yet. See `docs/COMPATIBILITY.md`.
+A redirected file is only useful if the host controls file opening. The Windows proxy does, by patching **import slots** in the mapped main module: it parses the PE import directory, matches the DLL and function by name, saves the resolved address and points the slot at a shim. No game code is patched and no RVA from static analysis is used, so a game update cannot silently land a hook in the middle of an instruction.
+
+Three targets are attempted, each independently: `CreateFileA` from `KERNEL32.dll`, and `fopen`/`fopen_s` from the UCRT API set (`api-ms-win-crt-stdio-l1-1-0.dll`). The targets come from the executable's measured import table: it imports only `CreateFileA` and `ReadFile` for file APIs from KERNEL32, plus `fopen`, `fopen_s` and `_wfopen` from the CRT — which is why the game's asset I/O never appeared in the `CreateFileA` slot.
+
+Safety properties:
+
+- a target that is absent, malformed or unwritable is reported and skipped; the others still install and every mod still initializes;
+- a failed install closes the log handle and reports why in `file_hook`/`file_hook_detail`, so a retry cannot append to a file nobody owns;
+- the saved original function pointer is written, with a full fence, **before** the slot changes, so a game thread that reaches the shim immediately still has a valid target;
+- the shim reads the loader and original pointers once into locals, so it never observes a partially updated pair;
+- open records are appended with a fixed `FILE_APPEND_DATA` handle and an atomic sequence number, so concurrent game threads cannot corrupt the file or reuse a sequence;
+- the redirect table is published with a release store and read with an acquire load, so a game thread that sees `redirects_published` sees a complete table, and unpublished registrations are invisible.
+
+`_wfopen` is deliberately not hooked: it takes wide strings and the registry is narrow. It is the most likely remaining asset path (see `docs/TESTING.md`).
+
+## Why OpenAL32 rather than a code hook
+
+The executable statically imports `OpenAL32.dll`, so the Windows loader resolves it from the application directory before any game code runs — an address-free integration point that survives game updates, and the thing that gets the loader into the process at all. The file hook above is deliberately built on the same principle: symbol-resolved import slots, never code addresses. Address-based hooks would need fingerprints and compatibility gates; none are used yet. See `docs/COMPATIBILITY.md`.

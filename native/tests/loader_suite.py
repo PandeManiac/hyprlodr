@@ -46,7 +46,7 @@ class Runner:
         path.write_text(text)
         return path
 
-    def run(self, seed=None, disable=(), disabled_file=None, state_root=None):
+    def run(self, seed=None, disable=(), disabled_file=None, state_root=None, redirect_probes=()):
         log = self.tmp / "events.jsonl"
         if log.exists():
             log.unlink()
@@ -59,6 +59,8 @@ class Runner:
             args += ["--disable", mod_id]
         if disabled_file:
             args += ["--disabled-file", str(disabled_file)]
+        for probe in redirect_probes:
+            args += ["--redirect-probe", probe]
         proc = subprocess.run(args, capture_output=True, text=True)
         events = []
         if log.exists():
@@ -206,6 +208,32 @@ def state_passed_between_mods():
         check(proc.returncode == 0, f"state handoff failed: {proc.stderr}")
         check(events_of(events, "initialize_ok") == ["k.writer", "k.reader"],
               events_of(events, "initialize_ok"))
+    finally:
+        runner.close()
+
+
+@scenario("state_remove_rolled_back_on_failure")
+def state_remove_rolled_back_on_failure():
+    """A failed mod removes a key another mod published; rollback must restore it.
+
+    k.remover deletes k.keeper's key and adds one of its own, then fails. The
+    keeper checks both bindings from its shutdown(), which the loader runs after
+    rollback, so the assertion goes through the public ABI and not an internal
+    reader.
+    """
+    runner = Runner()
+    try:
+        runner.add("state_keeper", "state_remover")
+        proc, events, summary = runner.run()
+        check(proc.returncode != 0, "a failing mod must fail the run")
+        check(summary.get("ok") is False, f"summary should report failure: {summary}")
+        # The failed mod is reported (that is the loader's job); nothing else is.
+        check(all("initialization failed" in message for message in errors_of(events)),
+              f"unexpected errors: {errors_of(events)}")
+        verified = [e for e in events
+                    if e["event"] == "log" and e["mod"] == "k.keeper"
+                    and e["message"] == "info: shutdown state verified"]
+        check(verified, f"keeper did not observe restored state: {events}")
     finally:
         runner.close()
 
@@ -414,7 +442,7 @@ def initialization_failure_stops_dependents():
               f"partial cleanup wrong: {events_of(events, 'shutdown')}")
         expect_error(events, "initialization failed")
         rollback = [e for e in events if e["event"] == "rollback"]
-        check(rollback and "2 state/capability change(s)" in rollback[0]["message"],
+        check(rollback and "rolled back 2 host change(s)" in rollback[0]["message"],
               f"rollback journal not applied: {rollback}")
     finally:
         runner.close()
@@ -494,6 +522,58 @@ def state_dir_absent_without_root():
               f"mod did not report the missing state dir: {messages}")
         check(not any(e["event"] == "state_dir" for e in events),
               "a state directory was announced without a root")
+    finally:
+        runner.close()
+
+
+@scenario("file_redirect_registration")
+def file_redirect_registration():
+    runner = Runner()
+    try:
+        runner.add("redirect_mod")
+        matched_path = r"S:\steamapps\common\hyperdemon\asset\asset"
+        probes = [
+            matched_path,
+            r"S:\steamapps\common\hyperdemon\asset\assets.db",     # different file
+            r"S:\STEAMAPPS\COMMON\HYPERDEMON\ASSET\ASSET",           # case-insensitive
+            "asset/asset",                                          # relative
+            r"S:\steamapps\common\hyperdemon\xasset\asset",          # not a path boundary
+            r"S:\steamapps\common\hyperdemon\asset\asset.old",       # prefix, not suffix
+        ]
+        proc, events, summary = runner.run(redirect_probes=probes)
+        check(proc.returncode == 0, f"host failed: {proc.stderr}")
+        check(summary.get("redirect_count") == 1, summary)
+        expected = [True, False, True, True, False, False]
+        observed = [entry["redirected"] for entry in summary["redirects"]]
+        check(observed == expected, f"probe results {observed}, expected {expected}")
+        for entry in summary["redirects"]:
+            if entry["redirected"]:
+                check(entry["effective"] == "C:/hyprlodr/replacement.bin", entry)
+        registered = [e for e in events if e["event"] == "file_redirect"]
+        check(registered and registered[0]["mod"] == "r.redirect", registered)
+        published = [e for e in events if e["event"] == "file_redirects_published"]
+        check(len(published) == 1 and "1 file redirect(s) active" in published[0]["message"],
+              f"registry was not published once: {published}")
+    finally:
+        runner.close()
+
+
+@scenario("file_redirect_rolled_back_with_failing_mod")
+def file_redirect_rolled_back_with_failing_mod():
+    runner = Runner()
+    try:
+        runner.add("redirect_fail")
+        probe = r"S:\steamapps\common\hyperdemon\shader\x.glsl"
+        proc, events, summary = runner.run(redirect_probes=[probe])
+        check(proc.returncode != 0, "the failing mod should fail the run")
+        expect_error(events, "initialization failed")
+        check(any("rolled back 1 host change(s)" in e["message"]
+                  for e in events if e["event"] == "rollback"),
+              f"redirect was not rolled back: {errors_of(events)}")
+        check(summary.get("redirect_count") == 0, summary)
+        check(summary["redirects"][0]["redirected"] is False, summary["redirects"])
+        check(not any(e["event"] == "file_redirects_published" for e in events),
+              "a failed run must not publish a redirect table")
     finally:
         runner.close()
 

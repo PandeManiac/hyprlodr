@@ -13,23 +13,24 @@ The original game files are never modified destructively: installing the loader 
 | 1 | Five independently compiled mods load, respect dependency order, share state, shut down in reverse | **Verified** (Linux + Windows x64 under Wine) |
 | 2 | Diagnostic mod executes inside the real HYPER DEMON process | **Verified 2026-10-31** — `hyperdemon.exe` launched through Steam/Proton initialized all five mods in-process; evidence in `docs/evidence/` |
 | 3 | Desktop mod manager | **Implemented** — Avalonia app with mod profiles and a last-run report; 21/21 headless core scenarios; UI captured in `docs/evidence/manager-ui*.png` |
-| 4 | Mods change the game | Not started — groundwork verified: runtime build fingerprints match the real executable (8/8 anchors in-game) |
+| 4 | Mods change the game | Partial — ABI 4 file redirection works and the proxy patches the game's file import slots (`CreateFileA`, `fopen`, `fopen_s`) in-process; not yet exercised on the game's asset path |
 | 5 | Asset replacement | Not started — the container's stream cipher is located and specified, but the format is not decoded |
 
 Details and evidence: `docs/RESEARCH.md`, `docs/TESTING.md`, `docs/ROADMAP.md`.
 
 ## What works today
 
-- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 3)** with a single export per mod, plus a per-mod persistent data directory created before initialization.
+- **Versioned C ABI (`hyprlodr/plugin.h`, ABI 4)** with a single export per mod, a per-mod persistent data directory created before initialization, and suffix-based file redirection.
 - **Deterministic loader**: discovery, descriptor validation, semantic-version constraints, conflicts, disabled mods, lexicographic tie-breaks, cycle/missing-dependency detection, partial-failure rollback, reverse-order shutdown.
 - **Structured event log** (JSON Lines) with sequential event numbers, plus a JSON summary from the host.
 - **Five mandatory sample mods** compiled independently through the public header.
-- **26-scenario test suite** driving the real host binary, including randomized discovery order and per-mod state directories that persist across processes.
+- **29-scenario test suite** driving the real host binary, including randomized discovery order, per-mod state directories that persist across processes, file redirection, and rollback of a deleted state entry.
 - **Windows x64 build** with no Windows SDK, mingw or CRT dependency: the loader ships its own minimal libc on kernel32 and generates its import library with `llvm-dlltool`.
 - **OpenAL32 proxy** with 175 generated PE forwarders to the renamed original, so audio behaviour is untouched.
 - **Desktop manager** (Avalonia): Steam discovery, loader install/remove with hash verification, mod list with enable/disable, package import, load-order preview, validation problems, saved mod profiles, log viewer.
 - **Versioned mod packages** (ZIP + `manifest.json`, schema 1): defensive validation, manifest/descriptor cross-checking, install registry, pack/validate/install/list/remove CLI.
-- **Real game integration**: with the proxy installed, HYPER DEMON starts normally and mods initialize inside the game process (29 s session, 5/5 mods, original library restored by uninstall).
+- **Real game integration**: with the proxy installed, HYPER DEMON starts normally and mods initialize inside the game process (5/5 mods, original library restored by uninstall). The proxy also patches the game's own file import slots in-process and reports exactly which were patched (`CreateFileA=patched fopen=patched fopen_s=patched`).
+- **Non-destructive installers** (Python and manager): a mod file that already exists is backed up and restored by uninstall, a failed install rolls every change back, and uninstall keeps any mod that changed since installation.
 - **Runtime build fingerprints**: `tools/re/analyze_pe.py` derives RVA + FNV-1a anchors from the shipped `hyperdemon.exe` (four constants, four reference sites), and the proxy verifies them inside the running game — 8/8 matched at `0x140000000`. A stand-in host is reported as `build_matches=false`, so an unknown build is never assumed compatible. Only hashes are stored.
 - **Read-only diagnostics** (`tools/hyprl_diagnose.py`) that locate Steam libraries on Linux/Windows, hash the shipped binaries, parse PE headers/imports/exports, detect Proton, and report existing HYPRLODR state.
 

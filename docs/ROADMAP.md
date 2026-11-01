@@ -20,11 +20,16 @@
 
 **Tooling.** Read-only diagnostics (Steam discovery, multi-library, PE parsing, Proton detection), transactional installer with hash manifest and rollback, proxy `.def` generator, Windows build and test drivers.
 
+**File redirection (ABI 4).** Mods register `suffix -> replacement path`; the loader publishes the table only after every mod initialized and unpublishes it on shutdown. The Windows proxy patches the game's own file import slots (symbol-resolved, safety-failing) and logs every attempted open. Verified end to end against the Wine stand-in host — the stand-in's `CreateFileA` open returned the mod's bytes — and installed in the real game (`CreateFileA=patched fopen=patched fopen_s=patched`).
+
+**Loader and installer hardening.** `state_remove()` rollback now re-inserts the deleted entry instead of silently dropping it (regression scenario). Both installers are non-destructive: pre-existing mod files are backed up and restored, a failed install rolls back fully, and uninstall refuses to delete a mod that changed since installation. The file hook is concurrency-hardened (atomic sequence numbers, release/acquire publication, log cleanup on failure).
+
 ## Next, in order
 
-1. **First game-facing capability.** Use Ghidra/REA on `hyperdemon.exe` and `asset/asset` to establish one narrow, evidence-backed extension point that a mod can actually change. The compatibility gate now exists: the anchor manifest and `build_matches` check are the precondition any such hook must pass.
-2. **Mod profiles and asset management in the manager.**
-5. **Engine-facing API.** Only after 4, and only at a verified boundary (resource lookup or a narrowly fingerprinted hook with an explicit compatibility gate).
+1. **Reach the game's real asset path.** `hyperdemon.exe` imports `fopen`, `fopen_s` and `_wfopen` from the UCRT; a real run with the first two hooked still logged zero narrow-path opens, so the asset reader is almost certainly `_wfopen`. Add wide-path interception (converting to UTF-8 for matching and back for the replacement), then log what the game actually opens — that log is the map of the asset container.
+2. **Decode `asset/asset`** with that map plus the already-dumped cipher tables, and prove one replaced asset visually in game.
+3. **Mod profiles and asset management in the manager.**
+4. **Engine-facing API.** Only after 2–3, and only at a verified boundary with an explicit compatibility gate.
 
 ## Explicitly deferred
 

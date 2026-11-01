@@ -28,6 +28,27 @@ MANIFEST = "hyprlodr-install-manifest.json"
 PROXY = "OpenAL32.dll"
 ORIGINAL = "OpenAL32_real.dll"
 MOD_DIR = "mods"
+# Mod files that already existed before installation are copied here, never
+# overwritten in place, and put back by uninstall.
+BACKUP_DIR = f"{MOD_DIR}/.hyprlodr-backup"
+
+
+class InstallError(Exception):
+    """A step failed after the game directory had been modified."""
+
+
+def restore_backups(game: Path, backups: dict[str, str]) -> None:
+    for target_rel, backup_rel in backups.items():
+        target = game / target_rel
+        backup = game / backup_rel
+        if not backup.is_file():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.unlink(missing_ok=True)
+        backup.replace(target)
+    root = game / BACKUP_DIR
+    if root.is_dir() and not any(root.iterdir()):
+        root.rmdir()
 
 
 def resolve_game(explicit: str | None) -> Path:
@@ -113,37 +134,76 @@ def cmd_install(args) -> int:
         return 1
 
     files: dict[str, dict] = {}
-    original_hash = sha256(game / PROXY)
-    shutil.copy2(game / PROXY, game / ORIGINAL)
-    if sha256(game / ORIGINAL) != original_hash:
-        (game / ORIGINAL).unlink(missing_ok=True)
-        raise SystemExit("error: backup verification failed; nothing was replaced")
-    files[ORIGINAL] = {"sha256": original_hash, "installed_sha256": original_hash,
-                       "role": "original library, preserved verbatim"}
+    backups: dict[str, str] = {}
+    installed_mods: list[str] = []
+    created_mods_dir = not (game / MOD_DIR).exists()
+    original_created = False
+    manifest_written = False
 
-    shutil.copy2(proxy_source, game / PROXY)
-    proxy_hash = sha256(game / PROXY)
-    files[PROXY] = {"sha256": proxy_hash, "installed_sha256": proxy_hash,
-                    "role": "HYPRLODR proxy DLL"}
+    def rollback() -> None:
+        """Undo everything this run did, leaving the game directory as found."""
+        if original_created and (game / ORIGINAL).is_file():
+            (game / PROXY).unlink(missing_ok=True)
+            (game / ORIGINAL).rename(game / PROXY)
+        for name in installed_mods:
+            (game / MOD_DIR / name).unlink(missing_ok=True)
+        restore_backups(game, backups)
+        if manifest_written:
+            manifest_path(game).unlink(missing_ok=True)
+        if created_mods_dir and (game / MOD_DIR).is_dir() and not any((game / MOD_DIR).iterdir()):
+            (game / MOD_DIR).rmdir()
 
-    installed_mods = []
-    if mods_source.is_dir():
-        target = game / MOD_DIR
-        target.mkdir(exist_ok=True)
-        for mod in sorted(mods_source.glob("*.dll")):
-            shutil.copy2(mod, target / mod.name)
-            installed_mods.append(mod.name)
-            files[f"{MOD_DIR}/{mod.name}"] = {"sha256": sha256(target / mod.name)}
+    try:
+        original_hash = sha256(game / PROXY)
+        shutil.copy2(game / PROXY, game / ORIGINAL)
+        original_created = True
+        if sha256(game / ORIGINAL) != original_hash:
+            raise InstallError("backup verification failed")
+        files[ORIGINAL] = {"sha256": original_hash, "installed_sha256": original_hash,
+                           "role": "original library, preserved verbatim"}
 
-    manifest = {
-        "loader_version": args.loader_version,
-        "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "game_dir": str(game),
-        "files": files,
-        "mods": installed_mods,
-    }
-    manifest_path(game).write_text(json.dumps(manifest, indent=2))
+        shutil.copy2(proxy_source, game / PROXY)
+        proxy_hash = sha256(game / PROXY)
+        files[PROXY] = {"sha256": proxy_hash, "installed_sha256": proxy_hash,
+                        "role": "HYPRLODR proxy DLL"}
+
+        if mods_source.is_dir():
+            target = game / MOD_DIR
+            target.mkdir(exist_ok=True)
+            for mod in sorted(mods_source.glob("*.dll")):
+                destination = target / mod.name
+                if destination.exists():
+                    # A mod the user already had is preserved, not replaced: keep
+                    # its bytes and let uninstall put them back.
+                    backup_root = game / BACKUP_DIR
+                    backup_root.mkdir(parents=True, exist_ok=True)
+                    backup = backup_root / mod.name
+                    if not backup.exists():
+                        shutil.copy2(destination, backup)
+                        backups[f"{MOD_DIR}/{mod.name}"] = f"{BACKUP_DIR}/{mod.name}"
+                shutil.copy2(mod, destination)
+                installed_mods.append(mod.name)
+                installed_hash = sha256(destination)
+                files[f"{MOD_DIR}/{mod.name}"] = {"sha256": installed_hash,
+                                                 "installed_sha256": installed_hash}
+
+        manifest = {
+            "loader_version": args.loader_version,
+            "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "game_dir": str(game),
+            "files": files,
+            "mods": installed_mods,
+            "backups": backups,
+        }
+        manifest_path(game).write_text(json.dumps(manifest, indent=2))
+        manifest_written = True
+    except (OSError, InstallError) as error:
+        rollback()
+        raise SystemExit(f"error: installation failed ({error}); all changes were rolled back")
+
     print(f"installed: {len(installed_mods)} mod(s); manifest at {manifest_path(game)}")
+    if backups:
+        print("preserved existing mod file(s): " + ", ".join(sorted(backups)))
     print("launch the game normally through Steam. Evidence appears in "
           f"{game / 'hyprlodr-attach.json'} and {game / 'hyprlodr-events.jsonl'}.")
     return 0
@@ -172,9 +232,22 @@ def cmd_uninstall(args) -> int:
         (game / PROXY).unlink(missing_ok=True)
         (game / ORIGINAL).rename(game / PROXY)
         print(f"restored original {PROXY}")
-    if manifest:
-        for name in manifest.get("mods", []):
-            (game / MOD_DIR / Path(name).name).unlink(missing_ok=True)
+    kept = []
+    for name in (manifest or {}).get("mods", []):
+        path = game / MOD_DIR / Path(name).name
+        if not path.is_file():
+            continue
+        recorded = (manifest or {}).get("files", {}).get(
+            f"{MOD_DIR}/{path.name}", {}).get("installed_sha256")
+        if recorded and sha256(path) != recorded:
+            kept.append(path.name)
+            continue
+        path.unlink()
+    if kept:
+        print("kept mod file(s) that changed since installation: " + ", ".join(sorted(kept)))
+    restore_backups(game, (manifest or {}).get("backups", {}))
+    if (manifest or {}).get("backups"):
+        print("restored mod file(s) that existed before installation")
     mods_dir = game / MOD_DIR
     if mods_dir.is_dir() and not any(mods_dir.iterdir()):
         mods_dir.rmdir()

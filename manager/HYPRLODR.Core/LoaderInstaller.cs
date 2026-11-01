@@ -38,6 +38,8 @@ public sealed class LoaderInstaller
     public const string OriginalName = "OpenAL32_real.dll";
     public const string ManifestName = "hyprlodr-install-manifest.json";
     public const string ModsDirectoryName = "mods";
+    /// <summary>Mod files that existed before installation, kept for uninstall.</summary>
+    public const string BackupDirectoryName = ".hyprlodr-backup";
     public const string AttachRecord = "hyprlodr-attach.json";
     public const string EventLog = "hyprlodr-events.jsonl";
 
@@ -97,35 +99,72 @@ public sealed class LoaderInstaller
         var proxyPath = Path.Combine(gamePath, ProxyName);
         var originalPath = Path.Combine(gamePath, OriginalName);
         var files = new Dictionary<string, ManifestFile>(StringComparer.Ordinal);
+        var backups = new Dictionary<string, string>(StringComparer.Ordinal);
+        var installedMods = new List<string>();
+        var modsTarget = Path.Combine(gamePath, ModsDirectoryName);
+        var createdModsDirectory = !Directory.Exists(modsTarget);
+        var originalCreated = false;
+        var manifestWritten = false;
+
+        // Every change is undone on failure: the game must never be left with a
+        // half-installed loader, and a mod the user already had must survive.
+        void Rollback()
+        {
+            if (originalCreated && File.Exists(originalPath))
+            {
+                if (File.Exists(proxyPath)) File.Delete(proxyPath);
+                File.Move(originalPath, proxyPath);
+            }
+            foreach (var name in installedMods)
+            {
+                var path = Path.Combine(modsTarget, name);
+                if (File.Exists(path)) File.Delete(path);
+            }
+            RestoreBackups(gamePath, backups);
+            if (manifestWritten)
+            {
+                var path = Path.Combine(gamePath, ManifestName);
+                if (File.Exists(path)) File.Delete(path);
+            }
+            if (createdModsDirectory && Directory.Exists(modsTarget) &&
+                !Directory.EnumerateFileSystemEntries(modsTarget).Any())
+                Directory.Delete(modsTarget);
+        }
 
         try
         {
             var originalHash = Sha256(proxyPath);
             File.Copy(proxyPath, originalPath, overwrite: false);
+            originalCreated = true;
             if (Sha256(originalPath) != originalHash)
-            {
-                File.Delete(originalPath);
-                return OperationResult.Failure("backup verification failed; nothing was replaced");
-            }
+                throw new IOException("backup verification failed");
             files[OriginalName] = new ManifestFile(originalHash, originalHash, "original library, preserved verbatim");
 
             File.Copy(proxySource, proxyPath, overwrite: true);
             var proxyHash = Sha256(proxyPath);
             files[ProxyName] = new ManifestFile(proxyHash, proxyHash, "HYPRLODR proxy DLL");
 
-            var mods = new List<string>();
             var modsSource = Path.Combine(buildDirectory, ModsDirectoryName);
             if (Directory.Exists(modsSource))
             {
-                var modsTarget = Path.Combine(gamePath, ModsDirectoryName);
                 Directory.CreateDirectory(modsTarget);
                 foreach (var source in Directory.GetFiles(modsSource, "*.dll").OrderBy(p => p, StringComparer.Ordinal))
                 {
-                    var destination = Path.Combine(modsTarget, Path.GetFileName(source));
+                    var name = Path.GetFileName(source);
+                    var destination = Path.Combine(modsTarget, name);
+                    if (File.Exists(destination) && !backups.ContainsKey($"{ModsDirectoryName}/{name}"))
+                    {
+                        var backupRoot = Path.Combine(modsTarget, BackupDirectoryName);
+                        Directory.CreateDirectory(backupRoot);
+                        File.Copy(destination, Path.Combine(backupRoot, name), overwrite: false);
+                        backups[$"{ModsDirectoryName}/{name}"] =
+                            $"{ModsDirectoryName}/{BackupDirectoryName}/{name}";
+                    }
                     File.Copy(source, destination, overwrite: true);
-                    mods.Add(Path.GetFileName(source));
-                    files[$"{ModsDirectoryName}/{Path.GetFileName(source)}"] =
-                        new ManifestFile(Sha256(destination), Sha256(destination), null);
+                    installedMods.Add(name);
+                    var installedHash = Sha256(destination);
+                    files[$"{ModsDirectoryName}/{name}"] =
+                        new ManifestFile(installedHash, installedHash, null);
                 }
             }
 
@@ -135,20 +174,48 @@ public sealed class LoaderInstaller
                 InstalledAt = DateTimeOffset.UtcNow.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"),
                 GameDir = gamePath,
                 Files = files,
-                Mods = mods,
+                Mods = installedMods,
+                Backups = backups,
             };
             File.WriteAllText(Path.Combine(gamePath, ManifestName),
                 JsonSerializer.Serialize(manifest, WriteOptions));
-            return OperationResult.Success($"installed {mods.Count} mod(s) into {gamePath}");
+            manifestWritten = true;
+            var preserved = backups.Count == 0
+                ? ""
+                : $"; preserved {backups.Count} existing mod file(s)";
+            return OperationResult.Success($"installed {installedMods.Count} mod(s) into {gamePath}{preserved}");
         }
-        catch (IOException error)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
-            return OperationResult.Failure($"installation failed: {error.Message}");
+            try
+            {
+                Rollback();
+            }
+            catch (Exception rollbackError) when (rollbackError is IOException or UnauthorizedAccessException)
+            {
+                return OperationResult.Failure(
+                    $"installation failed ({error.Message}) and rollback failed ({rollbackError.Message}); " +
+                    "verify game files through Steam");
+            }
+            return OperationResult.Failure($"installation failed: {error.Message}; every change was rolled back");
         }
-        catch (UnauthorizedAccessException error)
+    }
+
+    /// <summary>Put mod files that predated the installation back where they were.</summary>
+    private static void RestoreBackups(string gamePath, IReadOnlyDictionary<string, string> backups)
+    {
+        foreach (var (targetRelative, backupRelative) in backups)
         {
-            return OperationResult.Failure($"installation failed: {error.Message}");
+            var target = Path.Combine(gamePath, targetRelative);
+            var backup = Path.Combine(gamePath, backupRelative);
+            if (!File.Exists(backup)) continue;
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(backup, target, overwrite: true);
+            File.Delete(backup);
         }
+        var backupRoot = Path.Combine(gamePath, ModsDirectoryName, BackupDirectoryName);
+        if (Directory.Exists(backupRoot) && !Directory.EnumerateFileSystemEntries(backupRoot).Any())
+            Directory.Delete(backupRoot);
     }
 
     public OperationResult Uninstall(string gamePath)
@@ -176,11 +243,22 @@ public sealed class LoaderInstaller
                 File.Delete(proxyPath);
                 File.Move(originalPath, proxyPath);
             }
+            var kept = new List<string>();
             foreach (var mod in manifest?.Mods ?? new List<string>())
             {
-                var path = Path.Combine(gamePath, ModsDirectoryName, Path.GetFileName(mod));
-                if (File.Exists(path)) File.Delete(path);
+                var name = Path.GetFileName(mod);
+                var path = Path.Combine(gamePath, ModsDirectoryName, name);
+                if (!File.Exists(path)) continue;
+                // Only remove a mod whose bytes are still the ones we installed.
+                if (manifest!.Files.TryGetValue($"{ModsDirectoryName}/{name}", out var modRecord) &&
+                    Sha256(path) != modRecord.InstalledSha256)
+                {
+                    kept.Add(name);
+                    continue;
+                }
+                File.Delete(path);
             }
+            RestoreBackups(gamePath, manifest?.Backups ?? new Dictionary<string, string>());
             var modsDir = Path.Combine(gamePath, ModsDirectoryName);
             if (Directory.Exists(modsDir) && !Directory.EnumerateFileSystemEntries(modsDir).Any())
                 Directory.Delete(modsDir);
@@ -190,7 +268,10 @@ public sealed class LoaderInstaller
                 if (File.Exists(path)) File.Delete(path);
             }
             if (File.Exists(manifestPath)) File.Delete(manifestPath);
-            return OperationResult.Success("removed the loader and restored the original library");
+            var note = kept.Count == 0
+                ? ""
+                : $"; kept {kept.Count} mod file(s) that changed since installation";
+            return OperationResult.Success("removed the loader and restored the original library" + note);
         }
         catch (IOException error)
         {
@@ -222,6 +303,7 @@ public sealed class LoaderInstaller
         [JsonPropertyName("game_dir")] public string GameDir { get; set; } = "";
         [JsonPropertyName("files")] public Dictionary<string, ManifestFile> Files { get; set; } = new();
         [JsonPropertyName("mods")] public List<string> Mods { get; set; } = new();
+        [JsonPropertyName("backups")] public Dictionary<string, string> Backups { get; set; } = new();
     }
 
     public sealed record ManifestFile(

@@ -82,4 +82,21 @@ const char *hyprlodr_loader_last_error(const hyprlodr_loader *loader);
 int hyprlodr_loader_had_error(const hyprlodr_loader *loader);
 const char *hyprlodr_loader_strerror(int status);
 
+/* --- file redirection (ABI 4) ----------------------------------------------
+ * Mods register suffix -> replacement pairs through host_api.file_redirect().
+ * The loader publishes the registry when every mod has initialized; a host that
+ * controls file opening (the Windows proxy patches the game's own CreateFileA
+ * import slot) asks which path to open instead.
+ *
+ * Returns 1 and writes the replacement path into `out` when `requested` matches
+ * a published suffix, 0 otherwise. A path that does not fit is never truncated:
+ * that returns 0 rather than opening the wrong file. */
+#define HYPRLODR_REDIRECT_PATH_MAX 1024
+
+int hyprlodr_loader_redirect_path(const hyprlodr_loader *loader, const char *requested,
+                                  char *out, size_t capacity);
+
+/* Number of published redirects (0 until initialization succeeded). */
+size_t hyprlodr_loader_redirect_count(const hyprlodr_loader *loader);
+
 #endif

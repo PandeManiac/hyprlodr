@@ -1,0 +1,43 @@
+{
+  "kind": "in-game file hook evidence",
+  "captured": "2026-11-01",
+  "game": {
+    "exe": "S:\\steamapps\\common\\hyperdemon\\hyperdemon.exe",
+    "build_timestamp": "0x66ecd8b5",
+    "module_base": "0x0000000140000000",
+    "module_size": 4214784,
+    "original_openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  },
+  "runs": [
+    {
+      "note": "CreateFileA-only hook, delay_ms 0",
+      "stage": "mods_loaded",
+      "build_matches": true,
+      "anchors_matched": 8,
+      "anchors_total": 8,
+      "file_hook": "installed",
+      "file_hook_detail": "import_rva=0x3cba60 sections=6 result=patched",
+      "file_redirects": 0,
+      "file_opens_logged": 0,
+      "mods_initialized": 5
+    },
+    {
+      "note": "CreateFileA + fopen + fopen_s, delay_ms 0, ~35 s of game time",
+      "stage": "mods_loaded",
+      "build_matches": true,
+      "file_hook": "installed",
+      "file_hook_detail": "CreateFileA=patched fopen=patched fopen_s=patched",
+      "file_opens_logged": 0,
+      "mods_initialized": 5
+    }
+  ],
+  "imports_measured": {
+    "KERNEL32.dll": ["CreateFileA", "ReadFile"],
+    "api-ms-win-crt-stdio-l1-1-0.dll": ["fopen", "fopen_s", "_wfopen"]
+  },
+  "conclusion": "The three narrow-path import slots are patched in the running game and the patch is proven live by the stand-in host under Wine, but the real game performs no narrow-path opens during start-up. hyperdemon.exe also imports _wfopen, which takes wide strings and is not hooked, so the asset-loading path is almost certainly the wide CRT entry point. No in-game asset replacement has been achieved yet.",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4",
+    "note": "tools/hyprl_install.py uninstall restored the shipped library byte-for-byte"
+  }
+}

@@ -1,5 +1,19 @@
 # Session progress
 
+## 2026-11-01 (continued)
+
+**Rollback bug fixed and covered.** `state_remove()` deleted a key and the journal could not restore it, because rollback looked the key up in the table it had just been removed from. Rollback now re-inserts the previous value and owner when the entry is gone, and leaves the "drop what the mod added" path untouched. New scenario `state_remove_rolled_back_on_failure`: a failing mod removes another mod's key and adds its own, and the keeper verifies through the public ABI from `shutdown()` — which the loader runs after rollback — that the value came back and the failed mod's key did not survive.
+
+**Installers are non-destructive.** Both `tools/hyprl_install.py` and `HYPRLODR.Core/LoaderInstaller.cs` now back up a mod file that already exists (`mods/.hyprlodr-backup`, recorded in the manifest), restore it on uninstall, and wrap the whole install in a rollback that puts the original library back and removes every partial artefact. Uninstall no longer deletes a mod whose bytes changed since installation; it reports it instead. Three Python scenarios (`install_suite`) and three manager scenarios (`loader_preserves_existing_mod`, `loader_install_rolls_back`, `loader_uninstall_keeps_changed_mod`) cover it.
+
+**File hook hardened.** Open records use an atomic sequence number (concurrent game threads can no longer reuse one), the saved original pointer is published with a full fence before the slot is patched, the shim reads its pointers once into locals, a failed install closes its log handle, and redirect publication uses release/acquire so an unpublished table is invisible to a game thread mid-initialization.
+
+**The regression that was not one.** Two sessions were lost to a Wine crash/hang that looked like a code regression: the test harness was fed `$GAME/OpenAL32.dll` while the loader was still installed in the game, so the proxy was copied in as its own forwarder target and looped into itself. Restoring the game first made the identical build pass. The test script still takes an arbitrary path, so the real fix is remembering to uninstall, not code.
+
+**Measured the game's real file APIs.** `hyperdemon.exe` imports only `CreateFileA`/`ReadFile` from KERNEL32 and `fopen`, `fopen_s`, `_wfopen` from the UCRT API set. The hook was extended to the three narrow targets (symbol-resolved IAT patching, per-target failure policy) and installed successfully in the live game: `CreateFileA=patched fopen=patched fopen_s=patched`. Three real runs still logged **zero** opens, so the asset loader is almost certainly `_wfopen`, which is not intercepted yet. Redirection itself is verified end to end against the Wine stand-in (redirected bytes returned to the caller). Evidence: `docs/evidence/2026-11-01-file-hook.json`.
+
+**Verified totals.** Linux `ctest` 6/6 suites (loader 29/29, package 19/19, installer 3/3, manager 32/32, anchors, asset probe); Windows/Wine suite green including forwarded exports, attach bootstrap, redirect bytes and the file log; original `OpenAL32.dll` restored byte-for-byte after every real-game run.
+
 ## 2026-10-31 (local session)
 
 **Recovery.** Discovered the local checkout held the cloud agent's uncommitted work (no commits at all) and that `~/hyprlodr-recovery/hyprlodr-hJcCSK03` (commit `4c0bd6b`) differed from it only by the two GCC fixes (`dlsym` function-pointer cast, misleading indentation) plus `.gitignore`. Adopted those fixes verbatim, built, ran the existing lifecycle test, and committed the baseline as `f9a8a14`. No recovery data was modified or deleted.

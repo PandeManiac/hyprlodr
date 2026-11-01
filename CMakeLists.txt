@@ -73,6 +73,14 @@ hyprlodr_fixture(diamond_top FIX_ID="d.top" FIX_DEP1="d.left" FIX_DEP2="d.right"
 hyprlodr_fixture(state_writer FIX_ID="k.writer" FIX_STATE_KEY="fixture.state" FIX_STATE_VALUE="written")
 hyprlodr_fixture(state_reader FIX_ID="k.reader" FIX_DEP1="k.writer" FIX_REQUIRE_STATE="fixture.state" FIX_REQUIRE_VALUE="written")
 
+# A failing mod removes a key another mod set. Rollback must put it back, which
+# the keeper verifies through the public ABI when it shuts down after rollback.
+hyprlodr_fixture(state_keeper FIX_ID="k.keeper" FIX_STATE_KEY="fixture.remove" FIX_STATE_VALUE="kept"
+  FIX_SHUTDOWN_REQUIRE_STATE="fixture.remove" FIX_SHUTDOWN_REQUIRE_VALUE="kept"
+  FIX_SHUTDOWN_REQUIRE_ABSENT="fixture.remover")
+hyprlodr_fixture(state_remover FIX_ID="k.remover" FIX_DEP1="k.keeper" FIX_STATE_REMOVE="fixture.remove"
+  FIX_STATE_KEY="fixture.remover" FIX_STATE_VALUE="transient" FIX_FAIL=1)
+
 hyprlodr_fixture(missing_dep FIX_ID="needs.missing" FIX_DEP1="not.there")
 hyprlodr_fixture(cycle_a FIX_ID="cycle.a" FIX_DEP1="cycle.b")
 hyprlodr_fixture(cycle_b FIX_ID="cycle.b" FIX_DEP1="cycle.a")
@@ -101,6 +109,13 @@ hyprlodr_fixture(dir_writer_a FIX_ID="p.writer" FIX_STATE_FILE="probe.txt")
 hyprlodr_fixture(dir_writer_b FIX_ID="p.writer2" FIX_STATE_FILE="probe.txt")
 hyprlodr_fixture(state_counter FIX_ID="p.counter" FIX_STATE_COUNTER="counter.txt")
 
+# ABI 4 file redirection: one mod that registers successfully and one that
+# registers then fails, so the rollback path is exercised as well.
+hyprlodr_fixture(redirect_mod FIX_ID="r.redirect"
+  FIX_REDIRECT_FROM="asset/asset" FIX_REDIRECT_TO="C:/hyprlodr/replacement.bin")
+hyprlodr_fixture(redirect_fail FIX_ID="r.failing"
+  FIX_REDIRECT_FROM="shader/x.glsl" FIX_REDIRECT_TO="C:/hyprlodr/other.bin" FIX_FAIL=1)
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -125,6 +140,10 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/test_package.py
       $<TARGET_FILE:hyprlodr-host>
       ${CMAKE_BINARY_DIR}/mods/z.foundation${CMAKE_SHARED_LIBRARY_SUFFIX})
+
+  # Installers must be non-destructive and must roll back failed installs.
+  add_test(NAME install_suite
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/tests/test_install.py)
 
   # Desktop manager core services (headless; skipped when the .NET SDK is absent).
   find_program(DOTNET_EXECUTABLE dotnet)

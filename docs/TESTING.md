@@ -20,7 +20,7 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
-## Loader scenarios (native, 26/26 passing)
+## Loader scenarios (native, 29/29 passing)
 
 | Scenario | Asserts |
 |---|---|
@@ -50,6 +50,9 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 | `empty_mod_directory` | Reported as an error, zero mods |
 | `initialization_failure_stops_dependents` | Pre-failure mod shut down, dependent never started, rollback journal reports 2 undone changes |
 | `rollback_leaves_no_residue` | No mod initializes after a failure |
+| `state_remove_rolled_back_on_failure` | A failing mod deletes another mod's key and adds one of its own; after rollback the keeper observes the deleted value restored and the added key gone (asserted from its `shutdown()`, i.e. through the public ABI) |
+| `file_redirect_registration` | Exact match, wrong file, case-insensitive match, relative path, non-boundary suffix and prefix path — six probes against the published registry |
+| `file_redirect_rolled_back_with_failing_mod` | A redirect registered by a mod that then fails is not published |
 
 The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`) applies to the loader, host, samples and fixtures.
 
@@ -83,11 +86,23 @@ The cross-check tests call `hyprlodr-host --describe`, which loads the library a
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
+The attach record also reports the file hook: the stand-in imports only `CreateFileA`, so the run asserts `CreateFileA=patched fopen=absent fopen_s=absent` and that the stand-in's redirected open returned the mod's bytes, with the record written to `hyprlodr-files.jsonl`.
+
 ## Asset probe (`asset_probe_suite`)
 
 `tools/re/asset_probe.py --selftest` builds a synthetic archive with the cipher the decompiled loader implies, encrypts it, decrypts it, and asserts the entry table parses back to the original names, offsets and sizes — including a corrupt-byte case. This is a model check, not a claim about the real container: the tool's real-file mode reports `RESULT: decryption does not yield names` and exits non-zero, which is the current, honest state. It also verifies that the binary's CRC table at RVA `0x36f700` equals the standard CRC-32 table (it does), which is what makes `crc32(name) & 0xffff` a confirmed per-entry key rather than a guess.
 
-## Manager core (21/21 passing)
+## Installer safety (3/3 passing)
+
+`tools/tests/test_install.py` drives `tools/hyprl_install.py` against throwaway game directories:
+
+| Scenario | Asserts |
+|---|---|
+| `install_preserves_existing_mod` | A mod file that already exists is recorded as a backup, the build's copy is installed, and uninstall restores the user's bytes |
+| `failed_install_rolls_back` | An install that fails after the proxy was replaced restores the original library, removes the backup and the manifest, and leaves the blocking file intact |
+| `uninstall_keeps_changed_mod` | A mod whose bytes changed since installation is kept (and reported), untouched mods are removed, original library restored |
+
+## Manager core (32/32 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.
 
@@ -114,6 +129,9 @@ This proves the Windows loader path, the forwarder table and the attach bootstra
 | `profiles_tolerate_corrupt_file` | Corrupt JSON loads as empty; blank names dropped; long names clamped |
 | `run_report_reads_evidence` | Attach record and event log parsed into stage, pid, fingerprint counts, init count and last error |
 | `run_report_tolerates_absence` | Missing files report no run; a corrupt attach record still yields the parsed events |
+| `loader_preserves_existing_mod` | Existing mod file backed up and restored by uninstall |
+| `loader_install_rolls_back` | Failed install restores the proxy, removes the backup/manifest, leaves the blocking file intact |
+| `loader_uninstall_keeps_changed_mod` | A modified mod is kept; untouched mods and the loader are removed |
 
 UI verification: the app was launched under Xvfb against `build-win/demo-game` (fake install with five mods, one disabled) and captured to `docs/evidence/manager-ui.png`. That confirms rendering and data binding; it is not an interactive user test.
 
@@ -169,8 +187,22 @@ A mismatch is reported, never optimised away. Nothing is hooked today, so `build
 
 Note on the 2026-10-31 re-runs: the game process exits a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy), and it writes **no** `hyprlodr-crash.json`, so the exit is not an unhandled exception inside the game process. With the default 2500 ms delay that exit arrives first and no mod ever starts; the attach record then still reads `stage: "initializing"` or `"attached"`. Setting `delay_ms: 0` closes the gap: `docs/evidence/2026-10-31-initializing.json` records 35 events and all five mods initialized, in order, inside `hyperdemon.exe` with `build_matches=true`. Shutdown events are absent by design — process termination runs no mod code.
 
+## File hook in the real game (2026-11-01)
+
+Three runs with the loader installed in the real installation, `delay_ms: 0`, game terminated after 10–35 s, original library restored each time (`396f8873...420b4`):
+
+| Run | Hook | Result |
+|---|---|---|
+| 1 | `CreateFileA` only | `file_hook: "installed"`, `file_opens_logged: 0`, 5/5 mods initialized |
+| 2 | `CreateFileA` + `fopen` + `fopen_s` | `file_hook_detail: "CreateFileA=patched fopen=patched fopen_s=patched"`, `file_opens_logged: 0`, 5/5 mods initialized |
+| 3 | same, 30 s of game time | `file_opens_logged: 0` |
+
+The patch reaches the running game — all three import slots are found and rewritten, and the same shim is proven live against the stand-in host — but HYPER DEMON performs **no narrow-path opens** during start-up. Measured imports of `hyperdemon.exe`: `KERNEL32.dll` exposes only `CreateFileA`/`ReadFile` as file APIs, while `api-ms-win-crt-stdio-l1-1-0.dll` exposes `fopen`, `fopen_s` **and `_wfopen`**. The wide entry point is not hooked, which makes it the most likely asset path and the next concrete step. No in-game asset replacement has been achieved. Evidence: `docs/evidence/2026-11-01-file-hook.json`.
+
 ## Still unverified
 
+- **The game's asset path**: no narrow-path open was observed in-game; asset loading is believed to go through `_wfopen`, which is not intercepted.
+- **In-game asset replacement**: file redirection is proven only against the stand-in host.
 - **Audio output quality**: the process proves the `al*`/`alc*` symbols resolve into the real library; nobody has listened to the game with the proxy installed.
 - **Game-level behaviour** beyond start-up: no gameplay, scoring or online feature was exercised.
 - **Windows native** (non-Proton) execution.

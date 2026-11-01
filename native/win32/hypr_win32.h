@@ -56,6 +56,9 @@ typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
 #define OPEN_EXISTING 3u
 #define FILE_ATTRIBUTE_NORMAL 0x00000080u
 #define FILE_SHARE_READ 0x00000001u
+#define FILE_SHARE_WRITE 0x00000002u
+#define FILE_APPEND_DATA 0x00000004u
+#define PAGE_READWRITE 0x00000004u
 #define STD_OUTPUT_HANDLE ((DWORD)-11)
 #define INVALID_HANDLE_VALUE ((HANDLE)(long long)-1)
 
@@ -115,6 +118,7 @@ HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, void *security
 BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, void *overlapped);
 BOOL WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, DWORD *read, void *overlapped);
 BOOL WINAPI CloseHandle(HANDLE handle);
+BOOL WINAPI VirtualProtect(LPVOID address, size_t size, DWORD new_protect, DWORD *old_protect);
 HANDLE WINAPI GetProcessHeap(void);
 void *WINAPI HeapAlloc(HANDLE heap, DWORD flags, size_t bytes);
 void *WINAPI HeapReAlloc(HANDLE heap, DWORD flags, void *block, size_t bytes);

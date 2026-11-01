@@ -50,6 +50,9 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   cp "$OUT/OpenAL32.dll" "$WORK/proxy/OpenAL32.dll"
   cp "$ORIGINAL_OPENAL" "$WORK/proxy/OpenAL32_real.dll"
   cp "$OUT"/mods/*.dll "$WORK/proxy/mods/"
+  # ABI 4 file redirection: registers a probe redirect the client exercises.
+  cp "$OUT/tests/redirect_mod.dll" "$WORK/proxy/mods/"
+  rm -f "$WORK/proxy/redirect-probe.dat"
 
   CFG=(--target=x86_64-pc-windows-msvc -std=c17 -O2 -ffreestanding -nostdlibinc
        -fno-stack-protector -mno-stack-arg-probe -Wall -Wextra -Werror
@@ -62,7 +65,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     "$OUT/lib/kernel32.lib"
 
   rm -f "$WORK/proxy/hyprlodr-config.json"
-  ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) || status=1
+  ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) | tee "$WORK/proxy/client.log" || status=1
 
   python3 - "$WORK/proxy" 2500 <<'PY' || status=1
 import json, pathlib, sys
@@ -88,14 +91,26 @@ assert attach["delay_ms"] == 2500, attach
 assert not (base / "hyprlodr-crash.json").exists(), "crash filter fired on a clean exit"
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
-assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init
+samples = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
+assert [mod for mod in init if mod != "r.redirect"] == samples, init
+assert "r.redirect" in init, init
+assert attach["file_hook"] == "installed", attach
+# The stand-in host imports CreateFileA from KERNEL32 and no CRT file API, so the
+# CRT targets are reported absent instead of being assumed present.
+assert "CreateFileA=patched" in attach["file_hook_detail"], attach
+assert "fopen=absent" in attach["file_hook_detail"], attach
+print(f"file hook detail: {attach['file_hook_detail']}")
+assert attach["file_redirects"] == 1, attach
+published = [e for e in events if e["event"] == "file_redirects_published"]
+assert len(published) == 1, published
 print("proxy bootstrap: mods initialized inside the host process")
+print("file hook: installed, one redirect published")
 print("crash filter: silent on a clean exit")
 PY
   echo "== wine proxy: hyprlodr-config.json overrides the delay =="
   printf '{\n  "delay_ms": 0\n}\n' > "$WORK/proxy/hyprlodr-config.json"
   rm -f "$WORK/proxy/hyprlodr-attach.json" "$WORK/proxy/hyprlodr-events.jsonl"
-  ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) || status=1
+  ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) | tee "$WORK/proxy/client.log" || status=1
 
   python3 - "$WORK/proxy" <<'PY' || status=1
 import json, pathlib, sys
@@ -105,8 +120,25 @@ assert attach["delay_ms"] == 0, attach
 assert attach["stage"] == "mods_loaded", attach
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
-assert init == ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"], init
+samples = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
+assert [mod for mod in init if mod != "r.redirect"] == samples, init
+assert "r.redirect" in init, init
 print("config: delay_ms=0 honoured, all five mods still initialized")
+
+# The client opened "redirect-probe.dat", which does not exist on disk. The
+# bytes it read can only come from the mod's replacement file through the
+# patched CreateFileA import slot.
+client = (base / "client.log").read_text()
+assert "redirect-probe: hyprlodr redirect content" in client, client
+print("file hook: redirected open in the stand-in host returned the mod's bytes")
+
+opens = [json.loads(line) for line in (base / "hyprlodr-files.jsonl").read_text().splitlines() if line.strip()]
+records = [e for e in opens if e.get("requested") == "redirect-probe.dat"]
+assert records, opens[:5]
+assert records[0]["redirected"] is True, records[0]
+assert records[0]["ok"] is True, records[0]
+assert records[0]["opened"].endswith("replacement.txt"), records[0]
+print(f"file log: {len(opens)} opens observed, redirect recorded")
 PY
 else
   echo "skipped proxy runtime test: pass the original OpenAL32.dll path as the second argument"
