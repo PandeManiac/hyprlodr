@@ -28,8 +28,6 @@ MANIFEST = "hyprlodr-install-manifest.json"
 
 # Title art shown above the game while at least one mod is loaded. Installed only
 # when the game does not already have one, so a user's own art survives upgrades.
-TITLE = "hyprlodr-title.bmp"
-TITLE_SOURCE = Path(__file__).resolve().parent.parent / "assets" / "title.bmp"
 # The glyph mask the proxy uploads into the game's own title texture. It is rendered
 # from a face the user's installation already contains (tools/make_title_mask.py), so
 # it is generated, not vendored: the installer only delivers it.
@@ -151,7 +149,6 @@ def cmd_install(args) -> int:
     files: dict[str, dict] = {}
     backups: dict[str, str] = {}
     installed_mods: list[str] = []
-    title_created = False
     mask_created = False
     created_mods_dir = not (game / MOD_DIR).exists()
     original_created = False
@@ -164,8 +161,6 @@ def cmd_install(args) -> int:
             (game / ORIGINAL).rename(game / PROXY)
         for name in installed_mods:
             (game / MOD_DIR / name).unlink(missing_ok=True)
-        if title_created:
-            (game / TITLE).unlink(missing_ok=True)
         if mask_created:
             (game / MASK).unlink(missing_ok=True)
         restore_backups(game, backups)
@@ -187,15 +182,6 @@ def cmd_install(args) -> int:
         proxy_hash = sha256(game / PROXY)
         files[PROXY] = {"sha256": proxy_hash, "installed_sha256": proxy_hash,
                         "role": "HYPRLODR proxy DLL"}
-
-        # The title overlay needs art in the game directory; the loader's own is a
-        # default, never an overwrite of something the user put there.
-        if TITLE_SOURCE.is_file() and not (game / TITLE).exists():
-            shutil.copy2(TITLE_SOURCE, game / TITLE)
-            title_hash = sha256(game / TITLE)
-            title_created = True
-            files[TITLE] = {"sha256": title_hash, "installed_sha256": title_hash,
-                            "role": "title screen art shown when mods are loaded"}
 
         # The replacement's letterforms. A mask the user already had is preserved in
         # the backup directory and put back by uninstall, exactly as mods are.
@@ -292,13 +278,6 @@ def cmd_uninstall(args) -> int:
         path.unlink()
     if kept:
         print("kept mod file(s) that changed since installation: " + ", ".join(sorted(kept)))
-    title_record = (manifest or {}).get("files", {}).get(TITLE, {}).get("installed_sha256")
-    if title_record and (game / TITLE).is_file():
-        if sha256(game / TITLE) == title_record:
-            (game / TITLE).unlink()
-            print(f"removed {TITLE}")
-        else:
-            print(f"kept {TITLE} (changed since installation)")
     mask_record = (manifest or {}).get("files", {}).get(MASK, {}).get("installed_sha256")
     if mask_record and (game / MASK).is_file():
         if sha256(game / MASK) == mask_record:

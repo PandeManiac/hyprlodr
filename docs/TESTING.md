@@ -298,13 +298,3 @@ Reading `/proc/<pid>/fd` during a live session showed `asset/asset` held open by
 | 1266–1274 | `_Fiopen` | `…/HyperDemon/config`, `cache/scores`, `cache/names`, `user` |
 
 With a mod registering `asset/asset` → its own file, the same open came back `"redirected":true,"opened":"…\\hyprlodr-state\\r.asset\\asset.bin"`, 7/7 mods initialized and the game ran normally (the replacement was a hardlink, so the bytes were identical). Hook detail for that run: `CreateFileA=patched(7) fopen=patched(1) fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1) _wfopen_s=absent modules=39`.
-
-## Title overlay (2026-11-01)
-
-| Case | Result |
-|---|---|
-| one mod initialized | `hyprlodr-title.jsonl` recorded `{"status":"shown","width":1288,"height":754}`, then `hidden` after `title_ms`; 6/6 mods initialized; no crash record |
-| zero mods | `title_overlay: not_started` in the attach record, no title log, no overlay window |
-| no title image | `image_invalid` is logged and the game runs normally |
-
-The art is a 24/32-bit BMP; `tools/hyprl_title.py convert art.png "<game>/hyprlodr-title.bmp"` prepares one, and the CLI installer copies `assets/title.bmp` only when the game has no title image.

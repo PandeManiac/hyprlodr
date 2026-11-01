@@ -1,5 +1,20 @@
 # Session progress
 
+## 2026-11-01 (seventh pass: the old overlay is gone)
+
+**Removed the copper HYPRLODR wordmark overlay**, which was the pre-RE placeholder: a topmost
+click-through GDI window painting `hyprlodr-title.bmp` over the game. With the mask replacement working
+it was pure clutter, so the whole feature is gone - `native/win32/title_overlay.c`/`.h`, its build and
+link lines, the proxy's include, `title_ms` parser, attach-record field and start call, the installer's
+`assets/title.bmp` delivery, `tools/hyprl_title.py`, `docs/TITLE_OVERLAY.md` and the art itself.
+
+**Verified in game after removal:** the run still logs `title_mask_loaded` and `title_mask_found` once
+each, no `hyprlodr-title.jsonl` is written, the attach record no longer carries `title_overlay`, and
+frames 170/184 show bare HYPR over LODR in the game's own animated fill with no second wordmark.
+
+**Tests:** package payload 5/5, mask installer 3/3, installer safety 3/3, package 19/19.
+
+
 ## 2026-11-01 (sixth pass: the replacement ships as a mod package)
 
 **`example.title-replacement` now exists.** The package format gained a `files` list: payload under

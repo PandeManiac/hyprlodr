@@ -43,7 +43,6 @@ compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
 compile "$ROOT/native/win32/file_hook.c" "$OUT/obj/file_hook.obj"
-compile "$ROOT/native/win32/title_overlay.c" "$OUT/obj/title_overlay.obj"
 compile "$ROOT/native/win32/gl_hook.c" "$OUT/obj/gl_hook.obj"
 compile "$ROOT/native/win32/asset_probe.c" "$OUT/obj/asset_probe.obj"
 # -fno-builtin keeps the runtime's own memcpy/memset implementations from
@@ -143,7 +142,6 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   lld-link /nologo /dll /nodefaultlib /entry:dll_main "/out:$OUT/OpenAL32.dll" \
     /def:"$OUT/OpenAL32.def" \
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" "$OUT/obj/file_hook.obj" \
-    "$OUT/obj/title_overlay.obj" \
     "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32" "$U32" "$G32"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
 else
