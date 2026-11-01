@@ -1,5 +1,29 @@
 # Session progress
 
+## 2026-11-01 (sixth pass: the replacement ships as a mod package)
+
+**`example.title-replacement` now exists.** The package format gained a `files` list: payload under
+`assets/` can be installed beside the game (`to` relative to the game directory), hashed into the mods
+index, and removed only while the bytes still match. That is what the replacement needed - the mask is
+data the game's own title pass uploads, not code the loader calls.
+
+**New files:** `examples/title_replacement.c` (reports whether the mask is in place, and publishes
+`example.title-replacement`), `examples/package-title/manifest.json` (ships `assets/title-mask.raw` ->
+`hyprlodr-title-mask.raw`), a staging step in `tools/build_windows.sh`, and
+`tools/tests/test_package_files.py` (5/5).
+
+**Runtime addition:** the minimal Windows CRT had `fopen/fgets/fprintf` but no `fread`, so the mod
+could not count the mask's bytes; `fread` is now implemented over the existing buffered handle
+declared in `native/win32/crt/stdio.h`.
+
+**Verified in game:** loader installed deliberately *without* a mask, package installed, game started -
+`title_mask_loaded` once, the mod logged "title mask in place (853x480 RGBA); the game draws HYPR over
+LODR", and the frames show HYPR over LODR. Removing the package removed the mask; the installation went
+back to pristine.
+
+**Tests:** package 19/19, package payload 5/5, mask installer 3/3, installer safety 3/3.
+
+
 ## 2026-11-01 (fifth pass: the face comes out of the installation)
 
 **The typeface no longer has to be extracted by hand.** `tools/title_mask_from_game.py` reads the

@@ -259,8 +259,9 @@ def install_list_remove():
         assert "z.foundation" in index["mods"]
         # installing identical content again is idempotent
         pkg.install(archive, mods_dir, host=HOST)
-        removed = pkg.remove(mods_dir, "z.foundation")
+        removed, kept = pkg.remove(mods_dir, "z.foundation")
         assert removed == "z.foundation.so"
+        assert kept == [], kept
         assert not (mods_dir / "z.foundation.so").exists()
 
 

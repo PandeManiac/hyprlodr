@@ -129,6 +129,36 @@ Published for the analysed build: `string:resource_path`, `string:missing_resour
 
 Verified in the real game on 2026-11-01: `symbol string:resource_path at rva 36f640 (12 bytes)` followed by a successful hash check, with 8/8 anchors. Evidence: `docs/evidence/2026-11-01-abi7-symbols.json`.
 
+## Installing files beside the game (`files`)
+
+Some mods are mostly data the *game* opens, not code the loader calls. The title replacement is the
+first of those: it needs `hyprlodr-title-mask.raw` next to the game, where the proxy's GL hook uploads
+it as the title texture. `assets/` alone was opaque, so a package can now say where its payload goes:
+
+```json
+{
+  "id": "example.title-replacement",
+  "files": [
+    { "from": "assets/title-mask.raw", "to": "hyprlodr-title-mask.raw" }
+  ]
+}
+```
+
+- `from` must live under `assets/` or `config/` and must be present in the archive; `to` is relative
+  to the directory that contains `mods/`, i.e. the game directory.
+- `to` is validated like any other package path: no absolute paths, no drive letters, no backslashes,
+  no `..`, no duplicate targets, and nothing that collides with the loader's own `mods/` directory or
+  `hyprlodr-mods.json`.
+- Installed files are hashed into the mods index. `hyprl_package.py remove` deletes them only while
+  their bytes still match what was installed - a file the user changed is kept and reported, never
+  deleted. Re-installing the same package puts back a payload that went missing.
+- Nothing is written outside the game directory, and the writing happens after the package itself has
+  passed validation.
+
+Verified in the real game on 2026-11-01: the loader was installed *without* a mask, the package was
+then installed, and the game logged `title_mask_loaded` with the mod reporting "title mask in place
+(853x480 RGBA); the game draws HYPR over LODR". Removing the package took the mask with it.
+
 ## Rules
 
 - **One export.** `hyprlodr_plugin_query` must return a pointer to storage that lives for the whole process (usually `static`). All descriptor strings are owned by the mod and must also remain valid.

@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "id": "example.title-replacement",
+  "name": "Title replacement",
+  "version": "1.0.0",
+  "author": "HYPRLODR",
+  "api": 7,
+  "platform": "windows-x86_64",
+  "entry": "native/windows-x86_64/example.title-replacement.dll",
+  "dependencies": [],
+  "capabilities": [
+    "example.title-replacement"
+  ],
+  "files": [
+    {
+      "from": "assets/title-mask.raw",
+      "to": "hyprlodr-title-mask.raw"
+    }
+  ],
+  "description": "Draws HYPR over LODR with the game's own title shader by installing a glyph mask the title pass uploads as its texture.",
+  "homepage": "https://github.com/PandeManiac/hyprlodr"
+}

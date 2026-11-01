@@ -55,6 +55,11 @@ ID_RE = re.compile(r"^[a-z0-9._-]{1,127}$")
 VERSION_RE = re.compile(r"^\d+(\.\d+){0,2}$")
 DEP_RE = re.compile(r"^[a-z0-9._-]{1,127}(@(>=|<=|>|<|=|\^|~)\d+(\.\d+){0,2})?$")
 INDEX_NAME = "hyprlodr-mods.json"
+# Optional payload: files the package places beside the game (the parent of the mods
+# directory). This is how a package ships data the game itself reads, such as the title
+# glyph mask, instead of only a library the loader can call.
+PAYLOAD_KEY = "files"
+PAYLOAD_PREFIXES = ("assets/", "config/")
 
 
 class PackageError(Exception):
@@ -74,6 +79,20 @@ def _check_entry_name(name: str) -> str:
     if name != "/".join(parts):
         raise PackageError(f"non-normalised path: {name!r}")
     return name
+
+
+def _check_game_path(path: str) -> str:
+    """A path a package may write beside the game; refuses anything that escapes it."""
+    if not path or path.endswith("/"):
+        raise PackageError(f"invalid install target {path!r}")
+    if "\\" in path or path.startswith("/") or re.match(r"^[A-Za-z]:", path):
+        raise PackageError(f"install target must be a relative POSIX path: {path!r}")
+    parts = path.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise PackageError(f"unsafe install target {path!r}")
+    if parts[0] == "mods" or path == INDEX_NAME:
+        raise PackageError(f"install target {path!r} collides with the loader's own files")
+    return path
 
 
 def _is_allowed_path(name: str) -> bool:
@@ -123,6 +142,25 @@ def validate_manifest(manifest: dict, entries: list[str]) -> None:
     for item in manifest.get("capabilities", []):
         if not isinstance(item, str) or not item:
             raise PackageError("capabilities must be non-empty strings")
+
+    payload = manifest.get(PAYLOAD_KEY, [])
+    if not isinstance(payload, list):
+        raise PackageError(f"{PAYLOAD_KEY} must be a list of {{\"from\", \"to\"}} objects")
+    targets: set[str] = set()
+    for item in payload:
+        if not isinstance(item, dict) or set(item) != {"from", "to"}:
+            raise PackageError(f"each {PAYLOAD_KEY} entry must be only \"from\" and \"to\"")
+        source, target = item["from"], item["to"]
+        if not isinstance(source, str) or not isinstance(target, str):
+            raise PackageError(f"{PAYLOAD_KEY} entries must be strings")
+        if not source.startswith(PAYLOAD_PREFIXES):
+            raise PackageError(f"{PAYLOAD_KEY} source {source!r} must live under assets/ or config/")
+        if source not in entries:
+            raise PackageError(f"{PAYLOAD_KEY} source {source!r} is not present in the archive")
+        _check_game_path(target)
+        if target in targets:
+            raise PackageError(f"duplicate {PAYLOAD_KEY} target {target!r}")
+        targets.add(target)
 
     entry = manifest["entry"]
     if not isinstance(entry, str) or not entry.startswith("native/"):
@@ -273,6 +311,16 @@ def save_index(mods_dir: Path, index: dict) -> None:
     _index_path(mods_dir).write_text(json.dumps(index, indent=2, sort_keys=True))
 
 
+def payload_intact(record: dict, mods_dir: Path) -> bool:
+    """True when every file this package installed is still exactly what it wrote."""
+    root = mods_dir.parent
+    for target, expected in record.get("files", {}).items():
+        path = root / _check_game_path(target)
+        if not path.is_file() or sha256_file(path) != expected:
+            return False
+    return True
+
+
 def install(package: Path, mods_dir: Path, host: Path | None = None, force: bool = False) -> dict:
     manifest, _ = inspect_package(package)
     mod_id = manifest["id"]
@@ -281,6 +329,8 @@ def install(package: Path, mods_dir: Path, host: Path | None = None, force: bool
 
     with zipfile.ZipFile(package) as archive:
         payload = archive.read(manifest["entry"])
+        payload_files = {item["to"]: archive.read(item["from"])
+                         for item in manifest.get(PAYLOAD_KEY, [])}
     if len(payload) > MAX_ENTRY_BYTES:
         raise PackageError("entry grew between validation and extraction")
 
@@ -291,12 +341,23 @@ def install(package: Path, mods_dir: Path, host: Path | None = None, force: bool
     if existing and existing.get("sha256") != digest and not force:
         raise PackageError(
             f"mod {mod_id!r} is already installed with different content; pass --force to replace")
-    if existing and existing.get("sha256") == digest:
+    if existing and existing.get("sha256") == digest and payload_intact(existing, mods_dir):
         return existing
 
     destination.write_bytes(payload)
     if sha256_file(destination) != digest:
         raise PackageError("hash mismatch after extraction; the package may be corrupt")
+
+    # Files the game itself opens (the title mask) go beside the game, not into mods/.
+    written: dict[str, str] = {}
+    for target, data in payload_files.items():
+        target_path = mods_dir.parent / _check_game_path(target)
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_bytes(data)
+        expected = hashlib.sha256(data).hexdigest()
+        if sha256_file(target_path) != expected:
+            raise PackageError(f"hash mismatch after writing {target}; the package may be corrupt")
+        written[target] = expected
 
     record = {
         "id": mod_id,
@@ -311,6 +372,7 @@ def install(package: Path, mods_dir: Path, host: Path | None = None, force: bool
         "platform": manifest["platform"],
         "file": destination.name,
         "sha256": digest,
+        "files": written,
         "installed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     if host is not None:
@@ -321,7 +383,8 @@ def install(package: Path, mods_dir: Path, host: Path | None = None, force: bool
     return record
 
 
-def remove(mods_dir: Path, mod_id: str) -> str:
+def remove(mods_dir: Path, mod_id: str) -> tuple[str, list[str]]:
+    """Remove a mod and the files it installed; returns what went and what was kept."""
     index = load_index(mods_dir)
     record = index["mods"].get(mod_id)
     if not record:
@@ -332,9 +395,18 @@ def remove(mods_dir: Path, mod_id: str) -> str:
             raise PackageError(
                 f"{path.name} changed since installation; refusing to delete it")
         path.unlink()
+    kept: list[str] = []
+    for target, expected in record.get("files", {}).items():
+        target_path = mods_dir.parent / _check_game_path(target)
+        if not target_path.is_file():
+            continue
+        if sha256_file(target_path) != expected:
+            kept.append(target)          # the user changed it; never delete their bytes
+            continue
+        target_path.unlink()
     del index["mods"][mod_id]
     save_index(mods_dir, index)
-    return record["file"]
+    return record["file"], kept
 
 
 def main(argv: list[str]) -> int:
@@ -383,7 +455,10 @@ def main(argv: list[str]) -> int:
                 verified = "verified" if record.get("descriptor_verified") else "unverified"
                 print(f"{mod_id:<28} {record['version']:<10} {record['file']:<28} {verified}")
         else:
-            print(f"removed {remove(args.mods_dir, args.mod_id)}")
+            removed, kept = remove(args.mods_dir, args.mod_id)
+            print(f"removed {removed}")
+            for target in kept:
+                print(f"kept {target} (changed since installation)")
     except PackageError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

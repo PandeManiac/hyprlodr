@@ -125,6 +125,19 @@ installing rather than by hand-copying, and a mask the user already had must sur
 | `existing_mask_is_restored` | A mask already in the game directory is backed up, replaced, and put back by uninstall |
 | `missing_mask_is_reported` | A `--title-mask` path that does not exist fails before the proxy is touched: no backup library, no manifest |
 
+## Package payload files (5/5 passing)
+
+`tools/tests/test_package_files.py` covers the `files` manifest key that lets a package ship data the
+game itself opens - the title mask. Everything runs in throwaway directories.
+
+| Scenario | Asserts |
+|---|---|
+| `payload_installs_beside_the_game` | The mask lands next to the game, is recorded in the index, and is removed with the mod |
+| `reinstall_restores_a_deleted_payload` | Re-installing a package puts back a payload file that disappeared |
+| `changed_payload_is_kept` | A mask the user changed is kept on removal, and the removal says so |
+| `escaping_target_is_refused` | `..`, absolute, drive-letter, `mods/` and index-colliding targets are all refused at pack time |
+| `source_outside_payload_prefix_is_refused` | A `files` source taken from `native/` is refused |
+
 The mask itself is not committed: it is rendered by `tools/make_title_mask.py` from a face inside the
 user's own installation, and `/assets/hyprlodr-title-mask.raw` is ignored by Git.
 

@@ -401,6 +401,37 @@ char *fgets(char *buffer, int size, FILE *stream) {
     return buffer;
 }
 
+size_t fread(void *destination, size_t size, size_t count, FILE *stream) {
+    unsigned char *out = (unsigned char *)destination;
+    size_t wanted, got = 0;
+    if (!destination || !stream || size == 0 || count == 0) return 0;
+    wanted = size * count;
+    if (wanted / size != count) return 0;          /* the request itself overflows */
+    while (got < wanted) {
+        size_t available = stream->length - stream->position;
+        if (available == 0) {
+            DWORD read = 0;
+            if (stream->at_end) break;
+            if (!ReadFile(stream->handle, stream->buffer, HYPRLODR_IO_BUFFER, &read, NULL)) break;
+            stream->position = 0;
+            stream->length = read;
+            if (read == 0) {
+                stream->at_end = 1;
+                break;
+            }
+            available = read;
+        }
+        {
+            size_t chunk = wanted - got;
+            if (chunk > available) chunk = available;
+            memcpy(out + got, stream->buffer + stream->position, chunk);
+            stream->position += chunk;
+            got += chunk;
+        }
+    }
+    return got / size;
+}
+
 int fprintf(FILE *stream, const char *format, ...) {
     __builtin_va_list args;
     char local[512];

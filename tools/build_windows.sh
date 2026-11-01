@@ -109,6 +109,10 @@ echo "  MOD example.uptime (in $OUT/examples, not copied into the game by defaul
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.game-info.dll" \
   "$OUT/obj/example_game_info.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.game-info (in $OUT/examples, ABI 5 image reader)"
+"$CC" "${CFLAGS[@]}" -c "$ROOT/examples/title_replacement.c" -o "$OUT/obj/example_title_replacement.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.title-replacement.dll" \
+  "$OUT/obj/example_title_replacement.obj" "$CRT_OBJ" "$K32"
+echo "  MOD example.title-replacement (in $OUT/examples, ships the title mask as a package file)"
 
 # Stage the example as a real package, so the documented authoring path is the
 # path that is actually exercised rather than described.
@@ -118,6 +122,19 @@ if [ -f "$ROOT/examples/package/manifest.json" ]; then
   cp "$ROOT/examples/package/manifest.json" "$OUT/example-package/"
   cp "$OUT/examples/example.uptime.dll" "$OUT/example-package/native/windows-x86_64/"
   python3 "$ROOT/tools/hyprl_package.py" pack "$OUT/example-package" "$OUT/examples/example.uptime.zip"
+fi
+
+# The title replacement is data plus a small mod, so its package is staged the same way.
+# The mask is generated, never committed: render it with tools/title_mask_from_game.py first.
+if [ -f "$ROOT/examples/package-title/manifest.json" ] && [ -f "$ROOT/assets/hyprlodr-title-mask.raw" ]; then
+  rm -rf "$OUT/title-package"
+  mkdir -p "$OUT/title-package/native/windows-x86_64" "$OUT/title-package/assets"
+  cp "$ROOT/examples/package-title/manifest.json" "$OUT/title-package/"
+  cp "$OUT/examples/example.title-replacement.dll" "$OUT/title-package/native/windows-x86_64/"
+  cp "$ROOT/assets/hyprlodr-title-mask.raw" "$OUT/title-package/assets/title-mask.raw"
+  python3 "$ROOT/tools/hyprl_package.py" pack "$OUT/title-package" "$OUT/examples/example.title-replacement.zip"
+else
+  echo "  skipped example.title-replacement package: generate the mask first (tools/title_mask_from_game.py)"
 fi
 
 if [ -n "$ORIGINAL_OPENAL" ]; then
