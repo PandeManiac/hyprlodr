@@ -74,6 +74,14 @@
     "only_open": {"t_ms": 35, "thread": 360, "via": "CreateFileA", "requested": "\\\\.\\pipe\\wine_plugplay", "redirected": false},
     "meaning": "The shim was live 35 ms after install and stayed live for a minute; the game made no file open through any patched slot in that time. Asset reads therefore do not use these entry points at all in this build."
   },
+  "interaction_run": {
+    "note": "Game window activated with xdotool and sent space/Return to leave the idle screen, 20 s of runtime after input",
+    "window_found": true,
+    "file_hook_detail": "CreateFileA=patched(8) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) _wfopen_s=absent modules=39",
+    "file_opens": 1,
+    "only_open": {"t_ms": 36, "via": "CreateFileA", "requested": "\\\\.\\pipe\\wine_plugplay"},
+    "meaning": "Driving input in this environment does not produce asset I/O through any patched slot either, so the asset path cannot be reached by this method and no in-game redirect can be demonstrated yet."
+  },
   "attempts": [
     {
       "what": "WINAPI CreateFileW shim patched into every module's import slot",

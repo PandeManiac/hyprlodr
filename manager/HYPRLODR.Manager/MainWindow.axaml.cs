@@ -110,9 +110,13 @@ public partial class MainWindow : Window
               "then places the HYPRLODR proxy in its place.";
 
         // The file hook summary belongs beside the run summary: it is the only
-        // evidence of what the game actually opened during that run.
-        RunSummary.Text = RunReportReader.Read(_install.GamePath).Describe() + "\n" +
-                          FileLogReader.Read(_install.GamePath).Describe();
+        // evidence of what the game actually opened during that run. The newest
+        // records are listed so the paths are visible, not just the counts.
+        var fileLog = FileLogReader.Read(_install.GamePath);
+        var summary = RunReportReader.Read(_install.GamePath).Describe() + "\n" + fileLog.Describe();
+        if (fileLog.Any)
+            summary += "\n" + string.Join("\n", fileLog.Recent(6));
+        RunSummary.Text = summary;
 
         var config = LoaderConfig.Load(_install.GamePath);
         DelayBox.Text = config.DelayMs.ToString(CultureInfo.InvariantCulture);

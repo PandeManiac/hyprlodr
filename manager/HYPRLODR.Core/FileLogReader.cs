@@ -46,6 +46,27 @@ public sealed class FileLog
             text += $" Showing the last {Records.Count} of {TotalOpens} records.";
         return text;
     }
+
+    /// <summary>
+    /// The newest records as readable lines, newest first. The UI shows these so
+    /// a mod author can see the paths the game actually opened instead of only a
+    /// count.
+    /// </summary>
+    public IReadOnlyList<string> Recent(int max = 8)
+    {
+        var lines = new List<string>();
+        for (var index = Records.Count - 1; index >= 0 && lines.Count < max; index--)
+        {
+            var record = Records[index];
+            var when = record.ElapsedMs is { } millis ? $"t={millis} ms" : "t=?";
+            var via = string.IsNullOrEmpty(record.Via) ? "open" : record.Via;
+            var line = $"{when,-12} {via,-10} {record.Requested ?? "(unknown)"}";
+            if (record.Redirected && !string.IsNullOrEmpty(record.Opened)) line += $"  -> {record.Opened}";
+            if (!record.Ok) line += "  (failed)";
+            lines.Add(line);
+        }
+        return lines;
+    }
 }
 
 /// <summary>Parses the file hook's JSON Lines log. Never throws on bad input.</summary>

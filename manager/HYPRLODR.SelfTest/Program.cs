@@ -54,6 +54,7 @@ internal static class Program
         Register("file_log_reads_opens", FileLogReadsOpens);
         Register("file_log_tolerates_garbage_and_caps", FileLogToleratesGarbageAndCaps);
         Register("file_log_absent", FileLogAbsent);
+        Register("file_log_lists_recent_opens", FileLogListsRecentOpens);
 
         foreach (var (name, body) in Scenarios)
         {
@@ -295,6 +296,23 @@ internal static class Program
             Check(log.Describe().Contains("Showing the last", StringComparison.Ordinal), log.Describe());
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    private static void FileLogListsRecentOpens()
+    {
+        var log = FileLogReader.Parse(new[]
+        {
+            "{\"seq\":1,\"t_ms\":35,\"via\":\"CreateFileA\",\"event\":\"file_open\",\"redirected\":false,\"ok\":true,\"requested\":\"a.dat\",\"opened\":\"a.dat\"}",
+            "{\"seq\":2,\"t_ms\":900,\"via\":\"fopen\",\"event\":\"file_open\",\"redirected\":false,\"ok\":false,\"requested\":\"missing.dat\",\"opened\":\"missing.dat\"}",
+            "{\"seq\":3,\"t_ms\":1200,\"via\":\"_wfopen\",\"event\":\"file_open\",\"redirected\":true,\"ok\":true,\"requested\":\"asset\\\\key.dat\",\"opened\":\"mods\\\\mine.dat\"}",
+        });
+
+        var recent = log.Recent(2);
+        Check(recent.Count == 2, $"expected 2 lines, got {recent.Count}");
+        Check(recent[0].Contains("t=1200 ms") && recent[0].Contains("_wfopen"), recent[0]);
+        Check(recent[0].Contains("-> mods\\mine.dat"), recent[0]);
+        Check(recent[1].Contains("missing.dat") && recent[1].Contains("(failed)"), recent[1]);
+        Check(log.Recent(10).Count == 3, "Recent must not invent records");
     }
 
     private static void FileLogAbsent()
