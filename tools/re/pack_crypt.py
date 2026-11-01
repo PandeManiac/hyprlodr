@@ -97,6 +97,59 @@ def encrypt(data: bytes, t0: bytes, t1: bytes, seed: int) -> bytes:
     return bytes(out)
 
 
+def keystream_table(t0: bytes, t1: bytes) -> bytes:
+    """The 65536-entry keystream lookup, indexed by the rolling state.
+
+    Only bits 0..9 of the state are used, so the table has just 1024 distinct
+    values repeated 64 times: the per-slice key is effectively 10 bits wide.
+    """
+    return bytes(t0[((t1[(s >> 2) & 0xFF] >> 1) + s) & 0xFF] ^ t1[s & 0xFF]
+                 for s in range(65536))
+
+
+def score(plain: bytes) -> float:
+    """How much a candidate plaintext looks like real payload rather than noise.
+
+    Real slices are either text, sparse bitmasks, or padded with zeros; a wrong
+    key gives uniform noise, which scores worst on every term.
+    """
+    import collections
+    import math
+
+    if not plain:
+        return 0.0
+    n = len(plain)
+    counts = collections.Counter(plain)
+    entropy = -sum(v / n * math.log2(v / n) for v in counts.values())
+    printable = sum(1 for b in plain if 9 <= b < 127) / n
+    extremes = (counts[0] + counts[0xFF] + counts[0x80]) / n
+    return (8.0 - entropy) * 2.0 + printable + extremes * 2.0
+
+
+def crack(pack: pathlib.Path, offset: int, size: int,
+          exe_path: pathlib.Path) -> list[tuple[float, int, bytes]]:
+    """Decrypt an unknown slice without knowing its name.
+
+    Because the keystream depends only on ``state & 0x3ff`` there are just 1024
+    candidate keys, so a slice with a known ``(offset, size)`` can be recovered
+    by trying them all and keeping the most plausible result. Returns
+    ``(score, seed, plaintext)`` sorted best first; the plaintexts are returned
+    to the caller and never written to disk here.
+    """
+    t0, t1, _ = load_tables(exe_path)
+    with pack.open("rb") as handle:
+        handle.seek(offset)
+        payload = handle.read(size)
+    if len(payload) != size:
+        raise ValueError(f"short read: wanted {size} bytes at {offset:#x}")
+    results = []
+    for seed in range(0x400):
+        plain = decrypt(payload, t0, t1, seed)
+        results.append((score(plain), seed, plain))
+    results.sort(key=lambda item: item[0], reverse=True)
+    return results
+
+
 def decrypt_slice(pack: pathlib.Path, offset: int, size: int, name: str,
                   exe_path: pathlib.Path) -> bytes:
     t0, t1, _ = load_tables(exe_path)
@@ -114,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="path to hyperdemon.exe (source of the cipher tables)")
     parser.add_argument("--pack", required=True, type=pathlib.Path,
                         help="path to asset/asset")
-    parser.add_argument("--name", required=True,
-                        help="entry name, used as the CRC-32 seed")
+    parser.add_argument("--name",
+                        help="entry name, used as the CRC-32 seed (not needed with --crack)")
     parser.add_argument("--offset", type=lambda s: int(s, 0), default=0)
     parser.add_argument("--size", type=lambda s: int(s, 0), default=64)
     parser.add_argument("-o", "--out", type=pathlib.Path,
@@ -125,7 +178,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--in", dest="source", type=pathlib.Path,
                         help="with --encrypt, plaintext to encrypt (default: stdin)")
     parser.add_argument("--hex", action="store_true", help="print a hex dump")
+    parser.add_argument("--crack", action="store_true",
+                        help="ignore --name and try all 1024 keys for this slice")
+    parser.add_argument("--top", type=int, default=3,
+                        help="with --crack, how many candidates to show")
     args = parser.parse_args(argv)
+
+    if args.crack:
+        best = crack(args.pack, args.offset, args.size, args.exe)
+        for rank, (value, seed, plain) in enumerate(best[:args.top], 1):
+            head = " ".join(f"{b:02x}" for b in plain[:24])
+            print(f"  {rank}. seed&0x3ff={seed:#05x} score={value:.3f}  {head}")
+        if args.out:
+            args.out.write_bytes(best[0][2])
+            print(f"wrote the best candidate to {args.out}", file=sys.stderr)
+        return 0
+
+
+    if not args.crack and not args.name:
+        parser.error("--name is required unless --crack is used")
 
     if args.encrypt:
         t0, t1, _ = load_tables(args.exe)
