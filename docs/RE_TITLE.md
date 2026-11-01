@@ -212,6 +212,35 @@ requires; nothing needs a text overlay.
 also comes from the pack (a `tag 4` length-prefixed string) or is assembled by the lobby entity.
 The `hyper` material graph is the place to look next, now that it decrypts.
 
+## Confirmed: `tag 8` is GLSL material source, and the title's words are stored nowhere
+
+Cracking the record table and dumping every slice's readable strings gives a corpus of **22
+shader programs** (`tag 8`). They are the engine's material system, one program per surface,
+specialised by preprocessor defines:
+
+```
+#if defined( SKINNED )            #if defined( LOBBY_DAGGER_HYPER2 )
+#ifdef THREAT_FLARE               #ifdef CLIP_PLANES / ERODE / SHADOW_FLUID
+#if defined( GHOST ) || defined( REVEAL ) || defined( SNAKE ) || defined(HAND_VS)
+#ifdef OWLWING / BIRDWING / GEM
+```
+
+with a shared uniform block — `world_matrix`, `view_proj_matrix`, `spherical_proj`,
+`view_position`, `accum_time`, `global_time`, `iri`, `crim_colour`, `erode`, `hit_data`,
+`wave_rings` — and a texture set `tex_diffuse`, `tex_mask`, `tex_edgespec`, `tex_spec`,
+`tex_reflection1..3`, `tex_danger`, `tex_dashable`, `tex_pace`, `tex_lights`. That is the
+iridescent material the title wears, in source form, and the spherical projection that makes the
+lettering bulge is an explicit vertex-shader step (`project_spherical`).
+
+**The decisive negative.** A scan of every record's decrypted payload (ASCII, UTF-16BE and
+UTF-16LE) finds the literal `HYPER` in exactly one place: the shader define
+`LOBBY_DAGGER_HYPER2`. `DEMON` appears nowhere. Combined with the earlier fact that neither word
+exists in the executable, the title's lettering is **not a stored string and not a bitmap** — it
+is geometry drawn with the game's fonts (Georgia for text, `tag 4096`) and shaded by an
+`entity_vs`/`entity` material. A replacement therefore has to change *glyph content or glyph
+geometry*, and the natural instrument is a same-tag, same-length payload served under the same
+name.
+
 ## Where this leaves the title (state of knowledge)
 
 - The title is content behind `entity_lobby_dagger_hyper*` (kind 4), resolved as

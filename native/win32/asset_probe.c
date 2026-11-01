@@ -12,7 +12,7 @@
  *
  *   - offset >= 0x18 and length >= 0x18 and offset + length <= the pack size,
  *     because every payload carries a 0x18-byte header;
- *   - the type tag is one of the five values observed in the loader's dispatch;
+ *   - the type tag is one of the seven values observed in the loader's dispatch;
  *   - the neighbouring 0x58-byte slot parses as well, i.e. the hit sits inside a
  *     record array rather than in a lone structure that happens to look similar.
  */
@@ -115,7 +115,14 @@ static int record_parses(const unsigned char *record) {
     if (offset < HYPRLODR_ASSET_HEADER || length < HYPRLODR_ASSET_HEADER) return 0;
     if ((unsigned long long)offset + (unsigned long long)length > HYPRLODR_ASSET_PACK_BYTES)
         return 0;
-    if (tag > 0xffffu) return 0;
+    /* Only the loader's own dispatch set counts. Accepting any 16-bit value let
+     * unrelated memory that merely had a plausible offset/length pair pass, and a
+     * measured run then reported 4000 slots in 3377 "arrays" with tags such as
+     * 54240 -- i.e. the three-consecutive-slots rule only holds while the tag has
+     * to be one the parser table actually knows. */
+    if (tag != 1u && tag != 2u && tag != 4u && tag != 8u && tag != 0x20u &&
+        tag != 0x100u && tag != 4096u)
+        return 0;
     return 1;
 }
 

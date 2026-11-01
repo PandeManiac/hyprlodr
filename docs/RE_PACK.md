@@ -198,21 +198,47 @@ same short string across unrelated records (`…x3_as`, then `02 00`), while eve
 `+0x18` is valid. Either the header is encoded differently from the payload or it is written
 after decryption; the bytes after it are what matter and they are correct.
 
-## Unverified
+## Confirmed: the seed is the bare entry name, not a path
 
-- **Correctness against real plaintext.** The cipher cannot be validated without a known
-  `(offset, size)` pair: a brute-force over 35,319 candidate names from the executable at
-  offset 0 produced no plausible plaintext, which is expected — offset 0 is not a named
-  entry and the record's own offset is still unknown. Round-trip (`encrypt` → `decrypt`)
-  is self-consistent but only proves the implementation is the inverse of itself.
-- **Whether the per-slice seed is the bare name or a path-like key.** The CRC is taken over
-  whatever string the record's name field holds; the exact spelling (for example
-  `entity_lobby_dagger_hyper` versus a prefixed path) matters and is not yet known.
+`zlib.crc32(name) & 0x3ff` reproduces the key class of real slices exactly. The eleven
+`tag 4096` records decrypt to `Georgia` (Regular/Bold/Italic/Bold Italic), `Goethe Bold`,
+`Mongolian Baiti`, `Tinos` (Regular/Bold), `Consolas`, `Font Awesome 5 Free Solid` and `Hack`,
+and their key classes are `crc32` of `georgia`, `georgiab`, `georgiai`, `georgiaz`,
+`goethebold`, `monbaiti`, `tinos`, `tinosb`, … — i.e. the record's local name, unprefixed and
+without an extension. Materials behave the same way (`skinning`, `warp`, `portal`, `squid`,
+`fract3`, `vs.ricochet_charge2` all decrypt with `crc32(name)`).
+
+Consequence: a slice is addressable by *name alone* once its record's `(offset, size)` is known
+from the live table, and no guessing is needed anywhere.
+
+**Correction to the earlier pairing.** Index-aligning a name array with a record array is not
+reliable: the 24-name skin array pairs with a 24-record run, but the members are off by a shift
+(`hyper`'s own key class does not decrypt that array's `hyper`-position record). Names must be
+assigned **by recovered key class**, which is what `tools/re/name_records.py` does. That is why
+earlier conclusions drawn from positional pairing are superseded, not merely refined.
+
+## Confirmed: slices round-trip byte-for-byte, and a patcher exists
+
+For every named slice tested, `encrypt(decrypt(slice))` reproduces the shipped ciphertext
+**exactly** (8/8, sizes 1,443 B – 9.96 MB, tags 1/2/8/4096). So `pack_crypt.encrypt` is the true
+inverse of the game's reader, not merely the inverse of its own decoder — which is what makes a
+replacement payload possible at all.
+
+`tools/re/pack_patch.py` exploits it: it copies the pack while substituting one re-encrypted
+slice, leaving every other byte alone. The check that matters is that a *no-change* patch
+reproduces the file: patching `fract3` (offset 306,572,658, 7,039 B, seed `0x2b0`) into a copy of
+the installed 306,794,369-byte pack yields a file with the **same sha256**
+(`2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7`). That equality is only
+possible if the substitution is byte-exact, so the delivery path is proven end-to-end offline.
+
+| Constraint | Why |
+|---|---|
+| replacement must be **exactly** the slice's byte length | every other record's offset is fixed by the table, and `seekg` uses it |
+| the seed comes from the **name**, so the name cannot change | the loader re-derives the seed from the name it looked up |
+| patches go to a **new file**, never the installation | the original pack stays pristine and verifiable |
 
 ## Next concrete step
 
-Recover any single live `(offset, size)` pair — from a runtime probe of the loaded
-record array (the 0x70-stride slots at `ctx+0x68d8`/`0x6948`/`0x69b8`, or the 0x58-byte
-records they point at). One triple validates the cipher, and after that the pack becomes
-readable, the title's tag and payload become visible, and a replacement can be built as a
-same-tag payload served under the same name through the existing `_Fiopen` redirect.
+Name the remaining slices (`tools/re/name_records.py` currently recovers 10 of 863 because the
+probe only harvests part of the key arrays), then identify the record the title screen draws
+its lettering from and serve a replacement through `pack_patch.py` + the `_Fiopen` redirect.

@@ -1,5 +1,35 @@
 # Session progress
 
+## 2026-11-01 (the materials and the delivery path are both in hand)
+
+**Two results, one negative, one constructive.** First, the probe's relaxed tag filter was
+admitting junk: accepting any 16-bit tag turned 863 real slots into 4000 slots spread over 3377
+"arrays" with tags such as `54240`, so the filter is back to the loader's measured dispatch set
+`{1, 2, 4, 8, 0x20, 0x100, 4096}` (a clean run then reports 863 records in 238 contiguous runs).
+With clean records, `zlib.crc32(name) & 0x3ff` recovers each slice's key class: the eleven
+`tag 4096` records are the game's **fonts** (`Georgia` ×4, `Goethe Bold`, `Mongolian Baiti`,
+`Tinos` ×2, `Consolas`, `Font Awesome 5 Free Solid`, `Hack`) keyed by `georgia`, `georgiab`,
+`goethebold`, `monbaiti`, `tinos`, `tinosb`, …, and **`tag 8` is GLSL material source** — 22
+shader programs specialised by defines (`SKINNED`, `LOBBY_DAGGER_HYPER2`, `GHOST`, `REVEAL`,
+`OWLWORD`/`BIRDWING`, `CLIP_PLANES`, `ERODE`) sharing a uniform block with `spherical_proj`,
+`accum_time`, `iri` and a ten-texture set. Index-aligning name arrays to record arrays is
+therefore **wrong** (the 24-name skin array is off by a shift) and names must be assigned by
+recovered key class; that supersedes the positional pairing in the previous entry.
+
+Second, the **delivery path is proven**: `encrypt(decrypt(slice))` reproduces the shipped
+ciphertext byte-for-byte on 8/8 real slices (1.4 KB – 10 MB, tags 1/2/8/4096), and the new
+`tools/re/pack_patch.py` substitutes one re-encrypted same-length slice into a copy of the pack.
+A no-change patch of `fract3` (7,039 B at 306,572,658) reproduces the installed 306,794,369-byte
+pack with an identical sha256, which is only possible if the substitution is exact. The first
+version of the patcher silently dropped the replacement bytes (output 7,039 B short); the hash
+check caught it and it is fixed.
+
+Third, the **negative that redirects the work**: scanning every record's decrypted payload in
+ASCII, UTF-16BE and UTF-16LE finds `HYPER` only as the shader define `LOBBY_DAGGER_HYPER2`, and
+`DEMON` nowhere — and neither word exists in the executable. So the title is not a stored string
+and not a bitmap: it is glyph geometry shaded by `entity_vs`/`entity`, and a replacement must
+change glyph content or geometry, not text.
+
 ## 2026-11-01 (the pack is decoded: fonts and material graphs read from real plaintext)
 
 **The cipher is validated and the pack is readable, which unblocks the title.** The probe now

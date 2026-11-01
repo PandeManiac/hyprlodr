@@ -107,6 +107,43 @@ def keystream_table(t0: bytes, t1: bytes) -> bytes:
                  for s in range(65536))
 
 
+def keystream_bytes(t0: bytes, t1: bytes) -> bytes:
+    """The 1024 distinct keystream sequences, indexed by ``state & 0x3ff``."""
+    return bytes(t0[((t1[(s >> 2) & 0xFF] >> 1) + s) & 0xFF] ^ t1[s & 0xFF]
+                 for s in range(0x400))
+
+
+def crack_matrix(cipher: bytes, t0: bytes, t1: bytes, key_stream: bytes | None = None):
+    """Decrypt ``cipher`` under all 1024 keys at once (needs numpy).
+
+    The state walk depends only on the ciphertext, so the state at byte ``i`` is
+    ``seed + sum_{j<i}(1 + sbyte(cipher[j]))`` modulo 65536 and the whole matrix comes out
+    of one gather. Returns a ``(1024, len(cipher))`` uint8 array, row = key class.
+    """
+    import numpy as np
+
+    ks = np.frombuffer(key_stream if key_stream is not None else keystream_bytes(t0, t1),
+                       dtype=np.uint8)
+    data = np.frombuffer(cipher, dtype=np.uint8)
+    signed = data.astype(np.int32)
+    signed[signed >= 128] -= 256
+    steps = np.cumsum(1 + signed, dtype=np.int64) - (1 + signed)
+    states = (np.arange(0x400, dtype=np.int64)[:, None] + steps[None, :]) & 0x3FF
+    return ks[states] ^ data[None, :]
+
+
+def text_scores(matrix) -> "object":
+    """Per-key score for the decrypted matrix: printable bytes inside runs of 4+."""
+    import numpy as np
+
+    if matrix.shape[1] < 4:
+        return ((matrix >= 0x20) & (matrix < 0x7F)).sum(axis=1).astype(np.float64)
+    printable = ((matrix >= 0x20) & (matrix < 0x7F)).astype(np.int32)
+    cumulative = np.cumsum(printable, axis=1)
+    windows = cumulative[:, 4:] - cumulative[:, :-4]   # printable bytes in each 4-byte window
+    return (windows == 4).sum(axis=1).astype(np.float64)
+
+
 def score(plain: bytes) -> float:
     """How much a candidate plaintext looks like real payload rather than noise.
 
