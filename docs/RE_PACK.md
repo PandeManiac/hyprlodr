@@ -100,6 +100,28 @@ the results by plausibility (entropy, share of `0x00`/`0xff`/`0x80`, printable r
 name→CRC seed never has to be recovered: one `(offset, size)` pair is enough, and the name can be
 inferred afterwards from `zlib.crc32(name) & 0x3ff` matching the winning class.
 
+## Confirmed in-game: the pack is opened through `_Fiopen`, which the loader already intercepts
+
+From the instrumented run on the virtual display (`hyprlodr-files.jsonl`, `t_ms` 178, thread
+328): `event: file_open`, `via: _Fiopen`, `requested: asset/asset`, `ok: true`. The container
+is therefore opened by the C-runtime path, **not** `CreateFileA`, and `_Fiopen` is one of the
+slots the loader already patches (`file_hook_detail`: `CreateFileA=patched(7) fopen=patched(1)
+fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1)`). So serving a re-encrypted
+`asset/asset` needs **no new hook**: a redirect registration for that name is enough.
+
+The same run also shows the game opening
+`C:/users/steamuser/AppData/Roaming/HyperDemon/{training,config,cache/scores}`, so those are the
+per-user files a mod must not disturb.
+
+### What the GL instrument can and cannot see (measured, not assumed)
+
+`hyprlodr-gl.jsonl` over a full start-up contains only `delay_imports` 1, `capture_ready` 1,
+`lookup` 4, `frame` 2, `repatch` 80, `frame_dump` 1 — and **zero** `shader`/`program`/`draw`
+events. The frame records carry `program: -1`, so the engine's draw path still does not resolve
+through the slots we own, even with 42 slots repatched across 72 modules. Frames and state can
+be read at `wglSwapBuffers`; per-draw tracing needs a different instrument (the engine's own
+dispatch, not the import table).
+
 ## Unverified
 
 - **Correctness against real plaintext.** The cipher cannot be validated without a known
