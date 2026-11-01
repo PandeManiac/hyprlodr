@@ -35,8 +35,9 @@ text, if captured, is game content: the log stays local and is never committed.
   slots=29 modules=49` in the attach record.
 - The swap shim is called with a live context: `GL 4.6 (Compatibility Profile) Mesa
   26.2.5`, renderer `AMD Radeon RX 9070 XT (radeonsi, gfx1201)`.
-- The framebuffer readback is real: a 1920×1080 frame was written and decoded to
-  `docs/evidence/2026-11-01-gl-frame.png` (the game's startup splash, mid-load).
+- The framebuffer readback is real: a 1920×1080 frame was written and verified by
+  decoding it (the game's startup splash, mid-load). The image is game content, so it
+  stays local; the evidence records its sha256 instead of the pixels.
 - The last-draw state is visible at swap time: at frame 120 the bound 2D texture was
   `111`; the current program queried as `-1`.
 

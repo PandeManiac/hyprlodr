@@ -24,8 +24,8 @@
   },
   "frame_dump": {
     "ok": true,
-    "file": "docs/evidence/2026-11-01-gl-frame.png",
-    "note": "1920x1080 readback of the game's own startup splash, decoded from hyprlodr-frame.bmp"
+    "sha256": "5234b2b84715b470ef7d76a87ff8a338e42604e42095d852b8f4f3588cc78a57",
+    "note": "1920x1080 readback of the game's own startup splash, decoded from hyprlodr-frame.bmp; the image itself is game content and stays local"
   },
   "lookups_observed": [
     {

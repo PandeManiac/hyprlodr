@@ -189,7 +189,7 @@ disturbing the game, and `wglSwapBuffers` — which the engine *does* resolve th
 `GL_VERSION = 4.6 (Compatibility Profile) Mesa 26.2.5`, `GL_RENDERER = AMD Radeon RX
 9070 XT (radeonsi, gfx1201)`, the viewport (1280×720, then 1920×1080) and the last
 draw's bound 2D texture, and wrote a 1920×1080 frame to disk
-(`docs/evidence/2026-11-01-gl-frame.png`).
+(verified by decoding it; the pixels stay local, the evidence records the sha256).
 
 **Observed, and the limiting result:** the engine asks for no `gl*` name through
 either patched path. The only lookups seen are `wglChoosePixelFormat`,

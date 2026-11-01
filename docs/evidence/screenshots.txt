@@ -1,0 +1,3 @@
+Screenshots are game content and are not committed. Their hashes:
+2026-11-01-gl-frame.png     5234b2b84715b470ef7d76a87ff8a338e42604e42095d852b8f4f3588cc78a57
+2026-11-01-title-overlay.png 3700e21e094d5745fb14aa08622e5d75bb9a8cbe760f9d01739c95de5cf2b4dd
