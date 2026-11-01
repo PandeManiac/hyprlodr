@@ -1,0 +1,64 @@
+{
+  "schema": "hyprlodr.re-hand-draw/1",
+  "captured": "2026-11-01",
+  "game_sha256": "7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611",
+  "method": "host GDB breakpoint at the PE opengl32 glDrawElements thunk while Proton/Mesa was rendering the live game",
+  "dispatch": {
+    "engine_call_site_rva": "0x2370c0",
+    "engine_dispatch_table_rva": "0x3d9ac8",
+    "dispatch_kind": "indirect call through the engine's own table, not an import slot",
+    "process_thunk_address_observed": "0x7bee1458",
+    "note": "the thunk address is process-specific; the table RVA and call site are build-specific"
+  },
+  "hand_draw": {
+    "index_count": 1188,
+    "passes_per_frame": 2,
+    "mode": "GL_TRIANGLES",
+    "index_type": "GL_UNSIGNED_SHORT",
+    "index_bytes_per_pass": 2376,
+    "vertices": 238,
+    "vertex_stride": 72,
+    "vbo_bytes": 17136,
+    "ibo_bytes": 4752,
+    "attribute_buffer": 41,
+    "element_buffer": 42,
+    "enabled_attributes": [
+      {"index": 0, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
+      {"index": 1, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
+      {"index": 2, "size": 2, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
+      {"index": 3, "size": 4, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
+      {"index": 4, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41},
+      {"index": 5, "size": 3, "type": "GL_FLOAT", "stride": 72, "normalized": false, "buffer": 41}
+    ],
+    "layout_note": "positions are the first three floats and normals the next three; attribute byte offsets and the current program were not captured in this pass"
+  },
+  "experiments": [
+    {
+      "name": "suppress_count",
+      "change": "set the hand draw count from 1188 to 0",
+      "result": "the entire first-person arm disappeared while the world continued rendering"
+    },
+    {
+      "name": "restore_count",
+      "change": "removed the suppression breakpoint and restored normal drawing",
+      "result": "the original arm returned"
+    },
+    {
+      "name": "cube_count_36",
+      "change": "replaced the first eight 72-byte vertex records and first 36 indices with a cube, and set count to 36",
+      "result": "the arm disappeared and only a small fragment was visible; the cube inherited one vertex's weights and was not placed at a usable hand pivot"
+    },
+    {
+      "name": "stale_count_1188",
+      "change": "replaced the first records but left count at 1188 before the capture deadline",
+      "result": "the arm visibly stretched into large triangles, proving the live draw consumed the substituted buffer"
+    }
+  ],
+  "restoration": "the original VBO and IBO were written back at the hand draw and a screenshot confirmed the original arm returned",
+  "limitations": [
+    "the production dispatch-table hook is not yet implemented",
+    "attribute byte offsets, current program, texture bindings and bone_transforms were not captured",
+    "the authored 26-bone arm still needs a 16-bone runtime bake",
+    "the live substitution is a debugger proof, not a shipped mod path"
+  ]
+}

@@ -1,5 +1,34 @@
 # Session progress
 
+## 2026-11-01 (ninth pass: hand draw located, live buffer substitution proved)
+
+**The first-person hand is no longer invisible to the capture.** The engine's
+`glDrawElements` does not go through an import slot: at `hyperdemon.exe+0x2370c0` it calls
+through its own dispatch table at RVA `0x3d9ac8`, which lands on the PE `opengl32` thunk.
+Breaking there in host GDB showed 126 draws per frame. Two adjacent draws with
+`count=1188` are the hand: zeroing only that count removed the arm while the world kept
+running, and restoring it brought the arm back.
+
+**The live resources are now measured.** At the hand draw: 238 vertices, 72-byte stride,
+17,136-byte attribute buffer 41, 4,752-byte element buffer 42, indices
+`GL_UNSIGNED_SHORT`, six enabled float attributes (3, 3, 2, 4, 3, 3). The first three
+floats are position and the next three are normal; the rest carries tangent/UV and the
+skinned-entity fields. The index buffer holds two 1,188-index runs.
+
+**Buffer substitution is real, but the test mesh is not valid yet.** Replacing the first
+eight vertex records and first 36 indices with a cube and drawing only those indices
+removed the arm and produced a small fragment. Replacing the records while leaving the
+original count visibly stretched the arm into large triangles. That proves the live draw
+consumes buffers 41/42; the cube inherited one vertex's weights and was not placed at a
+usable hand pivot. The original VBO/IBO were then written back and a live screenshot
+confirmed the original arm returned.
+
+**New committed artifacts:** `docs/RE_HAND.md` now records the draw signature, buffer
+layout and precise limitations; `docs/evidence/2026-11-01-hand-draw.json` holds the
+metadata-only evidence; `tools/re/hand_vbo_test.py` reproduces a same-format test cube
+from a local dump without embedding game bytes. The persistent dispatch-table hook,
+attribute offsets/bone palette capture and the 16-bone bake are the next blockers.
+
 ## 2026-11-01 (eighth pass: arm art target, rig validation, spring runtime)
 
 **The replacement arm now exists as a reproducible authored asset, not a game-side replacement.**

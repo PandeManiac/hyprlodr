@@ -1,11 +1,13 @@
 # The first-person hand: rendering and animation pipeline
 
-Status: **Milestone A, partial and evidence-based.** The material/shader path, the skinning
-path and the gameplay-facing material set are identified from the shipped pack and the
-executable. The geometry source is **not yet proven**: there is no named hand mesh in the
-records recovered so far, and the renderer's draw calls are still invisible to the in-process
-capture. This document separates what was measured from what is inferred, and names the next
-experiment.
+Status: **Milestone A complete; Milestone B in progress.** The material/shader path, the
+skinning path and the gameplay-facing material set are identified from the shipped pack and
+the executable. The live hand draw is now located and proved by suppressing it and by
+substituting its vertex/index buffers. The hand is a 238-vertex, 72-byte-stride skinned mesh
+behind a two-pass 1,188-index draw. A production replacement is not yet integrated: the first
+test mesh was not correctly pivoted and rendered only as a fragment, and the persistent hook
+has not been written. This document separates what was measured from what is inferred, and
+names the next experiment.
 
 All offsets in this file are into the **user's local installation**. No game bytes, shader
 text or extracted assets are committed.
@@ -127,6 +129,49 @@ constructor at `0x121ba0` uses `bone_transforms` for the object-space transform 
 `bone_transforms`/`world_matrix_arr` in the per-instance parameter table. This is the
 standard 16-bone LBS path.
 
+## Verified live: the hand draw and its buffers
+
+The engine does not resolve `glDrawElements` through an import slot. At
+`hyperdemon.exe+0x2370c0` it performs an indirect call through its own dispatch table at
+**RVA `0x3d9ac8`**; the pointer lands on the PE `opengl32` thunk at `0x7bee1458` in the live
+Proton process. That explains why patching `GetProcAddress`, `wglGetProcAddress` and direct
+imports saw no draw calls.
+
+Host GDB attached to the real process and broke at the thunk. The draw stream is 126
+`glDrawElements` calls per frame. Two adjacent calls with `count = 1188` are the hand:
+
+- zeroing only that count removed the entire first-person arm while the world kept rendering;
+- restoring it brought the arm back;
+- the same two calls are the only 1,188-index draws in the frame.
+
+At the hand draw the measured state is:
+
+| Item | Value |
+|---|---|
+| Mode | `GL_TRIANGLES` (4) |
+| Count | 1,188 indices per pass; two passes per frame |
+| Index type | `GL_UNSIGNED_SHORT` (5125, read from the call setup) |
+| Attribute buffer | 41 (all six enabled attributes) |
+| Element buffer | 42 |
+| Attribute buffer size | 17,136 bytes |
+| Element buffer size | 4,752 bytes |
+| Vertex stride | 72 bytes |
+| Vertex count | 238 (`17136 / 72`) |
+| Enabled attributes | six: 3, 3, 2, 4, 3, 3 floats, all stride 72, all in buffer 41 |
+
+The first three floats of each 72-byte record are object-space position; the next three are
+normal. The remaining fields carry tangent/UV and the skinned-entity data. The 4,752-byte
+index buffer holds two 1,188-index runs, consistent with two passes (or right/left hands).
+
+**Buffer substitution is proved, but a usable replacement is not.** Writing an eight-vertex
+cube in the same 72-byte format and 36 indices, then changing only the hand draw to
+`count = 36`, removed the arm and produced a small fragment at the centre of the screen.
+When the original index count was left at 1,188 while the first records were replaced, the
+arm visibly stretched into large triangles. Both outcomes prove the draw consumes buffer 41
+and index buffer 42 live; neither is a correct rig-space placement. The cube inherited one
+existing vertex's bone weights rather than a deliberate hand pivot, and the draw was not
+restored before the first capture window ended.
+
 ## Verified: gameplay-facing state names
 
 The executable/pack contain the action vocabulary used by the player:
@@ -141,31 +186,33 @@ the audio/event system uses. This is the hook vocabulary the feather runtime sho
 
 ## Inferred (not yet proven)
 
-- The right/left hand pair is a **skinned mesh** using the 16-bone `entity` path. The
-  material/texture pairing and the `hand1fract`/`hand2fract` variants are consistent with a
-  mesh split into bone/nerve/vein/fracture layers, but no mesh record has been identified.
+- The 238-vertex buffer is a real skinned hand mesh. It is not yet proven whether the two
+  1,188-index passes are duplicate passes, different material layers, or right/left hands;
+  the index buffer contains two complete runs.
 - `hand2`/`hand2left` are texture atlases, not mesh names. They appear through the type-1
   resolver in `0x59e90`, while every hand material goes through the type-2 resolver.
 - The iridescence is produced by the `entity` material family (reflection/refraction,
   `tex_reflect`, `tex_edgespec`, `spherical_proj`, `accum_time`, `iri`), not by the
   simple `hand` material. Reusing `entity_hand`/`entity_hand_vs` is the correct way to
   preserve it.
+- The source asset/record name is still unknown. The live buffer gives geometry and a draw
+  signature, not a named pack record.
 
-## Not yet known (why Milestone B is blocked)
+## Remaining unknowns and the integration blocker
 
-1. **No hand mesh record has been confirmed.** The live probe recovers 860 records and
-   names only a subset; none of the recovered records is a hand mesh. `hand2left` was
-   text-scored to a record but the direct CRC seed did not decrypt it, so that assignment is
-   not accepted.
-2. **The renderer's draw calls are invisible.** `KERNEL32!GetProcAddress`,
-   `opengl32!wglGetProcAddress` and every direct `opengl32` import were patched; the engine
-   requests only four `wgl*` names and no `gl*` names. Swap-time readback works, per-draw
-   tracing does not. There is no verified way to observe the hand's vertex buffer, index
-   count, material binding or bone matrices at draw time.
-3. **The geometry may be procedurally generated.** The hand material's vertex shader has
-   no skinning, and the hand textures are loaded separately from the fracture materials.
-   A procedural ribbon/bone-strip is consistent with the screenshots (segmented, tapered,
-   faceted arm) but has not been distinguished from a static skinned mesh.
+1. **Pass identity.** The two `count=1188` draws share the same buffers. They could be a
+   depth/material pair or right/left hands; distinguishing them requires logging the program,
+   uniforms and texture set at each pass.
+2. **Attribute offsets and bone palette.** We know each attribute's size, type and stride but
+   not the byte offset of each attribute or which uniform block supplies `bone_transforms`.
+   Capture with `glGetVertexAttribPointerv`, the current program and the uniform values
+   before building an independent VAO.
+3. **Persistent hook.** The live proof uses GDB. The production path is to patch the 8-byte
+   pointer at RVA `0x3d9ac8` after fingerprint verification, save the original and restore it
+   on unload. Startup may rewrite the table, so the hook must install/verify at the first
+   frame and gate on the `count=1188`/VAO/buffer signature.
+4. **16-bone bake.** The authored arm still has 26 bones; the `entity` path supplies at most
+   16 matrices. This is independent of the draw hook and remains required before integration.
 
 ## Replacement requirements (derived from the verified pipeline)
 
@@ -217,22 +264,23 @@ arm and the vanes read more like sharp plates than fine barbs; both are open art
 
 ## Next experiments, in order
 
-1. **Full live record dump with names.** Extend the probe to report every record and the
-   complete key arrays (not the 400-record cap) and pair records by recovered key class.
-   Then locate type-1 records whose names contain `hand`/`fingershell` and decrypt them.
-   This is offline and safe.
-2. **Locate the hand entity's vtable and update.** The constructor `0x59e90` is referenced
-   from data at `0x1403e0f28`, `0x14038bf20`, `0x140364ac0`; walk that vtable to the draw
-   and update methods, then decompile the method that writes `bone_transforms`. That yields
-   the bone count, rest pose and gameplay inputs without guessing.
-3. **Per-draw tracing through the Mesa dispatch.** Interpose `glXGetProcAddress` in a
-   Linux-side `LD_PRELOAD` probe, or hook the engine's internal GL dispatch table once (2)
-   identifies it. Capture `glDrawElements`, bound VAO/VBO, attribute pointers, current
-   program and `bone_transforms` for the hand draw. This is the decisive Milestone A/B
-   experiment; it does not require modifying the installation.
-4. **Then, and only then, choose the replacement mechanism**: a same-length pack slice
-   substitution if the hand is a mesh asset; a verified draw/buffer substitution if it is
-   procedural. Both must be reversible and gated on the build fingerprint.
+1. **Write the persistent dispatch hook.** After fingerprint verification, replace the
+   pointer at RVA `0x3d9ac8` with a shim that saves the original, logs the hand signature and
+   can temporarily set the hand count to zero. Install it from a mod or the proxy, never
+   from a global import patch. Prove that turning it off restores the original arm.
+2. **Capture the missing state.** At the `count=1188` draw, log the current program, the
+   six attribute offsets, the index-buffer offset/type, the `bone_transforms` uniform block
+   and the material/texture bindings. This turns the buffer layout into a complete VAO spec.
+3. **Build a valid test mesh.** Use a deliberate hand pivot and deliberately chosen bone
+   weights, not an arbitrary existing vertex. Verify a solid, correctly lit cube at the hand
+   before attempting the authored arm. Reversibility is part of the test: restore buffers and
+   count on unload.
+4. **Bake the authored rig to 16 bones.** Merge the second finger joints and consolidate the
+   nine feather rows until the runtime armature is at most 16 matrices, then re-export and
+   re-validate weights/actions. Keep the 26-bone authoring rig in the `.blend`.
+5. **Integrate `entity_hand`/`entity_hand_vs`.** Once the draw hook and the 16-bone mesh are
+   both verified, substitute the authored mesh through the game's program rather than drawing
+   a separate material. Preserve the screen-space hand blend and iridescence.
 
 ## Reproducible tools
 
@@ -244,9 +292,16 @@ python3 tools/re/name_records.py --game "$GAME" --json /tmp/assets.json
 python3 tools/re/pack_crypt.py --exe "$GAME/hyperdemon.exe" --pack "$GAME/asset/asset" \
     --name hand --offset 306587727 --size 1197 --hex
 
+# inspect a locally dumped hand VBO/IBO and manufacture a same-format test cube
+python3 tools/re/hand_vbo_test.py --vbo /tmp/hand-vbo.bin --ibo /tmp/hand-ibo.bin \
+    --out /tmp/hand-test
+
 # the replacement mesh/rig used for the visual target
 blender -b --python tools/assets/build_berdly_arm.py
 ```
+
+The VBO/IBO dumps contain game geometry and must stay outside the repository. The helper
+only writes derived test data and prints layout facts; it never embeds the dump.
 
 The asset generator is independent of any game content: every mesh, feather, bone, weight
 and material is authored in the script.
