@@ -170,10 +170,13 @@ cube in the same 72-byte format and 36 indices, then changing only the hand draw
 When the original index count was left at 1,188 while the first records were replaced, the
 arm visibly stretched into large triangles. Both outcomes prove the draw consumes buffer 41
 and index buffer 42 live; neither is a correct rig-space placement. Reversing every cube
-triangle to face outward produced the same fragment, so back-face culling is not the cause;
-the remaining issue is the inherited vertex data and placement. The cube inherited one
-existing vertex's bone weights rather than a deliberate hand pivot, and the draw was not
-restored before the first capture window ended.
+triangle to face outward produced the same fragment, so back-face culling is not the cause.
+A second live process confirmed the same 41/42 buffers and an index pointer of **NULL**
+(offset zero); a cube with a 0.5 half-size at the bounding-box centre still rendered only
+as illuminated fragments. That rules out an index offset and back-face culling, but not the
+inherited UV/bone/material state. The cube inherited one existing vertex's data rather than
+a deliberate hand pivot, and the draw was not restored before the first capture window
+ended.
 
 ## Verified: gameplay-facing state names
 

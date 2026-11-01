@@ -1,5 +1,19 @@
 # Session progress
 
+## 2026-11-01 (eleventh pass: live hand-draw recheck)
+
+**A second live Steam/Proton process confirmed the hand signature after the previous game had
+exited.** At `count=1188`, mode `GL_TRIANGLES`, type `GL_UNSIGNED_SHORT`: attribute buffer
+41, element buffer 42, and `indices` pointer **NULL**. The six attribute offsets are
+`0, 12, 24, 32, 48, 60`, matching the helper's layout.
+
+**A larger cube still is not a usable replacement.** A 0.5 half-size cube at the
+bounding-box centre still rendered only as illuminated fragments; mixed per-corner source
+records were prepared to vary UVs and skin data, but the 200-draw trace auto-restored before
+a verified mid-injection capture. The original arm is back on screen. This rules out an
+index offset and outward winding as the explanation; inherited UV/bone/material state or
+placement remains.
+
 ## 2026-11-01 (tenth pass: validated 16-bone runtime arm)
 
 **The authored arm now fits the game's 16-matrix skinning budget without discarding its

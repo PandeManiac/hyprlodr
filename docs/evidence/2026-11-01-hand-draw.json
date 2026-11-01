@@ -12,6 +12,7 @@
   },
   "hand_draw": {
     "index_count": 1188,
+    "indices_pointer": "0x0 (offset zero; confirmed in a second live Steam/Proton process)",
     "passes_per_frame": 2,
     "mode": "GL_TRIANGLES",
     "index_type": "GL_UNSIGNED_SHORT",
@@ -32,6 +33,14 @@
     ],
     "attribute_offsets": [0, 12, 24, 32, 48, 60],
     "layout_note": "positions are the first three floats and normals the next three; attribute byte offsets were measured, while the current program and uniform values were not captured reliably"
+  },
+  "live_recheck": {
+    "context": "second Steam/Proton process after the first had exited",
+    "attribute_buffer": 41,
+    "element_buffer": 42,
+    "attribute_offsets": [0, 12, 24, 32, 48, 60],
+    "large_cube": "a 0.5 half-size cube at the bounding-box centre still produced only illuminated fragments",
+    "restoration": "the trace restored the original VBO/IBO automatically after 200 hand draws; the original arm was visible again"
   },
   "experiments": [
     {
