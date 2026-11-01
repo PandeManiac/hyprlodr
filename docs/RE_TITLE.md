@@ -120,3 +120,31 @@ mkdir -p /tmp/gp
 
 The project directory must exist before launch (otherwise Ghidra aborts with
 `Directory not found`), and analysis took ~2 minutes for this 4 MB PE.
+
+## The asset resolver, decompiled (Ghidra, 2026-11-01)
+
+`FUN_140211e70(ctx, kind, name, flags)` — what the lobby registration sites actually call:
+
+- fetches a per-kind table with `FUN_140213b70(ctx + 0x128, &kind, name, flags, -2)`;
+- binary-searches the entry for `name`: the key is a `std::string` read SSO-aware from
+  `+0x20` (buffer), `+0x30` (size), `+0x38` (capacity), compared with `memcmp` over the
+  shared length and then by length;
+- **on a miss** it calls `FUN_140213cb0` — the already-known "Can't find asset " builder —
+  and logs through `FUN_140075b70`/`FUN_140075d40` with the format at `0x140365b70`;
+- **on a hit** it materialises a record with `FUN_140212040(&local, entryIndex * 0x58 + *table)`
+  (so entries are 0x58-byte records, indexed by the `int` stored at entry `+0x40`), loads it
+  with `FUN_140212920(ctx, record, name, flags)`, then fills an output structure
+  (fields at `+0x00`, `+0x04`, `+0x08`, `+0x10`, `+0x18`, `+0x20` string, `+0x40`, `+0x48`,
+  `+0x50`) via `FUN_140213950`.
+
+`FUN_14000c4d0(registry, key)` — the facility registry lookup — is the same shape: sorted
+`std::string` keys with `memcmp`, returning the value slot; on a miss it inserts a new entry
+(`FUN_14000e630` for the value vector, `FUN_14000e4a0` for the key vector) and returns the
+fresh slot, which is why `FUN_140004ac0` can just write its callback into the result.
+
+**Observed consequence:** every entity/asset resolution is a `(kind, name)` → `0x58`-byte
+record lookup in a sorted per-kind table under `ctx + 0x128`, and a miss is reported loudly
+as "Can't find asset <name>". **Inferred:** replacing the title means making the lookup for
+`entity_lobby_dagger_hyper*` (kind 4) yield replacement content — either by redirecting the
+asset the record points at (the `_Fiopen` redirect already proven in the loader) or by
+swapping the record in memory; nothing about the lookup itself needs to change.

@@ -68,6 +68,24 @@
       "headless": "/opt/ghidra/support/analyzeHeadless",
       "args": "-analysisTimeoutPerFile 300 -scriptPath tools/re/ghidra -postScript DumpAt.java",
       "note": "project directory must pre-exist; ~2 min analysis"
+    },
+    "FUN_140211e70": {
+      "signature": "(ctx, kind, name, flags)",
+      "table_fetch": "FUN_140213b70(ctx + 0x128, &kind, name, flags, -2)",
+      "lookup": "binary search over sorted std::string keys (buffer +0x20, size +0x30, capacity +0x38, memcmp)",
+      "on_miss": "FUN_140213cb0 ('Can't find asset ' builder) then FUN_140075b70/FUN_140075d40 with format 0x140365b70",
+      "on_hit": [
+        "record = FUN_140212040(&local, entryIndex * 0x58 + *table)",
+        "FUN_140212920(ctx, record, name, flags)",
+        "output filled via FUN_140213950; record stride 0x58; index stored at entry +0x40"
+      ]
+    },
+    "FUN_14000c4d0": {
+      "semantics": "sorted-map lookup with insert-on-miss",
+      "insert_helpers": [
+        "FUN_14000e630 (value vector)",
+        "FUN_14000e4a0 (key vector)"
+      ]
     }
   }
 }
