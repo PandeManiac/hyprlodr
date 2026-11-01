@@ -30,6 +30,11 @@ MANIFEST = "hyprlodr-install-manifest.json"
 # when the game does not already have one, so a user's own art survives upgrades.
 TITLE = "hyprlodr-title.bmp"
 TITLE_SOURCE = Path(__file__).resolve().parent.parent / "assets" / "title.bmp"
+# The glyph mask the proxy uploads into the game's own title texture. It is rendered
+# from a face the user's installation already contains (tools/make_title_mask.py), so
+# it is generated, not vendored: the installer only delivers it.
+MASK = "hyprlodr-title-mask.raw"
+MASK_SOURCE = Path(__file__).resolve().parent.parent / "assets" / MASK
 PROXY = "OpenAL32.dll"
 ORIGINAL = "OpenAL32_real.dll"
 MOD_DIR = "mods"
@@ -127,11 +132,16 @@ def cmd_install(args) -> int:
         )
     if not (game / "hyperdemon.exe").is_file():
         raise SystemExit(f"error: {game} does not contain hyperdemon.exe")
+    mask_source = Path(args.title_mask).resolve() if args.title_mask else MASK_SOURCE
+    if args.title_mask and not mask_source.is_file():
+        raise SystemExit(f"error: title mask {mask_source} not found")
 
     print(f"game        : {game}")
     print(f"proxy       : {proxy_source} ({proxy_source.stat().st_size} bytes)")
     print(f"mods        : {sorted(p.name for p in mods_source.glob('*.dll')) if mods_source.is_dir() else []}")
     print(f"will rename : {PROXY} -> {ORIGINAL} (copy, the original bytes are preserved)")
+    mask_display = mask_source if mask_source.is_file() else "none (title stays the game's own)"
+    print(f"title mask  : {mask_display}")
     if args.dry_run:
         print("dry run: nothing changed")
         return 0
@@ -142,6 +152,7 @@ def cmd_install(args) -> int:
     backups: dict[str, str] = {}
     installed_mods: list[str] = []
     title_created = False
+    mask_created = False
     created_mods_dir = not (game / MOD_DIR).exists()
     original_created = False
     manifest_written = False
@@ -155,6 +166,8 @@ def cmd_install(args) -> int:
             (game / MOD_DIR / name).unlink(missing_ok=True)
         if title_created:
             (game / TITLE).unlink(missing_ok=True)
+        if mask_created:
+            (game / MASK).unlink(missing_ok=True)
         restore_backups(game, backups)
         if manifest_written:
             manifest_path(game).unlink(missing_ok=True)
@@ -183,6 +196,23 @@ def cmd_install(args) -> int:
             title_created = True
             files[TITLE] = {"sha256": title_hash, "installed_sha256": title_hash,
                             "role": "title screen art shown when mods are loaded"}
+
+        # The replacement's letterforms. A mask the user already had is preserved in
+        # the backup directory and put back by uninstall, exactly as mods are.
+        if mask_source is not None and mask_source.is_file():
+            destination = game / MASK
+            if destination.exists():
+                backup_root = game / BACKUP_DIR
+                backup_root.mkdir(parents=True, exist_ok=True)
+                backup = backup_root / MASK
+                if not backup.exists():
+                    shutil.copy2(destination, backup)
+                    backups[MASK] = f"{BACKUP_DIR}/{MASK}"
+            shutil.copy2(mask_source, destination)
+            mask_created = True
+            mask_hash = sha256(destination)
+            files[MASK] = {"sha256": mask_hash, "installed_sha256": mask_hash,
+                           "role": "title glyph mask the proxy uploads into the game's texture"}
 
         if mods_source.is_dir():
             target = game / MOD_DIR
@@ -269,6 +299,13 @@ def cmd_uninstall(args) -> int:
             print(f"removed {TITLE}")
         else:
             print(f"kept {TITLE} (changed since installation)")
+    mask_record = (manifest or {}).get("files", {}).get(MASK, {}).get("installed_sha256")
+    if mask_record and (game / MASK).is_file():
+        if sha256(game / MASK) == mask_record:
+            (game / MASK).unlink()
+            print(f"removed {MASK}")
+        else:
+            print(f"kept {MASK} (changed since installation)")
     restore_backups(game, (manifest or {}).get("backups", {}))
     if (manifest or {}).get("backups"):
         print("restored mod file(s) that existed before installation")
@@ -289,6 +326,9 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--loader-version", default="0.2.0")
     parser.add_argument("--yes", action="store_true", help="do not prompt")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--title-mask",
+                        help="glyph mask to install (default: assets/hyprlodr-title-mask.raw, "
+                             "rendered with tools/make_title_mask.py)")
     parser.add_argument("action", choices=["status", "install", "uninstall"])
     args = parser.parse_args(argv)
     if args.action == "status":

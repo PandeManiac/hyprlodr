@@ -114,6 +114,20 @@ The attach record also reports the file hook: the stand-in's modules import `Cre
 | `failed_install_rolls_back` | An install that fails after the proxy was replaced restores the original library, removes the backup and the manifest, and leaves the blocking file intact |
 | `uninstall_keeps_changed_mod` | A mod whose bytes changed since installation is kept (and reported), untouched mods are removed, original library restored |
 
+## Title mask delivery (3/3 passing)
+
+`tools/tests/test_install_mask.py` covers the glyph mask the replacement depends on. It must arrive by
+installing rather than by hand-copying, and a mask the user already had must survive the round trip.
+
+| Scenario | Asserts |
+|---|---|
+| `mask_is_delivered` | `--title-mask` is copied to `hyprlodr-title-mask.raw`, recorded in the manifest, and removed by uninstall |
+| `existing_mask_is_restored` | A mask already in the game directory is backed up, replaced, and put back by uninstall |
+| `missing_mask_is_reported` | A `--title-mask` path that does not exist fails before the proxy is touched: no backup library, no manifest |
+
+The mask itself is not committed: it is rendered by `tools/make_title_mask.py` from a face inside the
+user's own installation, and `/assets/hyprlodr-title-mask.raw` is ignored by Git.
+
 ## Manager core (36/36 passing)
 
 `tools/test_manager.sh` builds and runs `manager/HYPRLODR.SelfTest`, which needs no display and is wired into ctest as `manager_suite` when the .NET SDK is present.

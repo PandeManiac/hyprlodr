@@ -1,5 +1,26 @@
 # Session progress
 
+## 2026-11-01 (fourth pass: the mask travels with the install)
+
+**The replacement had a pipeline hole: the glyph mask was hand-copied.** Nothing in the repository
+produced or delivered it, so a fresh install would have left the original title in place. It is now
+part of the installer - `--title-mask PATH` places it, the manifest records its hash, uninstall removes
+it only while the bytes match, a pre-existing mask is backed up and restored, and the copy is inside the
+install's rollback.
+
+**Three new scenarios** (`tools/tests/test_install_mask.py`) cover delivery, restore, and a missing
+mask path failing before the proxy is touched: 3/3 pass, alongside the existing 3/3 installer
+scenarios. The mask stays out of Git (`/assets/hyprlodr-title-mask.raw` is ignored) because it is
+rendered from a face inside the user's own installation.
+
+**Verified in game** with the mask delivered by installing: `title_mask_loaded` and `title_mask_found`
+each once, `HYPR` over `LODR` at frames 483 and 512.
+
+**Measured and set aside:** our lettering is already 94% packed - internal gaps of 9..19 px across the
+831 px band against the original's zero - so per-word tracking is close to saturated and is not worth
+further tuning.
+
+
 ## 2026-11-01 (third pass: the density fit is rejected, the exact-grid mask ships)
 
 **Found a defect in what was shipping.** Chasing why the title looked slightly oversized, I measured

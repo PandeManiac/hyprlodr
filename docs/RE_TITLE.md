@@ -615,3 +615,25 @@ capture (frame 830) both show `HYPR` over `LODR` at the new layout, and the log 
 the mask was resolved against survived the resize, and the per-frame re-upload kept the replacement in
 place across an engine-side layout change - the closest thing to a rebuild test available without
 input.
+
+## Delivery: the mask is installed, not hand-copied (2026-11-01)
+
+Until now the replacement only worked because the glyph mask was copied into the game directory by
+hand, which is not a reproducible pipeline. The mask is now part of what `tools/hyprl_install.py`
+installs:
+
+- `--title-mask PATH` places the mask as `hyprlodr-title-mask.raw`, records its SHA-256 in
+  `hyprlodr-install-manifest.json`, and uninstall removes it - but only while the bytes still match,
+  the same rule the mods follow;
+- a mask that was already in the game directory is backupped into `mods/.hyprlodr-backup` and put back
+  by uninstall, so installing never destroys a mask the user rendered earlier;
+- the copy sits inside the install's rollback, so a failure later in the install leaves no mask behind;
+- `--dry-run` prints which mask would be installed.
+
+The mask itself is **not** committed. `/assets/hyprlodr-title-mask.raw` is ignored by Git because it is
+rendered from a typeface that lives inside the user's own installation; `tools/make_title_mask.py
+--font <face> --out assets/hyprlodr-title-mask.raw` reproduces it, and the geometry it targets is the
+measured grid above.
+
+**Verified in game** with the mask installed by this path rather than copied: the log records one
+`title_mask_loaded` and one `title_mask_found`, and `HYPR` over `LODR` renders at frames 483 and 512.
