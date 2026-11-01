@@ -130,6 +130,12 @@ hyprlodr_fixture(redirect_fail FIX_ID="r.failing"
 hyprlodr_fixture(image_reader FIX_ID="i.reader" FIX_IMAGE_READ=16)
 hyprlodr_fixture(image_reader_far FIX_ID="i.far" FIX_IMAGE_READ=4096)
 
+# ABI 6 writes: one patch inside the fixture image, one past its end, and one
+# patch made by a mod that then fails (rollback must restore it).
+hyprlodr_fixture(image_writer FIX_ID="i.writer" FIX_IMAGE_WRITE=16)
+hyprlodr_fixture(image_writer_far FIX_ID="i.wfar" FIX_IMAGE_WRITE=4096)
+hyprlodr_fixture(image_writer_fail FIX_ID="i.wfail" FIX_IMAGE_WRITE=16 FIX_FAIL=1)
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

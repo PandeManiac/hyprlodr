@@ -84,7 +84,29 @@ if (HYPRLODR_HOST_API_HAS(host, image_read) && host->image_read && host->build_m
 
 - `build_matches()` is 0 unless every fingerprint anchor matched, in which case **every read is refused**. This is the gate that stops a mod acting on offsets from a different executable.
 - A read is refused when the range is not entirely inside the image (including a length that would wrap), or the length is zero. Refusal is a normal return value, not a crash: treat it as "not available".
-- The API is read-only. Nothing here lets a mod patch the game, and nothing is exposed unless the host supplies an image at all — the synthetic test host returns 0 from `image_size()`.
+- Reads are inert: nothing here changes the game. Patching is a separate, explicitly opted-in capability (ABI 6) that the host can refuse entirely — the synthetic test host offers reads but no writes.
+- Nothing is exposed unless the host supplies an image at all; a host without one returns 0 from `image_size()`.
+
+## Patching the image (ABI 6)
+
+A mod may overwrite verified bytes, and the host guarantees they are put back:
+
+```c
+if (host->build_matches(host->context) &&
+    host->image_write(host->context, RVA, replacement, length) == 0) {
+    /* the patch is live now; it is undone on image_restore() or at exit */
+}
+```
+
+- **Only on a verified build.** Same gate as reading: `build_matches()` must be true, otherwise every write is refused.
+- **Only where the host allows it.** The write is performed by the host, so a host that cannot change page protection (or does not want to) refuses. The Linux test host accepts patches to its synthetic image; the Windows proxy lifts page protection with `VirtualProtect` around the copy.
+- **Bounded.** 32 patches / 4096 bytes per process. A write that would exceed either budget is refused, not truncated.
+- **Journaled and restored.** The host saves the bytes each patch replaces. A mod that fails initialization has *its* patches undone during rollback (the log says `rolled back N host change(s)`); everything still applied is restored when the process shuts down, and `image_restore()` undoes them earlier on demand. Overlapping patches are restored in reverse order, so the oldest bytes win.
+- **Refusals are values, not faults:** `image_write` returns non-zero for no image, unknown build, zero length, out-of-range or wrapping range, exhausted budget, or a host-side write failure.
+
+This is still trusted native code — a wrong byte can corrupt or crash the game instantly. Check the fingerprint, patch the smallest range you can, and prefer restoring immediately when the change is only needed during your own initialization.
+
+Verified in the real game on 2026-11-01: the `i.writer` probe patched one byte at RVA `0x36f640`, read it back (`patch visible through a second read`), restored it (`restored 1 byte(s)`) and confirmed the original hash. Evidence: `docs/evidence/2026-11-01-abi6-write.json`.
 
 ## Rules
 
@@ -132,6 +154,8 @@ All calls take `host->context`. Every function may return failure; treat failure
 | `image_size(context)` | Bytes of the running image a mod may read; 0 when the host offers none (ABI 5). |
 | `build_matches(context)` | Non-zero only when the image is the exact verified build (ABI 5). |
 | `image_read(context, offset, dst, length)` | Copy bytes from the image; refused when the build is unverified or the range is outside it (ABI 5). |
+| `image_write(context, offset, src, length)` | Overwrite verified bytes; journaled, budgeted, restored at shutdown (ABI 6). |
+| `image_restore(context)` | Undo every patch this process applied; returns the bytes put back (ABI 6). |
 
 State set during `initialize` is journaled: if initialization fails, every change is undone automatically, including state the failed mod *deleted* — a removed entry is re-inserted with its previous value and owner (scenario `state_remove_rolled_back_on_failure`). State written during `shutdown` is not journaled.
 
@@ -204,7 +228,7 @@ Two loader scenarios run the same Linux build against synthetic images: a 64-byt
 
 ## Compatibility
 
-ABI 5 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
+ABI 6 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
 
 ## Worked example: `example.uptime`
 

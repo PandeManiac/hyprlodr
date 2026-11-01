@@ -79,6 +79,36 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
         }
     }
 #endif
+#ifdef FIX_IMAGE_WRITE
+    /* ABI 6: patch eight bytes at a fixed offset, then read them back. The suite
+     * compares the logged value with what it wrote and, through --image-out,
+     * checks that the host put the original bytes back after shutdown. */
+    if (!HYPRLODR_HOST_API_HAS(host, image_write) || !host->image_write) {
+        host->log(host->context, "error", FIX_ID, "image_write unavailable");
+        return -1;
+    }
+    {
+        unsigned char payload[8];
+        for (int index = 0; index < 8; ++index) payload[index] = (unsigned char)(0xa0 + index);
+        if (host->image_write(host->context, (uint64_t)FIX_IMAGE_WRITE, payload,
+                              sizeof payload) != 0) {
+            host->log(host->context, "warn", FIX_ID, "image write refused");
+        } else {
+            unsigned char bytes[8];
+            for (int index = 0; index < 8; ++index) bytes[index] = 0;
+            if (host->image_read(host->context, (uint64_t)FIX_IMAGE_WRITE, bytes, sizeof bytes) != 0) {
+                host->log(host->context, "warn", FIX_ID, "image readback refused");
+            } else {
+                unsigned long long value = 0;
+                for (int index = 0; index < 8; ++index)
+                    value = (value << 8) | (unsigned long long)bytes[index];
+                char message[64];
+                snprintf(message, sizeof message, "image write ok %016llx", value);
+                host->log(host->context, "info", FIX_ID, message);
+            }
+        }
+    }
+#endif
 #ifdef FIX_STATE_REMOVE
     if (host->state_remove(host->context, FIX_STATE_REMOVE) != 0) {
         host->log(host->context, "error", FIX_ID, "state_remove failed");

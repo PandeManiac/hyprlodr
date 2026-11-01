@@ -105,6 +105,19 @@ static void inspect_main_module(void) {
                             HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors);
 }
 
+/* Page protection is the host's business: the image's .text and .rdata are
+ * read-only, so a patch is applied between two VirtualProtect calls. */
+static int image_write_bytes(void *context, void *destination, const void *source, size_t length) {
+    (void)context;
+    if (!destination || !source || length == 0) return -1;
+    DWORD previous = 0;
+    if (!VirtualProtect(destination, length, PAGE_EXECUTE_READWRITE, &previous)) return -1;
+    memcpy(destination, source, length);
+    DWORD ignored = 0;
+    VirtualProtect(destination, length, previous, &ignored);
+    return 0;
+}
+
 /* Copy the asset cipher's tables out of the running image.
  *
  * The loader's own code indexes two 256-byte tables. Offline work could not
@@ -337,6 +350,10 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     hyprlodr_image image;
     image.base = g_module.base;
     image.size = (size_t)g_module.size_of_image;
+    /* ABI 6: the proxy performs patches so it can lift page protection, and the
+     * loader restores them when the process shuts down. */
+    image.write_context = NULL;
+    image.write = image_write_bytes;
     image.build_matches = g_module.parsed &&
                           g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
                           g_anchors.total > 0 && g_anchors.matched == g_anchors.total;

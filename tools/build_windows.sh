@@ -81,6 +81,10 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" 
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/image_mod.c" -o "$OUT/obj/image_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/image_mod.dll" \
   "$OUT/obj/image_mod.obj" "$CRT_OBJ" "$K32"
+# ABI 6 fixture: patches one verified byte in-game and restores it immediately.
+"$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/image_writer.c" -o "$OUT/obj/image_writer.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/image_writer.dll" \
+  "$OUT/obj/image_writer.obj" "$CRT_OBJ" "$K32"
 
 
 

@@ -20,7 +20,7 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
-## Loader scenarios (native, 34/34 passing)
+## Loader scenarios (native, 38/38 passing)
 
 | Scenario | Asserts |
 |---|---|
@@ -58,6 +58,10 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 | `image_access_refuses_out_of_range` | An offset past the end is refused instead of reading past the buffer |
 | `example_game_info_refuses_a_small_image` | The shipped `example.game-info` treats a refused read as normal and still initializes |
 | `example_game_info_detects_an_unknown_build` | A readable image of the wrong bytes is rejected by the example's own hash comparison, without crashing |
+| `image_write_patches_verified_bytes_and_is_restored` | A patch is visible through a second read, `image_restored` is logged, and `--image-out` proves the bytes are back after shutdown |
+| `image_write_refused_without_image` | No image means no patch: the mod logs a refusal, no `image_write` event exists, and the run succeeds |
+| `image_write_refuses_out_of_range` | A write past the end is refused and leaves the image unchanged |
+| `image_write_rolled_back_with_failing_mod` | A mod that patches and then fails has its patch undone before the loader returns |
 
 The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`) applies to the loader, host, samples and fixtures.
 

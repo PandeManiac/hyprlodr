@@ -24,11 +24,11 @@
 #  define HYPR_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Bumped to 5: the host API gained read-only access to the verified game image,
- * so a mod can inspect the running game instead of only running beside it. ABI 4
- * added file_redirect(). Earlier ABIs are rejected: mods are recompiled against
- * this header. */
-#define HYPRLODR_ABI_VERSION 5u
+/* Bumped to 6: a verified mod may now patch the running image and the host
+ * restores every patch when the process shuts down. ABI 5 added read-only image
+ * access, ABI 4 added file_redirect(). Earlier ABIs are rejected: mods are
+ * recompiled against this header. */
+#define HYPRLODR_ABI_VERSION 6u
 #define HYPRLODR_PLUGIN_ENTRY "hyprlodr_plugin_query"
 
 /* True when the descriptor is large enough to contain `field`. */
@@ -77,6 +77,23 @@ typedef struct hyprlodr_host_api {
      * Returns 0 on success; non-zero when refused: no image, unknown build,
      * zero length, or a range that is not entirely inside the image. */
     int (*image_read)(void *context, uint64_t offset, void *destination, size_t length);
+    /* --- ABI 6 additions --- */
+    /* Overwrite `length` bytes at `offset` in the game image with `source`.
+     * Refused for the same reasons as image_read, and also when the host cannot
+     * make its image writable (the stand-in host under Wine, for example), when
+     * the write budget is exhausted (32 patches / 4096 bytes per process), or
+     * when the host's own write fails.
+     *
+     * Every patch is journaled: a mod that fails initialization has its patches
+     * undone before the loader returns, and the host restores all remaining
+     * patches before it exits. The image never stays modified.
+     *
+     * A mod is trusted code, so this is not a sandbox: a bad patch can crash the
+     * game immediately. Use build_matches() and a fingerprint check first. */
+    int (*image_write)(void *context, uint64_t offset, const void *source, size_t length);
+    /* Undo every patch this process applied and return the number of bytes put
+     * back (0 when none). Hosts with nothing to restore return 0. */
+    size_t (*image_restore)(void *context);
 } hyprlodr_host_api;
 
 /* True when the host API is large enough to contain `field`. */

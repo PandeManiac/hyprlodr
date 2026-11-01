@@ -39,6 +39,7 @@ static void usage(const char *argv0) {
             "  --redirect-probe P   report which file would open instead of P\n"
             "                       (repeatable, up to 8; ABI 4 file redirection)\n"
             "  --image-file PATH    offer PATH as the game image to mods (ABI 5)\n"
+            "  --image-out PATH     write the image back after mods shut down (ABI 6)\n"
             "  -h, --help           show this help\n",
             argv0);
 }
@@ -168,11 +169,40 @@ static int load_image_file(const char *path) {
 }
 #endif
 
+/* The host owns the image buffer, so it performs patches itself; the loader only
+ * validates them, journals the original bytes and asks for restores. */
+static int image_write_bytes(void *context, void *destination, const void *source, size_t length) {
+    (void)context;
+    if (!destination || !source || length == 0) return -1;
+    memcpy(destination, source, length);
+    return 0;
+}
+
+/* Dump the image after the loader has restored every patch, so a test can
+ * compare the result with the bytes it supplied. Like --image-file this needs
+ * stdio seeking/writing the minimal CRT does not have, so it is Linux-only. */
+#ifndef HYPRLODR_MINIMAL_WIN32
+static int dump_image_file(const char *path) {
+    if (!image_bytes || image_size == 0) return -1;
+    FILE *file = fopen(path, "wb");
+    if (!file) return -1;
+    size_t written = fwrite(image_bytes, 1, image_size, file);
+    fclose(file);
+    return written == image_size ? 0 : -1;
+}
+#else
+static int dump_image_file(const char *path) {
+    (void)path;
+    return 0; /* nothing to dump without --image-file */
+}
+#endif
+
 int main(int argc, char **argv) {
     const char *log_path = "hyprlodr-events.jsonl";
     const char *disabled_file = NULL;
     const char *state_root = NULL;
     const char *image_file = NULL;
+    const char *image_out = NULL;
     unsigned seed = 0;
     int describe = 0;
     int ok = 1;
@@ -197,6 +227,7 @@ int main(int argc, char **argv) {
         }        else if (!strcmp(arg, "--disabled-file") && i + 1 < argc) disabled_file = argv[++i];
         else if (!strcmp(arg, "--state-root") && i + 1 < argc) state_root = argv[++i];
         else if (!strcmp(arg, "--image-file") && i + 1 < argc) image_file = argv[++i];
+        else if (!strcmp(arg, "--image-out") && i + 1 < argc) image_out = argv[++i];
         else if (!strcmp(arg, "--seed") && i + 1 < argc) seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(arg, "--redirect-probe") && i + 1 < argc) {
             if (probe_count == HYPRLODR_MAX_PROBES) {
@@ -243,6 +274,8 @@ int main(int argc, char **argv) {
         image.base = image_bytes;
         image.size = image_size;
         image.build_matches = 1; /* the test harness declares this the image */
+        image.write_context = NULL;
+        image.write = image_write_bytes;
         status = hyprlodr_loader_set_image(loader, &image);
     }
     if (status == HYPRLODR_OK) status = hyprlodr_loader_resolve(loader);
@@ -267,5 +300,10 @@ int main(int argc, char **argv) {
 
     int failed = status != HYPRLODR_OK || hyprlodr_loader_had_error(loader);
     hyprlodr_loader_destroy(loader);
+    /* Destruction restores every patch, so this dump proves restoration. */
+    if (image_out && dump_image_file(image_out) != 0) {
+        fprintf(stderr, "hyprlodr-host: cannot write --image-out %s\n", image_out);
+        failed = 1;
+    }
     return failed ? 1 : 0;
 }

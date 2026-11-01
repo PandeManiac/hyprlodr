@@ -1,0 +1,52 @@
+{
+  "kind": "ABI 6 guarded image write in the real game",
+  "captured": "2026-11-01",
+  "mod": {
+    "id": "i.writer",
+    "note": "patches one verified byte at RVA 0x36f640, reads it back, restores it in the same call"
+  },
+  "game": {
+    "build_matches": true,
+    "anchors_matched": 8,
+    "anchors_total": 8,
+    "mods_initialized": 6
+  },
+  "observed_events": [
+    {
+      "seq": 18,
+      "event": "image_write",
+      "mod": "i.writer",
+      "message": "patched 1 byte(s) at rva 36f640"
+    },
+    {
+      "seq": 19,
+      "event": "log",
+      "mod": "i.writer",
+      "message": "info: patch visible through a second read"
+    },
+    {
+      "seq": 20,
+      "event": "image_restored",
+      "mod": "i.writer",
+      "message": "restored 1 byte(s)"
+    },
+    {
+      "seq": 21,
+      "event": "log",
+      "mod": "i.writer",
+      "message": "info: restored 1 byte(s)"
+    },
+    {
+      "seq": 22,
+      "event": "log",
+      "mod": "i.writer",
+      "message": "info: original bytes confirmed after restore"
+    }
+  ],
+  "meaning": "A mod changed a byte of the mapped hyperdemon.exe through the host API, observed the change through a second read (so the write reached the image), then restored it and re-verified the fingerprint hash. Page protection was lifted by the proxy with VirtualProtect around the copy.",
+  "safety": "Writes require build_matches (8/8 anchors here), are limited to 32 patches / 4096 bytes, are journaled, and are restored on rollback, on image_restore() and at shutdown.",
+  "content_policy": "Only RVAs, counts and hashes are recorded; no game bytes are logged or committed.",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

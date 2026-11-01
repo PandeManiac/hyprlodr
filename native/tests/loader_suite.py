@@ -49,7 +49,7 @@ class Runner:
         return path
 
     def run(self, seed=None, disable=(), disabled_file=None, state_root=None, redirect_probes=(),
-            image_file=None):
+            image_file=None, image_out=None):
         log = self.tmp / "events.jsonl"
         if log.exists():
             log.unlink()
@@ -66,6 +66,8 @@ class Runner:
             args += ["--redirect-probe", probe]
         if image_file:
             args += ["--image-file", str(image_file)]
+        if image_out:
+            args += ["--image-out", str(image_out)]
         proc = subprocess.run(args, capture_output=True, text=True)
         events = []
         if log.exists():
@@ -338,6 +340,90 @@ def example_game_info_detects_an_unknown_build():
                     if e["event"] == "log" and e["mod"] == "example.game-info"]
         check(any("resource path hash mismatch" in message for message in messages), messages)
         check(not any("anchor verified" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("image_write_patches_verified_bytes_and_is_restored")
+def image_write_patches_verified_bytes_and_is_restored():
+    """ABI 6: a patch is visible immediately and gone when the host exits.
+
+    The fixture writes 0xa0..0xa7 at offset 16 and reads them back through the
+    same API. The host dumps the image after shutdown, so restoration is checked
+    byte-for-byte rather than taken on trust.
+    """
+    runner = Runner()
+    try:
+        runner.add("image_writer")
+        original = bytes(range(64))
+        image = runner.tmp / "image.bin"
+        image.write_bytes(original)
+        dump = runner.tmp / "image-after.bin"
+        proc, events, _ = runner.run(image_file=image, image_out=dump)
+        check(proc.returncode == 0, f"write run failed: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.writer"]
+        check("image write ok a0a1a2a3a4a5a6a7" in " ".join(messages), messages)
+        check(any(e["event"] == "image_write" for e in events),
+              "the loader did not record the patch")
+        restored = [e for e in events if e["event"] == "image_restored"]
+        check(restored and "restored 8" in restored[-1]["message"], restored)
+        check(dump.read_bytes() == original,
+              "the image still differs after shutdown; the patch was not restored")
+    finally:
+        runner.close()
+
+
+@scenario("image_write_refused_without_image")
+def image_write_refused_without_image():
+    runner = Runner()
+    try:
+        runner.add("image_writer")
+        proc, events, _ = runner.run()
+        check(proc.returncode == 0, f"a refused write must not fail the mod: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.writer"]
+        check(any("image write refused" in message for message in messages), messages)
+        check(not any(e["event"] == "image_write" for e in events), events)
+    finally:
+        runner.close()
+
+
+@scenario("image_write_refuses_out_of_range")
+def image_write_refuses_out_of_range():
+    runner = Runner()
+    try:
+        runner.add("image_writer_far")
+        image = runner.tmp / "image.bin"
+        original = bytes(range(64))
+        image.write_bytes(original)
+        dump = runner.tmp / "image-after.bin"
+        proc, events, _ = runner.run(image_file=image, image_out=dump)
+        check(proc.returncode == 0, f"out-of-range write must be refused, not fatal: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "i.wfar"]
+        check(any("image write refused" in message for message in messages), messages)
+        check(dump.read_bytes() == original, "a refused write must not touch the image")
+    finally:
+        runner.close()
+
+
+@scenario("image_write_rolled_back_with_failing_mod")
+def image_write_rolled_back_with_failing_mod():
+    """A mod that patches and then fails must not leave the patch behind."""
+    runner = Runner()
+    try:
+        runner.add("image_writer_fail")
+        original = bytes(range(64))
+        image = runner.tmp / "image.bin"
+        image.write_bytes(original)
+        dump = runner.tmp / "image-after.bin"
+        proc, events, _ = runner.run(image_file=image, image_out=dump)
+        check(proc.returncode != 0, "the failing mod should fail the run")
+        check(any("rolled back 1 host change(s)" in e["message"]
+                  for e in events if e["event"] == "rollback"),
+              f"the patch was not rolled back: {events}")
+        check(dump.read_bytes() == original, "a failed mod's patch survived rollback")
     finally:
         runner.close()
 

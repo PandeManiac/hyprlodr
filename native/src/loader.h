@@ -37,6 +37,12 @@ typedef struct {
     const void *base;
     size_t size;
     int build_matches;
+    /* ABI 6: when `write` is non-NULL the host accepts mod patches and this
+     * callback performs them, so a host that must change page protection (the
+     * Windows proxy) stays in control. A host that leaves it NULL keeps the
+     * image read-only and every write is refused. */
+    void *write_context;
+    int (*write)(void *write_context, void *destination, const void *source, size_t length);
 } hyprlodr_image;
 
 int hyprlodr_loader_set_image(hyprlodr_loader *loader, const hyprlodr_image *image);

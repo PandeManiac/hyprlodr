@@ -98,6 +98,18 @@ typedef struct {
     char *previous_owner;
 } hyprlodr_undo;
 
+/* ABI 6: a patch to the verified image, plus the bytes it replaced. Restoring
+ * in reverse order is what makes overlapping patches come back correctly. */
+#define HYPRLODR_MAX_IMAGE_WRITES 32
+#define HYPRLODR_MAX_IMAGE_WRITE_BYTES 4096
+
+typedef struct {
+    size_t offset;
+    size_t length;
+    unsigned char *saved;
+    char owner[HYPRLODR_ID_MAX];
+} hyprlodr_image_write;
+
 struct hyprlodr_loader {
     hyprlodr_loaded_plugin plugins[HYPRLODR_MAX_PLUGINS];
     size_t plugin_count;
@@ -115,6 +127,9 @@ struct hyprlodr_loader {
      * observe a redirect. Readers check it first and only then read the table. */
     volatile int redirects_published;
     hyprlodr_image image;
+    hyprlodr_image_write image_writes[HYPRLODR_MAX_IMAGE_WRITES];
+    size_t image_write_count;
+    size_t image_write_bytes;
     hyprlodr_undo undo[HYPRLODR_MAX_UNDO];
     size_t undo_count;
     char dirs[HYPRLODR_MAX_DIRS][HYPRLODR_PATH_MAX];
@@ -279,6 +294,30 @@ static void undo_clear(hyprlodr_loader *l) {
         free(l->undo[i].previous_owner);
     }
     l->undo_count = 0;
+}
+
+/* Put back every patch, or only the ones owned by `owner` when it is non-NULL.
+ * Returns the number of bytes restored. Reverse order handles the case where one
+ * patch overwrote another: the oldest saved bytes are written back last. */
+static size_t restore_image_writes(hyprlodr_loader *l, const char *owner) {
+    size_t restored = 0;
+    if (!l || !l->image.base) return 0;
+    for (size_t i = l->image_write_count; i-- > 0;) {
+        hyprlodr_image_write *write = &l->image_writes[i];
+        if (owner && strcmp(write->owner, owner)) continue;
+        size_t length = write->length;
+        size_t offset = write->offset;
+        if (l->image.write)
+            (void)l->image.write(l->image.write_context,
+                                 (unsigned char *)l->image.base + offset, write->saved, length);
+        free(write->saved);
+        memmove(&l->image_writes[i], &l->image_writes[i + 1],
+                (l->image_write_count - i - 1) * sizeof l->image_writes[0]);
+        --l->image_write_count;
+        l->image_write_bytes -= length;
+        restored += length;
+    }
+    return restored;
 }
 
 static int undo_push(hyprlodr_loader *l, int kind, const char *key,
@@ -552,6 +591,55 @@ static int api_image_read(void *ctx, uint64_t offset, void *destination, size_t 
     return 0;
 }
 
+/* --- ABI 6: guarded writes to the verified image ---------------------------- */
+static int api_image_write(void *ctx, uint64_t offset, const void *source, size_t length) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l || !source || length == 0) return -1;
+    /* Fail closed: without a verified build and a host that can make its image
+     * writable, nothing is patched. */
+    if (!l->image.build_matches || !l->image.base || !l->image.write) return -2;
+    if (offset > (uint64_t)l->image.size) return -3;
+    if (length > l->image.size - (size_t)offset) return -3;
+    if (l->image_write_count >= HYPRLODR_MAX_IMAGE_WRITES) return -4;
+    if (length > HYPRLODR_MAX_IMAGE_WRITE_BYTES - l->image_write_bytes) return -4;
+
+    unsigned char *saved = (unsigned char *)malloc(length);
+    if (!saved) return -5;
+    memcpy(saved, (const unsigned char *)l->image.base + (size_t)offset, length);
+    if (l->image.write(l->image.write_context,
+                       (unsigned char *)l->image.base + (size_t)offset, source, length) != 0) {
+        free(saved);
+        return -6;
+    }
+
+    hyprlodr_image_write *write = &l->image_writes[l->image_write_count++];
+    write->offset = (size_t)offset;
+    write->length = length;
+    write->saved = saved;
+    snprintf(write->owner, sizeof write->owner, "%s",
+             l->current_mod[0] ? l->current_mod : "unknown");
+    l->image_write_bytes += length;
+
+    char message[96];
+    snprintf(message, sizeof message, "patched %lu byte(s) at rva %lx",
+             (unsigned long)length, (unsigned long)offset);
+    event(l, "image_write", l->current_mod, message);
+    return 0;
+}
+
+static size_t api_image_restore(void *ctx) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l) return 0;
+    size_t restored = restore_image_writes(l, NULL);
+    if (restored > 0) {
+        char message[96];
+        snprintf(message, sizeof message, "restored %lu byte(s)",
+                 (unsigned long)restored);
+        event(l, "image_restored", l->current_mod, message);
+    }
+    return restored;
+}
+
 static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     hyprlodr_host_api api;
     memset(&api, 0, sizeof api);
@@ -570,6 +658,8 @@ static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     api.image_size = api_image_size;
     api.build_matches = api_build_matches;
     api.image_read = api_image_read;
+    api.image_write = api_image_write;
+    api.image_restore = api_image_restore;
     return api;
 }
 
@@ -657,6 +747,10 @@ static void rollback_current(hyprlodr_loader *l, const char *mod_id) {
         free(u->previous_value);
         free(u->previous_owner);
     }
+    /* Patches are restored by owner rather than through the undo journal: the
+     * bytes each one replaced are saved per patch, so replaying them in reverse
+     * puts back overlapping writes correctly. */
+    if (restore_image_writes(l, mod_id) > 0) ++restored;
     char msg[128];
     snprintf(msg, sizeof(msg), "rolled back %zu host change(s)", restored);
     event(l, "rollback", mod_id, msg);
@@ -1240,6 +1334,14 @@ void hyprlodr_loader_shutdown(hyprlodr_loader *loader) {
     /* Mods are signing out: their redirects must stop applying at once. */
     __atomic_store_n(&loader->redirects_published, 0, __ATOMIC_RELEASE);
     shutdown_initialized(loader);
+    /* Nothing leaves this process with a patched image. */
+    size_t image_restored = restore_image_writes(loader, NULL);
+    if (image_restored > 0) {
+        char message[96];
+        snprintf(message, sizeof message, "restored %lu patched byte(s) on exit",
+                 (unsigned long)image_restored);
+        event(loader, "image_restored", "", message);
+    }
     event(loader, "shutdown_complete", "", "");
 }
 
