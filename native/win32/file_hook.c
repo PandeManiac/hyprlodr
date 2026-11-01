@@ -8,15 +8,18 @@
  *
  * Targets, chosen from the executable's real import table:
  *   KERNEL32.dll                     CreateFileA  (Win32 call sites)
- *   api-ms-win-crt-stdio-l1-1-0.dll  fopen        (the asset-loading path)
+ *   api-ms-win-crt-stdio-l1-1-0.dll  fopen        (narrow CRT opens)
  *   api-ms-win-crt-stdio-l1-1-0.dll  fopen_s
+ *   api-ms-win-crt-stdio-l1-1-0.dll  _wfopen      (wide CRT opens)
  *
  * Measured gap that motivated the CRT targets: a real run patched CreateFileA
  * and observed zero opens while five mods initialized - the game's asset I/O
  * never passes through that import. hyperdemon.exe imports fopen/fopen_s and
- * _wfopen from the UCRT API set, and only CreateFileA from KERNEL32, so the CRT
- * slots are the ones the game actually uses. _wfopen is not hooked: it takes
- * wide strings and the redirect registry is UTF-8/narrow.
+ * _wfopen from the UCRT API set, and only CreateFileA from KERNEL32. A later
+ * run patched the two narrow CRT slots and still logged zero opens, which points
+ * the asset path at the wide entry point; _wfopen converts its UTF-16 path to
+ * UTF-8 for registry matching and converts a replacement back to UTF-16 before
+ * calling the original.
  *
  * Failure policy: a target that is absent, malformed or unwritable is reported
  * and skipped; the remaining targets still install and every mod still starts.
@@ -34,6 +37,8 @@
 #define HYPRLODR_SECTION_HEADER_BYTES 40u
 #define HYPRLODR_MAX_IMPORT_DESCRIPTORS 256u
 #define HYPRLODR_MAX_IMPORT_SLOTS 4096u
+/* Bound on the module walk, so a pathological process cannot spin here. */
+#define HYPRLODR_MAX_HOOK_MODULES 64u
 /* An unbounded log would let a streaming game fill the disk. */
 #define HYPRLODR_FILE_LOG_LIMIT 4096
 
@@ -43,6 +48,7 @@ typedef HANDLE(WINAPI *create_file_fn)(LPCSTR name, DWORD access, DWORD share, v
  * passed through untouched, so the exact typedef only has to match the ABI. */
 typedef FILE *(*fopen_fn)(const char *name, const char *mode);
 typedef int (*fopen_s_fn)(FILE **out, const char *name, const char *mode);
+typedef FILE *(*wfopen_fn)(const wchar_t *name, const wchar_t *mode);
 
 typedef struct {
     const uint8_t *base;
@@ -54,6 +60,7 @@ typedef struct {
 static create_file_fn g_original;
 static fopen_fn g_original_fopen;
 static fopen_s_fn g_original_fopen_s;
+static wfopen_fn g_original_wfopen;
 static hyprlodr_loader *g_loader;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static unsigned g_logged;
@@ -207,6 +214,46 @@ static FILE *intercept_fopen(const char *name, const char *mode) {
     return file;
 }
 
+/* UTF-16 path -> UTF-8, so the registry (which is narrow) can match it. */
+static int wide_to_utf8(const wchar_t *wide, char *out, int capacity) {
+    if (!wide) return 0;
+    return WideCharToMultiByte(CP_UTF8, 0u, wide, -1, out, capacity, NULL, NULL);
+}
+
+static int utf8_to_wide(const char *narrow, wchar_t *out, int capacity) {
+    if (!narrow) return 0;
+    return MultiByteToWideChar(CP_UTF8, 0u, narrow, -1, out, capacity);
+}
+
+/* The wide CRT entry point: this is the one the game's asset loader appears to
+ * use. A path that does not convert, or a replacement that does not convert
+ * back, is passed through unchanged rather than guessed at. */
+static FILE *intercept_wfopen(const wchar_t *name, const wchar_t *mode) {
+    char narrow[HYPRLODR_REDIRECT_PATH_MAX];
+    char replacement[HYPRLODR_REDIRECT_PATH_MAX];
+    wchar_t wide_replacement[HYPRLODR_REDIRECT_PATH_MAX];
+    int redirected = 0;
+    wfopen_fn original = g_original_wfopen;
+    if (!original) return NULL;
+    narrow[0] = '\0';
+    const wchar_t *effective = name;
+    if (wide_to_utf8(name, narrow, (int)sizeof narrow) > 0) {
+        resolve_path(narrow, replacement, &redirected);
+        if (redirected &&
+            utf8_to_wide(replacement, wide_replacement,
+                         (int)(sizeof wide_replacement / sizeof wide_replacement[0])) > 0) {
+            effective = wide_replacement;
+        } else {
+            redirected = 0;
+        }
+    }
+    FILE *file = original(effective, mode);
+    if (narrow[0]) {
+        record_open(narrow, redirected ? replacement : narrow, "_wfopen", redirected, file != NULL);
+    }
+    return file;
+}
+
 static int intercept_fopen_s(FILE **out, const char *name, const char *mode) {
     char replacement[HYPRLODR_REDIRECT_PATH_MAX];
     int redirected = 0;
@@ -260,6 +307,9 @@ static int find_import_slot(const pe_layout *pe, const char *dll_filter, const c
 /* Patch one slot, keeping the resolved original for the shim. Returns 1 on
  * success, 0 when the slot is absent, -1 when it cannot be written. */
 static int patch_slot(void *slot, void *replacement, void **original) {
+    /* Already ours (the main module is patched, then met again in the module
+     * walk): never overwrite the saved original with the shim. */
+    if (read_u64((const uint8_t *)slot) == (uint64_t)(uintptr_t)replacement) return 1;
     DWORD previous = 0;
     *original = (void *)(uintptr_t)read_u64((const uint8_t *)slot);
     /* The shim may run on another thread the instant the slot changes: publish
@@ -271,6 +321,105 @@ static int patch_slot(void *slot, void *replacement, void **original) {
     return 1;
 }
 
+typedef struct {
+    const char *dll;
+    const char *symbol;
+    void *replacement;
+    void **original;
+    const char *label;
+    int state; /* 1 patched, 0 absent, -1 failed */
+    unsigned patched;
+} hook_target;
+
+static hook_target g_targets[] = {
+    {"kernel32.dll", "CreateFileA", (void *)(uintptr_t)&intercept_create_file, (void **)&g_original,
+     "CreateFileA", 0, 0},
+    {"crt-stdio", "fopen", (void *)(uintptr_t)&intercept_fopen, (void **)&g_original_fopen, "fopen",
+     0, 0},
+    {"crt-stdio", "fopen_s", (void *)(uintptr_t)&intercept_fopen_s, (void **)&g_original_fopen_s,
+     "fopen_s", 0, 0},
+    {"crt-stdio", "_wfopen", (void *)(uintptr_t)&intercept_wfopen, (void **)&g_original_wfopen,
+     "_wfopen", 0, 0},
+};
+
+static const char *g_parse_error = "";
+
+/* Read the PE headers of a loaded image. Every failure names itself, so an
+ * unexpected module is skipped with a reason instead of being misread. */
+static int prepare_layout(const uint8_t *base, pe_layout *layout) {
+    g_parse_error = "no_image";
+    if (!base || base[0] != 'M' || base[1] != 'Z') return -1;
+    uint32_t pe_offset = read_u32(base + 0x3c);
+    g_parse_error = "bad_dos_header";
+    if (pe_offset < 0x40u || pe_offset > 0x1000u) return -1;
+    const uint8_t *pe = base + pe_offset;
+    g_parse_error = "bad_pe_header";
+    if (!(pe[0] == 'P' && pe[1] == 'E' && pe[2] == 0 && pe[3] == 0)) return -1;
+    const uint8_t *coff = pe + 4;
+    const uint8_t *optional = coff + HYPRLODR_IMPORT_DESCRIPTOR_BYTES;
+    g_parse_error = "not_pe32_plus";
+    if (read_u16(optional) != 0x20bu) return -1;
+    unsigned section_count = (unsigned)read_u16(coff + 2);
+    uint16_t optional_size = read_u16(coff + 16);
+    g_parse_error = "bad_optional_header";
+    if (section_count == 0 || optional_size < 120u) return -1;
+    /* PE32+ optional header: data directory 1 (imports) at offset 112 + 8. */
+    uint32_t import_rva = read_u32(optional + 120);
+    g_parse_error = "no_import_table";
+    if (import_rva == 0) return -1;
+    layout->base = base;
+    layout->sections = optional + optional_size;
+    layout->section_count = section_count;
+    layout->import_rva = import_rva;
+    g_parse_error = "";
+    return 0;
+}
+
+static void patch_targets(const pe_layout *layout, hook_target *targets, size_t count) {
+    for (size_t index = 0; index < count; ++index) {
+        void *slot = NULL;
+        int found = find_import_slot(layout, targets[index].dll, targets[index].symbol, &slot);
+        if (found < 0) {
+            if (targets[index].state == 0) targets[index].state = -1;
+            continue;
+        }
+        if (found == 0) continue;
+        if (patch_slot(slot, targets[index].replacement, targets[index].original) == 1) {
+            targets[index].state = 1;
+            ++targets[index].patched;
+        } else {
+            targets[index].state = -1;
+        }
+    }
+}
+
+/* Every loaded module keeps its own import table, and the game's C++ runtime
+ * opens files through its own copy of these slots - not the executable's. The
+ * proxy's own module is skipped, so its start-up file I/O is never redirected
+ * or logged as game activity. */
+static unsigned patch_loaded_modules(hook_target *targets, size_t count) {
+    unsigned modules = 0;
+    HANDLE snapshot =
+        CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, GetCurrentProcessId());
+    if (snapshot == INVALID_HANDLE_VALUE) return 0;
+    const uint8_t *self = (const uint8_t *)(uintptr_t)&g_targets;
+    MODULEENTRY32A entry;
+    memset(&entry, 0, sizeof entry);
+    entry.dwSize = (DWORD)sizeof entry;
+    for (BOOL more = Module32First(snapshot, &entry); more; more = Module32Next(snapshot, &entry)) {
+        if (modules >= HYPRLODR_MAX_HOOK_MODULES) break;
+        const uint8_t *module_base = (const uint8_t *)entry.modBaseAddr;
+        if (module_base == self) continue;
+        if (self >= module_base && self < module_base + entry.modBaseSize) continue;
+        pe_layout layout;
+        if (prepare_layout(module_base, &layout) != 0) continue;
+        ++modules;
+        patch_targets(&layout, targets, count);
+    }
+    CloseHandle(snapshot);
+    return modules;
+}
+
 int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     if (g_installed) return 0;
     if (!loader || !log_path || !*log_path) return fail_install("invalid_argument");
@@ -280,68 +429,35 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     g_log = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
                         CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
-    const uint8_t *base = (const uint8_t *)GetModuleHandleA(NULL);
-    if (!base || base[0] != 'M' || base[1] != 'Z') return fail_install("no_image");
-    uint32_t pe_offset = read_u32(base + 0x3c);
-    if (pe_offset < 0x40u || pe_offset > 0x1000u) return fail_install("bad_dos_header");
-    const uint8_t *pe = base + pe_offset;
-    if (!(pe[0] == 'P' && pe[1] == 'E' && pe[2] == 0 && pe[3] == 0))
-        return fail_install("bad_pe_header");
-    const uint8_t *coff = pe + 4;
-    const uint8_t *optional = coff + HYPRLODR_IMPORT_DESCRIPTOR_BYTES;
-    if (read_u16(optional) != 0x20bu) return fail_install("not_pe32_plus");
-    unsigned section_count = (unsigned)read_u16(coff + 2);
-    uint16_t optional_size = read_u16(coff + 16);
-    if (section_count == 0 || optional_size < 120u) return fail_install("bad_optional_header");
-
-    /* PE32+ optional header: data directory 1 (imports) at offset 112 + 8. */
-    uint32_t import_rva = read_u32(optional + 120);
-    if (import_rva == 0) return fail_install("no_import_table");
-
     pe_layout layout;
-    layout.base = base;
-    layout.sections = optional + optional_size;
-    layout.section_count = section_count;
-    layout.import_rva = import_rva;
+    if (prepare_layout((const uint8_t *)GetModuleHandleA(NULL), &layout) != 0)
+        return fail_install(g_parse_error);
 
-    struct target {
-        const char *dll;
-        const char *symbol;
-        void *replacement;
-        void **original;
-        const char *label;
-        int state; /* 1 patched, 0 absent, -1 failed */
-    } targets[] = {
-        {"kernel32.dll", "CreateFileA", (void *)(uintptr_t)&intercept_create_file,
-         (void **)&g_original, "CreateFileA", 0},
-        {"crt-stdio", "fopen", (void *)(uintptr_t)&intercept_fopen,
-         (void **)&g_original_fopen, "fopen", 0},
-        {"crt-stdio", "fopen_s", (void *)(uintptr_t)&intercept_fopen_s,
-         (void **)&g_original_fopen_s, "fopen_s", 0},
-    };
-    const size_t target_count = sizeof targets / sizeof targets[0];
-
-    for (size_t index = 0; index < target_count; ++index) {
-        void *slot = NULL;
-        int found = find_import_slot(&layout, targets[index].dll, targets[index].symbol, &slot);
-        if (found <= 0) {
-            targets[index].state = found < 0 ? -1 : 0;
-            continue;
-        }
-        targets[index].state = patch_slot(slot, targets[index].replacement, targets[index].original);
-        if (targets[index].state == 1) ++g_installed;
-    }
+    hook_target *targets = g_targets;
+    const size_t target_count = sizeof g_targets / sizeof g_targets[0];
+    patch_targets(&layout, targets, target_count);
+    unsigned modules = patch_loaded_modules(targets, target_count);
+    for (size_t index = 0; index < target_count; ++index)
+        if (targets[index].patched) ++g_installed;
 
     char detail[sizeof g_detail];
     size_t used = 0;
     for (size_t index = 0; index < target_count; ++index) {
-        const char *state = targets[index].state == 1   ? "patched"
-                            : targets[index].state == 0 ? "absent"
-                                                        : "failed";
-        int written = snprintf(detail + used, sizeof detail - used, "%s%s=%s",
-                               index ? " " : "", targets[index].label, state);
+        int written;
+        if (targets[index].state == 1) {
+            written = snprintf(detail + used, sizeof detail - used, "%s%s=patched(%u)",
+                               index ? " " : "", targets[index].label, targets[index].patched);
+        } else {
+            written = snprintf(detail + used, sizeof detail - used, "%s%s=%s", index ? " " : "",
+                               targets[index].label,
+                               targets[index].state == 0 ? "absent" : "failed");
+        }
         if (written > 0) used += (size_t)written;
         if (used >= sizeof detail) break;
+    }
+    if (used < sizeof detail) {
+        int written = snprintf(detail + used, sizeof detail - used, " modules=%u", modules);
+        if (written > 0) used += (size_t)written;
     }
     snprintf(g_detail, sizeof g_detail, "%s", detail);
 

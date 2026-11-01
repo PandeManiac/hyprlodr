@@ -5,6 +5,7 @@ EXPORTS
 CreateDirectoryA
 CreateFileA
 CreateThread
+CreateToolhelp32Snapshot
 DisableThreadLibraryCalls
 FindClose
 FindFirstFileA
@@ -21,7 +22,11 @@ HeapAlloc
 HeapFree
 HeapReAlloc
 LoadLibraryA
+Module32First
+Module32Next
+MultiByteToWideChar
 ReadFile
+WideCharToMultiByte
 VirtualProtect
 SetUnhandledExceptionFilter
 Sleep

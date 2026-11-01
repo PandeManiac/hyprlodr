@@ -29,13 +29,35 @@
       "file_hook_detail": "CreateFileA=patched fopen=patched fopen_s=patched",
       "file_opens_logged": 0,
       "mods_initialized": 5
+    },
+    {
+      "note": "plus _wfopen, main module only, delay_ms 0, ~25 s",
+      "stage": "mods_loaded",
+      "build_matches": true,
+      "file_hook_detail": "CreateFileA=patched fopen=patched fopen_s=patched _wfopen=patched",
+      "file_opens_logged": 0,
+      "mods_initialized": 5
+    },
+    {
+      "note": "all four targets in every loaded module (Toolhelp walk), delay_ms 0, ~22 s",
+      "stage": "mods_loaded",
+      "build_matches": true,
+      "file_hook_detail": "CreateFileA=patched(8) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) modules=39",
+      "file_opens_logged": 1,
+      "observed_open": {
+        "via": "CreateFileA",
+        "requested": "\\\\.\\pipe\\wine_plugplay",
+        "redirected": false,
+        "ok": true
+      },
+      "mods_initialized": 5
     }
   ],
   "imports_measured": {
     "KERNEL32.dll": ["CreateFileA", "ReadFile"],
     "api-ms-win-crt-stdio-l1-1-0.dll": ["fopen", "fopen_s", "_wfopen"]
   },
-  "conclusion": "The three narrow-path import slots are patched in the running game and the patch is proven live by the stand-in host under Wine, but the real game performs no narrow-path opens during start-up. hyperdemon.exe also imports _wfopen, which takes wide strings and is not hooked, so the asset-loading path is almost certainly the wide CRT entry point. No in-game asset replacement has been achieved yet.",
+  "conclusion": "All four targets (CreateFileA, fopen, fopen_s, _wfopen) are patched in 39 loaded modules of the real game, and the shim is proven live in-process: it captured a CreateFileA open of \\\\.\\pipe\\wine_plugplay. No asset open was observed in 22-35 s of game time, so HYPER DEMON's asset reads do not use any of these import slots. hyperdemon.exe imports only CreateFileA/ReadFile from KERNEL32 and fopen/fopen_s/_wfopen from the UCRT API set, so the remaining candidates are the kernelbase/NtCreateFile path (no import slot to patch) or the Steam API file layer. No in-game asset replacement has been achieved yet.",
   "restored": {
     "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4",
     "note": "tools/hyprl_install.py uninstall restored the shipped library byte-for-byte"

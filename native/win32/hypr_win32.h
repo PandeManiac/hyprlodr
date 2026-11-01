@@ -30,6 +30,11 @@ typedef void *HMODULE;
 typedef void *HINSTANCE;
 typedef char *LPSTR;
 typedef const char *LPCSTR;
+/* 16-bit wide character, as on Windows. Declared here because the target has no
+ * C runtime header to get it from. */
+typedef unsigned short wchar_t;
+typedef unsigned int UINT;
+#define CP_UTF8 65001u
 typedef int (*FARPROC)(void);
 typedef unsigned long long ULONG_PTR;
 typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
@@ -66,6 +71,24 @@ typedef struct {
     DWORD dwLowDateTime;
     DWORD dwHighDateTime;
 } FILETIME;
+
+#define TH32CS_SNAPMODULE 0x00000008u
+#define TH32CS_SNAPMODULE32 0x00000010u
+
+/* MODULEENTRY32A: fixed layout from the Windows SDK; the string buffers are
+ * inline, so the whole structure stays POD. */
+typedef struct {
+    DWORD dwSize;
+    DWORD th32ModuleID;
+    DWORD th32ProcessID;
+    DWORD GlblcntUsage;
+    DWORD ProccntUsage;
+    BYTE *modBaseAddr;
+    DWORD modBaseSize;
+    HMODULE hModule;
+    char szModule[MAX_PATH];
+    char szExePath[MAX_PATH];
+} MODULEENTRY32A;
 
 typedef struct {
     DWORD dwFileAttributes;
@@ -119,11 +142,20 @@ BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, 
 BOOL WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, DWORD *read, void *overlapped);
 BOOL WINAPI CloseHandle(HANDLE handle);
 BOOL WINAPI VirtualProtect(LPVOID address, size_t size, DWORD new_protect, DWORD *old_protect);
+/* Wide/narrow conversion for the _wfopen shim. */
+int WINAPI WideCharToMultiByte(UINT codepage, DWORD flags, const wchar_t *wide, int wide_length,
+                               char *narrow, int narrow_capacity, const char *default_char,
+                               BOOL *used_default);
+int WINAPI MultiByteToWideChar(UINT codepage, DWORD flags, const char *narrow, int narrow_length,
+                               wchar_t *wide, int wide_capacity);
 HANDLE WINAPI GetProcessHeap(void);
 void *WINAPI HeapAlloc(HANDLE heap, DWORD flags, size_t bytes);
 void *WINAPI HeapReAlloc(HANDLE heap, DWORD flags, void *block, size_t bytes);
 BOOL WINAPI HeapFree(HANDLE heap, DWORD flags, void *block);
 HANDLE WINAPI GetStdHandle(DWORD std_handle);
+HANDLE WINAPI CreateToolhelp32Snapshot(DWORD flags, DWORD process_id);
+BOOL WINAPI Module32First(HANDLE snapshot, MODULEENTRY32A *entry);
+BOOL WINAPI Module32Next(HANDLE snapshot, MODULEENTRY32A *entry);
 LPSTR WINAPI GetCommandLineA(void);
 
 #ifdef __cplusplus

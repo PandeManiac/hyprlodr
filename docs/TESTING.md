@@ -86,7 +86,7 @@ The cross-check tests call `hyprlodr-host --describe`, which loads the library a
 
 This proves the Windows loader path, the forwarder table and the attach bootstrap. It does **not** prove HYPER DEMON runs with it.
 
-The attach record also reports the file hook: the stand-in imports only `CreateFileA`, so the run asserts `CreateFileA=patched fopen=absent fopen_s=absent` and that the stand-in's redirected open returned the mod's bytes, with the record written to `hyprlodr-files.jsonl`.
+The attach record also reports the file hook: the stand-in's modules import `CreateFileA` but no CRT file API, so the run asserts `CreateFileA=patched(n)` with a module count, `fopen=absent`, and that the stand-in's redirected open returned the mod's bytes, with the record written to `hyprlodr-files.jsonl`.
 
 ## Asset probe (`asset_probe_suite`)
 
@@ -189,19 +189,21 @@ Note on the 2026-10-31 re-runs: the game process exits a few seconds after start
 
 ## File hook in the real game (2026-11-01)
 
-Three runs with the loader installed in the real installation, `delay_ms: 0`, game terminated after 10–35 s, original library restored each time (`396f8873...420b4`):
+Five runs with the loader installed in the real installation, `delay_ms: 0`, game terminated after 10–35 s, original library restored each time (`396f8873...420b4`):
 
 | Run | Hook | Result |
 |---|---|---|
 | 1 | `CreateFileA` only | `file_hook: "installed"`, `file_opens_logged: 0`, 5/5 mods initialized |
-| 2 | `CreateFileA` + `fopen` + `fopen_s` | `file_hook_detail: "CreateFileA=patched fopen=patched fopen_s=patched"`, `file_opens_logged: 0`, 5/5 mods initialized |
+| 2 | `CreateFileA` + `fopen` + `fopen_s` | `file_hook_detail: "CreateFileA=patched fopen=patched fopen_s=patched"`, `file_opens_logged: 0` |
 | 3 | same, 30 s of game time | `file_opens_logged: 0` |
+| 4 | `+ _wfopen`, main module | `CreateFileA=patched fopen=patched fopen_s=patched _wfopen=patched`, `file_opens_logged: 0` |
+| 5 | all four targets in **every loaded module** | `CreateFileA=patched(8) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) modules=39`, `file_opens_logged: 1` |
 
-The patch reaches the running game — all three import slots are found and rewritten, and the same shim is proven live against the stand-in host — but HYPER DEMON performs **no narrow-path opens** during start-up. Measured imports of `hyperdemon.exe`: `KERNEL32.dll` exposes only `CreateFileA`/`ReadFile` as file APIs, while `api-ms-win-crt-stdio-l1-1-0.dll` exposes `fopen`, `fopen_s` **and `_wfopen`**. The wide entry point is not hooked, which makes it the most likely asset path and the next concrete step. No in-game asset replacement has been achieved. Evidence: `docs/evidence/2026-11-01-file-hook.json`.
+Run 5 proves the shim is live inside the game process: it captured a real `CreateFileA` open of `\\.\pipe\wine_plugplay` from a patched module (the file log records `via`, `redirected` and `ok`). No asset open appeared in 22–35 s of game time, so HYPER DEMON's asset reads do not use any patched import slot. Measured imports of `hyperdemon.exe`: `KERNEL32.dll` exposes only `CreateFileA`/`ReadFile` as file APIs, while `api-ms-win-crt-stdio-l1-1-0.dll` exposes `fopen`, `fopen_s` and `_wfopen`. With all of them patched across 39 modules, the remaining candidates are the kernelbase/`NtCreateFile` path (no import slot to patch) or the Steam API file layer. No in-game asset replacement has been achieved. Evidence: `docs/evidence/2026-11-01-file-hook.json`.
 
 ## Still unverified
 
-- **The game's asset path**: no narrow-path open was observed in-game; asset loading is believed to go through `_wfopen`, which is not intercepted.
+- **The game's asset path**: no asset open was observed in-game even with `CreateFileA`, `fopen`, `fopen_s` and `_wfopen` patched in 39 modules; the reads go through something without an import slot (kernelbase/`NtCreateFile`) or the Steam API file layer.
 - **In-game asset replacement**: file redirection is proven only against the stand-in host.
 - **Audio output quality**: the process proves the `al*`/`alc*` symbols resolve into the real library; nobody has listened to the game with the proxy installed.
 - **Game-level behaviour** beyond start-up: no gameplay, scoring or online feature was exercised.

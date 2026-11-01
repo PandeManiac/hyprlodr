@@ -93,7 +93,9 @@ No CRT dependency means no CRT start-up requirements, no msvcrt version skew, an
 
 A redirected file is only useful if the host controls file opening. The Windows proxy does, by patching **import slots** in the mapped main module: it parses the PE import directory, matches the DLL and function by name, saves the resolved address and points the slot at a shim. No game code is patched and no RVA from static analysis is used, so a game update cannot silently land a hook in the middle of an instruction.
 
-Three targets are attempted, each independently: `CreateFileA` from `KERNEL32.dll`, and `fopen`/`fopen_s` from the UCRT API set (`api-ms-win-crt-stdio-l1-1-0.dll`). The targets come from the executable's measured import table: it imports only `CreateFileA` and `ReadFile` for file APIs from KERNEL32, plus `fopen`, `fopen_s` and `_wfopen` from the CRT — which is why the game's asset I/O never appeared in the `CreateFileA` slot.
+Four targets are attempted, each independently: `CreateFileA` from `KERNEL32.dll`, and `fopen`/`fopen_s`/`_wfopen` from the UCRT API set (`api-ms-win-crt-stdio-l1-1-0.dll`). The targets come from the executable's measured import table: it imports only `CreateFileA` and `ReadFile` for file APIs from KERNEL32, plus `fopen`, `fopen_s` and `_wfopen` from the CRT — which is why the game's asset I/O never appeared in the `CreateFileA` slot.
+
+Patching the main module alone proved insufficient: a run that patched all four targets there still logged no opens, because a module's import table belongs to that module. The installer therefore walks the loaded-module list (`CreateToolhelp32Snapshot`), parses each image's import directory and patches the same slots in every one, skipping the proxy's own module so its start-up I/O is never redirected or reported as game activity. The real game reports `CreateFileA=patched(8) fopen=patched(2) fopen_s=patched(2) _wfopen=patched(2) modules=39`. `_wfopen` converts its UTF-16 path to UTF-8 for registry matching and converts a replacement back to UTF-16 before calling the original; a path that does not convert is passed through unchanged.
 
 Safety properties:
 
@@ -104,7 +106,7 @@ Safety properties:
 - open records are appended with a fixed `FILE_APPEND_DATA` handle and an atomic sequence number, so concurrent game threads cannot corrupt the file or reuse a sequence;
 - the redirect table is published with a release store and read with an acquire load, so a game thread that sees `redirects_published` sees a complete table, and unpublished registrations are invisible.
 
-`_wfopen` is deliberately not hooked: it takes wide strings and the registry is narrow. It is the most likely remaining asset path (see `docs/TESTING.md`).
+What this still does not reach: an open that never passes through an import table. The game logged one real open (a Wine plug-and-play pipe) and zero asset opens with 39 modules patched, which points at the kernelbase/`NtCreateFile` path or the Steam API file layer rather than a missing module. See `docs/TESTING.md`.
 
 ## Why OpenAL32 rather than a code hook
 
