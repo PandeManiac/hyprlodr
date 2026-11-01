@@ -577,10 +577,27 @@ load time. Writing a serial number into `<game>/hyprlodr-dump-request` now makes
 frame dump itself; the marker is only read, never deleted, because the project's minimal Windows
 headers declare neither `DeleteFileA` nor `FILE_SHARE_DELETE`.
 
-**Measured negative:** input injection does not reach the game under this harness. With the window
-located in the X tree (`hyperdemon`, 1920x1080) and given X input focus, a real XTest click at the
-centre of `OPTIONS` (371,532) and a subsequent `Escape` both left the title screen unchanged across
-three capture points (frames 483, 553, 621). Xvfb `:99` runs without a window manager, so the game
-never acquires focus through the normal path. The menu round-trip is therefore **unverified**; what
-is verified is that the mask persists over at least 140 consecutive frames while its iridescent fill
-keeps animating.
+**Measured negative, revised:** input injection does not reach the game under this harness, and the
+first explanation for that was wrong. I had blamed the absence of a window manager, so I re-ran the
+test with `openbox` on `:99`. `wmctrl -l` then listed the client as `0x04600003  hyperdemon` (class
+`steam_app_1743850`) and `xdotool getwindowfocus getwindowname` answered `hyperdemon`, i.e. the game
+**does** hold X input focus. Input still had no effect: a real XTest click at the centre of `OPTIONS`
+(371,532), 24 incremental `mousemove_relative` steps to serve a client that uses a grabbed relative
+cursor, `Return`, `Tab`, `Right` and `Escape` all left the title screen byte-for-byte in the menu area
+across five capture points (frames 483, 553, 621, 505, 591, 670). The focus hypothesis is therefore
+falsified and retracted: it is the game that discards injected keyboard and pointer events, which is
+what a client reading XI2 raw input from a physical device would do, since XTEST events arrive on the
+virtual device. The menu round-trip stays **unverified**.
+
+Note what did work: the same window **is** responsive to window-manager requests. `wmctrl -b
+remove,fullscreen` followed by a resize to 1280x720 re-laid out the title at the new size, and
+restoring 1920x1080 re-laid it out again - all three states still showing the replacement. So the
+engine services `ConfigureNotify` while ignoring synthetic input, which also rules out "the process is
+wedged and not reading its event queue" as the explanation.
+
+**Resize survival, a positive result.** The 1280x720 capture (frame 749) and the restored 1920x1080
+capture (frame 830) both show `HYPR` over `LODR` at the new layout, and the log contains a single
+`title_mask_found`/`title_mask_loaded` pair and **no** `title_mask_stale` event. That means the texture
+the mask was resolved against survived the resize, and the per-frame re-upload kept the replacement in
+place across an engine-side layout change - the closest thing to a rebuild test available without
+input.

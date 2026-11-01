@@ -1,5 +1,29 @@
 # Session progress
 
+## 2026-11-01 (second pass: input falsified, resize survival confirmed)
+
+**The focus hypothesis was wrong, and I retracted it.** I had written that Xvfb's lack of a window
+manager meant the game never acquired focus. Re-running with `openbox` on `:99` showed `wmctrl -l`
+listing `0x04600003  hyperdemon` and `xdotool getwindowfocus getwindowname` answering `hyperdemon`:
+the game does hold X input focus. A real XTest click on OPTIONS, 24 incremental `mousemove_relative`
+steps, and `Return`/`Tab`/`Right`/`Escape` all still left the title unchanged across frames 483, 553,
+621, 505, 591 and 670. It is the game discarding injected events (as an XI2 raw-input client reading a
+physical device would, since XTEST arrives on the virtual device), not the harness failing to focus it.
+
+**The same window does obey the window manager.** Removing fullscreen and resizing to 1280x720 made
+the engine re-lay out the title at the new size; restoring 1920x1080 re-laid it out again. So
+`ConfigureNotify` is serviced while synthetic input is ignored, which rules out "the event queue is
+not being read".
+
+**Positive result: the replacement survives an engine-side relayout.** At both 1280x720 (frame 749)
+and the restored 1920x1080 (frame 830) the title reads `HYPR` over `LODR`, and the log holds one
+`title_mask_found`/`title_mask_loaded` pair with no `title_mask_stale`. The mask texture therefore
+survived the resize and the per-frame re-upload held across it.
+
+**Still blocked:** a true menu round-trip (title -> options -> title) needs input that this harness
+cannot deliver.
+
+
 ## 2026-11-01 (exact geometry, on-demand capture, and a clean typeface verdict)
 
 **The mask's geometry is now known exactly and matched.** Upper word rows 12..220 (cap 209), lower
