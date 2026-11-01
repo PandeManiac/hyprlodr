@@ -148,3 +148,51 @@ as "Can't find asset <name>". **Inferred:** replacing the title means making the
 `entity_lobby_dagger_hyper*` (kind 4) yield replacement content — either by redirecting the
 asset the record points at (the `_Fiopen` redirect already proven in the loader) or by
 swapping the record in memory; nothing about the lookup itself needs to change.
+
+## The asset record, decompiled (Ghidra, 2026-11-01)
+
+`FUN_140212040(dst, src)` is a pure field-by-field copy of a **0x58-byte record**, so the
+layout is now known:
+
+| Offset | Width | Notes |
+|---|---|---|
+| `0x00` | u32 | copied verbatim |
+| `0x04` | u32 | copied verbatim |
+| `0x08` | u8 | copied verbatim |
+| `0x10` | u64 | copied verbatim |
+| `0x18` | u64 | copied verbatim |
+| `0x20` | `std::string` | buffer/size/capacity at `+0x20`/`+0x30`/`+0x38`, copied with `FUN_140002fd0` |
+| `0x40` | u32 | **type/kind tag** |
+| `0x48` | u64 | copied verbatim |
+| `0x50` | u64 | copied verbatim |
+
+`FUN_140213950(table, name)` is the same sorted-map slot lookup as `FUN_14000c4d0`
+(SSO-aware `memcmp`, insert-on-miss), returning the writable slot for a key — which is how
+the loaded record is written back after being materialised.
+
+`FUN_140212920(ctx, record, name, flags)` is the loader, and it dispatches on `record[0x10]`
+(i.e. the type tag at `0x40`). Observed cases:
+
+- **type 1** — lazily allocates a 0x38-byte object: initialises three pointers to zero, calls
+  `FUN_140206820()` for one field, then allocates a 0x50-byte sub-object initialised with
+  `+0x08 = 0x20` and zeroed fields; the pointer is cached at `record+0x90`. If it is already
+  present, the function tests a bitmask at `*(u32*)(cached->next + 0x4c) & flags` and returns
+  early when the bit is set — i.e. load-once-per-flag semantics.
+- **type 2** — takes the pointer at `record+0x90` (null-checked) and allocates a 0x40-byte
+  object, filling further fields.
+
+**Confirmed:** the record carries a type tag plus a `std::string` (at `+0x20`) and two trailing
+pointers (`+0x18`, `+0x48`, `+0x50`), and the loader builds a different object graph per type.
+**Inferred:** the string is the asset's own name/path inside the container, and the type tag
+distinguishes texture-like from mesh-like content — which is exactly the fork the title
+replacement needs. Proven by the container still being undecoded: the string cannot be read
+statically beyond its presence.
+
+## Where this leaves the title (state of knowledge)
+
+- The title is content behind `entity_lobby_dagger_hyper*` (kind 4), resolved as
+  `(kind, name)` → 0x58-byte record → loader by type tag.
+- It is **not** a text string: `HYPER`/`DEMON` do not exist in the binary, while the menu
+  labels do.
+- Nothing yet says whether the visible letters are a texture, an atlas or meshes; that needs
+  the running game, which needs a Steam session.

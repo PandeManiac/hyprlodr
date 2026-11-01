@@ -86,6 +86,29 @@
         "FUN_14000e630 (value vector)",
         "FUN_14000e4a0 (key vector)"
       ]
+    },
+    "FUN_140212040": {
+      "semantics": "0x58-byte record copy",
+      "layout": {
+        "0x00": "u32",
+        "0x04": "u32",
+        "0x08": "u8",
+        "0x10": "u64",
+        "0x18": "u64",
+        "0x20": "std::string (buffer/size/capacity at +0x20/+0x30/+0x38)",
+        "0x40": "u32 type tag",
+        "0x48": "u64",
+        "0x50": "u64"
+      }
+    },
+    "FUN_140213950": {
+      "semantics": "sorted-map slot lookup with insert-on-miss, same family as FUN_14000c4d0"
+    },
+    "FUN_140212920": {
+      "semantics": "record loader dispatching on record[0x10] (type tag at 0x40)",
+      "type_1": "lazy 0x38-byte object + 0x50-byte sub-object (+0x08 = 0x20), cached at record+0x90, bitmask check (obj+8)+0x4c & flags",
+      "type_2": "uses cached pointer at +0x90, allocates 0x40-byte object",
+      "status": "cases 1 and 2 observed; remaining cases not yet read"
     }
   }
 }
