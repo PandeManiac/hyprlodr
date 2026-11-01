@@ -10,7 +10,23 @@
       "game_config (removed, never regenerated)",
       "hyprlodr_leftovers (moved to /tmp/hd-leftovers)",
       "prefix_registry (system.reg 4698021 B, user.reg 315829 B)"
-    ]
+    ],
+    "root_cause": {
+      "conclusion": "Steam client is logged off, so SteamAPI_Init fails and the game exits deliberately",
+      "evidence": [
+        "console_log.txt: LogonFailure No Connection",
+        "console_log.txt: LogonFailure Service Unavailable",
+        "console_log.txt: Logged On ... LogOff()",
+        "no new minidump on later launches",
+        "per-user config never recreated",
+        "vanilla launch (loader uninstalled) reproduced"
+      ],
+      "action_required": "sign in to Steam",
+      "supersedes": [
+        "prefix registry hypothesis",
+        "steam client restart hypothesis"
+      ]
+    }
   },
   "minidump": {
     "file": "crash_steamuser.dmp",

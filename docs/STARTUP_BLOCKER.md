@@ -55,6 +55,27 @@ A copy of the current `config`/`user` is already kept in `/tmp/hd-backup`, and t
 moved `hyprlodr-*` files are in `/tmp/hd-leftovers`; `/tmp` is not durable, so rely
 on the backup above only for this session.
 
+## 1b. ROOT CAUSE FOUND: Steam is not signed in
+
+Steam's own console log ends in logon failures, not a game fault:
+
+```text
+LogonFailure Service Unavailable
+LogonFailure No Connection
+LogonFailure Service Unavailable
+Logged On, 4, 7] [U:1:193590130] LogOff()
+```
+
+With the client logged off, `SteamAPI_Init` fails in `steam_api64.dll` and the game
+exits deliberately: no window, **no new crash dump**, and the per-user `config` is
+never recreated (both confirmed). That also explains why the 04:53 minidump is the
+*last* one — that crash predates the logoff.
+
+So the blocker is an account/login state, not the game, the prefix, HYPRLODR, or the
+GPU. The fix is to sign in to Steam (Steam → Sign in), after which the game should
+launch exactly as before; the earlier prefix-rebuild advice in this document is
+superseded and should not be needed.
+
 ## 2. What the binary says about the title (static, verified)
 
 **Observed** (`strings` on `hyperdemon.exe`, sha256 `7612dd72…3611`):

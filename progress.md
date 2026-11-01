@@ -1,5 +1,9 @@
 # Session progress
 
+## 2026-11-01 (root cause: Steam logged off, not the game)
+
+**The launch blocker is an account state, not the game.** Steam's console log ends in `LogonFailure Service Unavailable` / `LogonFailure No Connection` followed by `LogOff()`, so `SteamAPI_Init` fails and HYPER DEMON exits deliberately within ~2 s: no window, no new crash dump, and the per-user `config` is never recreated — all three confirmed, with the loader uninstalled. The earlier prefix-rebuild advice is superseded; signing in to Steam is the fix. Static title work continued in parallel: the only `.vert` name in the binary is `skull_giga.vert`, and the lobby entity names resolve to two code sites (RVA `0x1208a2`, `0x1208e5`).
+
 ## 2026-11-01 (title evidence from the binary; startup blocker)
 
 **The menu's labels are literals in the executable, but the title is not.** `strings` on `hyperdemon.exe` gives `PLAY`, `OPTIONS`, `TRAINING`, `CLIPS`, `LEADERBOARDS`, `EXIT`, while neither `HYPER` nor `DEMON` appears in ASCII or UTF-16. The binary also carries asset names `entity_lobby_dagger_hyper`/`…hyper2`, exactly one shader name (`skull_giga.vert`, twice), and font-dictionary vocabulary (`glyph-dict`, `FontName`, `FontMatrix`) without naming FreeType, HarfBuzz or stb_truetype. The working hypothesis is therefore that menu text is glyph-rendered while the enormous title is asset-driven — a wordmark texture or the `entity_lobby_*` meshes — which is exactly the distinction the texture census would settle.
