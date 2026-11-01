@@ -45,5 +45,29 @@
     "iridescent material shader",
     "title draw calls and render targets"
   ],
-  "not_verified_in_game": "Steam client logged off; the game exits before rendering"
+  "not_verified_in_game": "Steam client logged off; the game exits before rendering",
+  "decompiled_2026_11_01": {
+    "FUN_140004ac0": {
+      "semantics": "name -> callback registry",
+      "details": [
+        "lazy global at DAT_1403d91e0 (0x40 bytes)",
+        "key built from argument 2 via FUN_140002fd0",
+        "value slot from FUN_14000c4d0(registry, key)",
+        "callback (argument 3) stored in the slot",
+        "temporary string freed only when capacity > 0xf"
+      ],
+      "consequence": "the ('shaders', 0x14036acb0, 0x1403da550) site registers a named facility, not a directory"
+    },
+    "FUN_140211bc0": {
+      "semantics": "typed registration wrapper",
+      "body": "FUN_140211e70(arg1, 4, arg2)",
+      "kind_tag": 4,
+      "caller_observation": "result stored into 0x70-stride array slots 0x68d8/0x6948/0x69b8; caller consumes RAX though Ghidra typed the wrapper void"
+    },
+    "tooling": {
+      "headless": "/opt/ghidra/support/analyzeHeadless",
+      "args": "-analysisTimeoutPerFile 300 -scriptPath tools/re/ghidra -postScript DumpAt.java",
+      "note": "project directory must pre-exist; ~2 min analysis"
+    }
+  }
 }

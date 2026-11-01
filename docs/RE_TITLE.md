@@ -32,7 +32,7 @@ entries built once at start-up.
 name*, not by a string of the words shown. This is consistent with `HYPER`/`DEMON` existing
 nowhere in the binary while the menu labels (`PLAY`, `OPTIONS`, …) do.
 
-## Confirmed: shaders come from a named directory through the asset loader
+## Confirmed: `shaders` is a *registered name with a callback*, not a directory lookup
 
 The `shaders` anchor (`0x1403652f8`) is referenced twice, in functions at `0x1400019b0` and
 `0x140071990`:
@@ -81,3 +81,42 @@ byte slices at mapped file offsets, which is reproducible and needs no project:
 objdump -D -b binary -m i386:x86-64 --adjust-vma=<vma> slice.bin   # works
 llvm-objdump -d --start-address=<vma> ...                         # empty for this PE
 ```
+
+## Correction and decompilation (Ghidra, 2026-11-01)
+
+Decompiling the two helpers resolves the ambiguity in the section above. (Decompiled
+code is game content: it is read locally and only its structure is recorded here.)
+
+**`FUN_140004ac0(name, extra, callback)` is a name→callback registry.** Observed
+behaviour: it lazily allocates a 0x40-byte global at `DAT_1403d91e0`, builds a
+`std::string` from the second argument, calls `FUN_14000c4d0(registry, &string)` to get
+a value slot, writes the third argument (the callback) into it, then destroys the
+temporary string (SSO-aware, `free` only when `0xf < size`).
+
+So the earlier reading of `("shaders", 0x14036acb0, 0x1403da550)` as "shader directory"
+is **superseded**: it registers the name `shaders` against the callback at
+`0x1403da550`, in a global string-keyed table. It is a named facility registry
+(script/command/module style), not a path fetch.
+
+**`FUN_140211bc0(context, name)` is a typed registration wrapper.** Its whole body is
+`FUN_140211e70(context, 4, name)` — the `4` is a kind/type tag. Its caller stores the
+result into a 0x70-stride array slot (`0x68d8`, `0x6948`, `0x69b8`), and Ghidra typed the
+wrapper `void` although the caller consumes `RAX`, so the helper returns the resolved
+object; that part is recorded as caller-derived, not from the decompiled signature.
+
+**Implication for the replacement:** lobby entries are produced by a typed resolver
+(kind 4) into a fixed array at start-up, and facilities are looked up through a named
+registry. Replacing the title therefore means changing what the `entity_lobby_dagger_*`
+entries *contain* — a texture, a mesh, or a glyph set — not renaming anything.
+
+## Reproducing the decompilation
+
+```bash
+mkdir -p /tmp/gp
+/opt/ghidra/support/analyzeHeadless /tmp/gp hd -import <game>/hyperdemon.exe \
+  -analysisTimeoutPerFile 300 -scriptPath tools/re/ghidra \
+  -postScript DumpAt.java 0x140211bc0 0x140004ac0
+```
+
+The project directory must exist before launch (otherwise Ghidra aborts with
+`Directory not found`), and analysis took ~2 minutes for this 4 MB PE.
