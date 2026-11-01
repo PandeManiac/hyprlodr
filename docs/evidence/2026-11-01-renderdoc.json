@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-01",
+  "tool": {
+    "name": "renderdoc",
+    "version": "1.46-1",
+    "renderdoccmd": "v1.46",
+    "apis": [
+      "Vulkan",
+      "GL",
+      "GLES"
+    ],
+    "apitrace_installed": false
+  },
+  "attempts": [
+    {
+      "method": "LD_PRELOAD librenderdoc.so + proton run",
+      "result": "failed",
+      "evidence": "Xalia: System.ApplicationException: No displays available; hyperdemon.exe never started"
+    },
+    {
+      "method": "renderdoccmd inject --pid <steam-launched pid>",
+      "result": "failed",
+      "evidence": "usage text printed, no .rdc written, /tmp/rdinj contains only RenderDoc/"
+    }
+  ],
+  "blocker": {
+    "renderdoc_gl_requirement": "core profile 3.2+",
+    "game_context": "4.6 (Compatibility Profile) Mesa 26.2.5"
+  },
+  "environment_after": {
+    "vanilla_launch": "process exits before 3 s, no window",
+    "loader_installed": false,
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4",
+    "hyperdemon_sha256_prefix": "7612dd72076002b7c0cb",
+    "asset_bytes": 306794369,
+    "steamuser_log": "_crash_",
+    "crash_dump": "crash_steamuser.dmp (65,327 bytes at 04:49)",
+    "note": "reproduces without any HYPRLODR file loaded; environment, not mod code"
+  },
+  "verification": {
+    "in_game_capture_this_session": false,
+    "reason": "game does not start"
+  }
+}
