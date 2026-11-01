@@ -1,6 +1,7 @@
 #ifndef HYPRLODR_LOADER_H
 #define HYPRLODR_LOADER_H
 
+#include "hyprlodr/anchors.h"
 #include "hyprlodr/plugin.h"
 
 typedef struct hyprlodr_loader hyprlodr_loader;
@@ -46,6 +47,16 @@ typedef struct {
 } hyprlodr_image;
 
 int hyprlodr_loader_set_image(hyprlodr_loader *loader, const hyprlodr_image *image);
+
+/* Named game locations published to mods (ABI 7). Each entry carries the FNV-1a
+ * 64 hash of the bytes expected at that RVA; symbol_lookup() re-verifies the hash
+ * against the live image, so an entry can never resolve to a patched build. The
+ * table is copied, so the caller's storage need not outlive this call. */
+#define HYPRLODR_MAX_SYMBOLS 128
+#define HYPRLODR_SYMBOL_NAME_MAX 64
+
+int hyprlodr_loader_set_symbols(hyprlodr_loader *loader, const hyprlodr_anchor *symbols,
+                                size_t count);
 
 /* Root for per-mod persistent directories. Each initialized mod gets
  * <root>/<mod-id>, created before its initialize() runs and exposed through

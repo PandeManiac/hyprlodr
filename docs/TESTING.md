@@ -20,7 +20,7 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
-## Loader scenarios (native, 38/38 passing)
+## Loader scenarios (native, 41/41 passing)
 
 | Scenario | Asserts |
 |---|---|
@@ -62,6 +62,9 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 | `image_write_refused_without_image` | No image means no patch: the mod logs a refusal, no `image_write` event exists, and the run succeeds |
 | `image_write_refuses_out_of_range` | A write past the end is refused and leaves the image unchanged |
 | `image_write_rolled_back_with_failing_mod` | A mod that patches and then fails has its patch undone before the loader returns |
+| `symbol_lookup_resolves_verified_bytes` | A published name resolves to its RVA and length (`probe` → `0x10`, 8 bytes) |
+| `symbol_lookup_refuses_unknown_name` | A name the host does not publish is refused, and the mod keeps running |
+| `symbol_lookup_refuses_tampered_bytes` | The name exists and the range is valid, but altered bytes make the lookup fail |
 
 The strict warning set (`-Wall -Wextra -Wpedantic -Werror -Wshadow -Wconversion`) applies to the loader, host, samples and fixtures.
 

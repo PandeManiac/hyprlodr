@@ -136,6 +136,11 @@ hyprlodr_fixture(image_writer FIX_ID="i.writer" FIX_IMAGE_WRITE=16)
 hyprlodr_fixture(image_writer_far FIX_ID="i.wfar" FIX_IMAGE_WRITE=4096)
 hyprlodr_fixture(image_writer_fail FIX_ID="i.wfail" FIX_IMAGE_WRITE=16 FIX_FAIL=1)
 
+# ABI 7 named locations: resolvable, unknown, and resolvable-but-tampered.
+hyprlodr_fixture(symbol_probe FIX_ID="s.probe" FIX_SYMBOL="probe")
+hyprlodr_fixture(symbol_missing FIX_ID="s.missing" FIX_SYMBOL="missing")
+hyprlodr_fixture(symbol_stale FIX_ID="s.stale" FIX_SYMBOL="probe")
+
 if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 

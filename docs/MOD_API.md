@@ -108,6 +108,26 @@ This is still trusted native code — a wrong byte can corrupt or crash the game
 
 Verified in the real game on 2026-11-01: the `i.writer` probe patched one byte at RVA `0x36f640`, read it back (`patch visible through a second read`), restored it (`restored 1 byte(s)`) and confirmed the original hash. Evidence: `docs/evidence/2026-11-01-abi6-write.json`.
 
+## Named game locations (ABI 7)
+
+Hardcoded RVAs are the main reason a mod breaks on a game update, so the host publishes what its reverse-engineering pipeline recorded, by name:
+
+```c
+uint64_t rva = 0; size_t length = 0;
+if (host->symbol_lookup(host->context, "string:resource_path", &rva, &length) == 0) {
+    /* rva is verified: the bytes there still hash to the recorded value */
+}
+```
+
+- `symbol_count()` / `symbol_name(context, index)` enumerate what this build publishes — useful for a mod that reports or records what it recognised.
+- `symbol_lookup` returns 0 only when the name is known **and** the live bytes at its RVA still match the FNV-1a 64 recorded for them. Anything else is a refusal: `-1` unknown name, `-2` no verified image, `-3` out-of-range or hash mismatch. A name never resolves to data from a different executable.
+- The table is generated from the same PE analysis as the build fingerprint (`tools/re/analyze_pe.py` → `native/win32/game_anchors.h`), so a name and a byte-hash are reviewed together.
+- Hosts that publish nothing (the synthetic Linux host unless `--symbol` is given) simply return 0 from `symbol_count()`; lookups then fail with `-1`, which a mod should treat as "feature unavailable".
+
+Published for the analysed build: `string:resource_path`, `string:missing_resource_message`, `string:shader_directory`, `string:shader_name`, `xref:shader_directory` (two entries), `xref:resource_path`, `xref:missing_resource_message`.
+
+Verified in the real game on 2026-11-01: `symbol string:resource_path at rva 36f640 (12 bytes)` followed by a successful hash check, with 8/8 anchors. Evidence: `docs/evidence/2026-11-01-abi7-symbols.json`.
+
 ## Rules
 
 - **One export.** `hyprlodr_plugin_query` must return a pointer to storage that lives for the whole process (usually `static`). All descriptor strings are owned by the mod and must also remain valid.
@@ -156,6 +176,9 @@ All calls take `host->context`. Every function may return failure; treat failure
 | `image_read(context, offset, dst, length)` | Copy bytes from the image; refused when the build is unverified or the range is outside it (ABI 5). |
 | `image_write(context, offset, src, length)` | Overwrite verified bytes; journaled, budgeted, restored at shutdown (ABI 6). |
 | `image_restore(context)` | Undo every patch this process applied; returns the bytes put back (ABI 6). |
+| `symbol_count(context)` | Number of named, hash-verified locations this build publishes (ABI 7). |
+| `symbol_name(context, index)` | Name at that index, or `NULL` (ABI 7). |
+| `symbol_lookup(context, name, &rva, &length)` | Resolve a name to a verified RVA; refused on unknown names and hash mismatches (ABI 7). |
 
 State set during `initialize` is journaled: if initialization fails, every change is undone automatically, including state the failed mod *deleted* — a removed entry is re-inserted with its previous value and owner (scenario `state_remove_rolled_back_on_failure`). State written during `shutdown` is not journaled.
 
@@ -220,15 +243,15 @@ if (host->image_read(host->context, RVA, bytes, sizeof bytes) != 0) return 0;
 if (fnv1a64(bytes, sizeof bytes) != EXPECTED_FNV) { /* log and stop */ }
 ```
 
-It reads the loader's own `resource_path` anchor (RVA `0x36f640`, 12 bytes), recomputes its FNV-1a 64 hash and compares it with the constant recorded during reverse engineering. On the analysed build it logs `resource path anchor verified at rva 36f640` and publishes the `example.game-info` capability; on anything else it logs a mismatch or a refusal and reads nothing further. It logs a **hash, never the bytes**, so evidence stays free of game content.
+It asks the host for `string:resource_path` by name (ABI 7) — carrying no RVA of its own — then recomputes the bytes' FNV-1a 64 hash and compares it with the constant recorded during reverse engineering, so both the loader and the mod must agree before anything is used. On the analysed build it logs `resource path anchor verified at rva 36f640` and publishes the `example.game-info` capability; on anything else it logs a mismatch or a refusal and reads nothing further. It logs a **hash, never the bytes**, so evidence stays free of game content.
 
-Verified in the real game on 2026-11-01: `image 4214784 bytes verified` followed by `resource path anchor verified at rva 36f640`, 7/7 mods initialized, 8/8 anchors. Evidence: `docs/evidence/2026-11-01-example-game-info.json`.
+Verified in the real game on 2026-11-01: `image 4214784 bytes verified`, `symbol string:resource_path at rva 36f640 (12 bytes)`, then `resource path anchor verified at rva 36f640` — 8/8 anchors, 6/6 mods initialized. Evidence: `docs/evidence/2026-11-01-example-game-info.json`.
 
 Two loader scenarios run the same Linux build against synthetic images: a 64-byte image (read refused, run still succeeds) and a 3.4 MB image of `A` bytes (read succeeds, hash comparison rejects it).
 
 ## Compatibility
 
-ABI 6 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
+ABI 7 is the current interface. There is no sandbox: a mod is trusted native code with the full privileges of the game process. See `docs/SECURITY.md` before distributing anything.
 
 ## Worked example: `example.uptime`
 

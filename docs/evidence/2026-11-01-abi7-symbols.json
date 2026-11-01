@@ -1,0 +1,41 @@
+{
+  "kind": "ABI 7 named game locations in the real game",
+  "captured": "2026-11-01",
+  "mod": {
+    "id": "example.game-info",
+    "note": "carries no RVA: asks for string:resource_path by name, then verifies the bytes itself"
+  },
+  "game": {
+    "build_matches": true,
+    "anchors_matched": 8,
+    "anchors_total": 8,
+    "mods_initialized": 6,
+    "symbols_published": 8
+  },
+  "observed_events": [
+    {
+      "seq": 18,
+      "event": "log",
+      "mod": "example.game-info",
+      "message": "info: image 4214784 bytes verified"
+    },
+    {
+      "seq": 19,
+      "event": "log",
+      "mod": "example.game-info",
+      "message": "info: symbol string:resource_path at rva 36f640 (12 bytes)"
+    },
+    {
+      "seq": 20,
+      "event": "log",
+      "mod": "example.game-info",
+      "message": "info: resource path anchor verified at rva 36f640"
+    }
+  ],
+  "meaning": "The host published the locations its PE pipeline recorded; the loader re-hashed the live bytes on lookup; the mod independently hashed them again and they agreed. No build-specific number exists in the mod.",
+  "limits": "Lookups are refused without a verified image, for unknown names, and for hash mismatches (-1/-2/-3). A stale or patched build therefore yields no address rather than a wrong one.",
+  "content_policy": "Only names, RVAs and hashes are recorded; no game bytes are logged or committed.",
+  "restored": {
+    "openal32_sha256": "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
+  }
+}

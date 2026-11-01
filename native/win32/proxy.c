@@ -359,6 +359,11 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
                           g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
     hyprlodr_loader_set_image(g_loader, &image);
 
+    /* ABI 7: publish the named, hash-verified locations the RE pipeline recorded
+     * for this build, so mods ask for a name instead of carrying an RVA. Each
+     * lookup re-hashes the live bytes. */
+    hyprlodr_loader_set_symbols(g_loader, hyprlodr_game_anchors, HYPRLODR_GAME_ANCHOR_COUNT);
+
     /* Intercept the game's own CreateFileA calls before the delay, so opens the
      * game performs while mods are still starting are observed too. Nothing is
      * patched unless the import table really contains that entry. */

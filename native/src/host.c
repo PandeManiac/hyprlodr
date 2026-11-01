@@ -40,6 +40,8 @@ static void usage(const char *argv0) {
             "                       (repeatable, up to 8; ABI 4 file redirection)\n"
             "  --image-file PATH    offer PATH as the game image to mods (ABI 5)\n"
             "  --image-out PATH     write the image back after mods shut down (ABI 6)\n"
+            "  --symbol NAME@RVA:LEN publish a named, hash-verified location (ABI 7)\n"
+            "  --symbol-stale ...   same, but the bytes are altered so lookup must fail\n"
             "  -h, --help           show this help\n",
             argv0);
 }
@@ -178,6 +180,66 @@ static int image_write_bytes(void *context, void *destination, const void *sourc
     return 0;
 }
 
+#define HYPRLODR_MAX_TEST_SYMBOLS 16
+
+typedef struct {
+    char name[HYPRLODR_SYMBOL_NAME_MAX];
+    unsigned long rva;
+    unsigned long length;
+    int stale;
+} test_symbol_spec;
+
+static test_symbol_spec test_symbol_specs[HYPRLODR_MAX_TEST_SYMBOLS];
+static size_t test_symbol_count;
+static hyprlodr_anchor test_symbol_table[HYPRLODR_MAX_TEST_SYMBOLS];
+
+/* Parse NAME@RVA:LEN without strtoull, which the minimal CRT does not have. */
+static int parse_symbol_spec(const char *text, test_symbol_spec *out, int stale) {
+    size_t used = 0;
+    while (text[used] && text[used] != '@') {
+        if (used + 1u >= sizeof out->name) return -1;
+        out->name[used] = text[used];
+        ++used;
+    }
+    if (!used || text[used] != '@') return -1;
+    out->name[used] = '\0';
+
+    const char *cursor = text + used + 1u;
+    char *end = NULL;
+    out->rva = strtoul(cursor, &end, 0);
+    if (!end || *end != ':') return -1;
+    out->length = strtoul(end + 1, NULL, 0);
+    if (!out->length) return -1;
+    out->stale = stale;
+    return 0;
+}
+
+/* Hash the bytes the fixture image really contains, so the symbol table describes
+ * the image under test instead of a hardcoded truth. A stale entry is hashed
+ * first and then altered, which is exactly the "patched build" case. */
+static int build_symbol_table(void) {
+    if (test_symbol_count == 0) return 0;
+    if (!image_bytes || image_size == 0) return -1;
+    for (size_t index = 0; index < test_symbol_count; ++index) {
+        const test_symbol_spec *spec = &test_symbol_specs[index];
+        test_symbol_table[index].name = spec->name;
+        test_symbol_table[index].rva = (uint32_t)spec->rva;
+        test_symbol_table[index].length = (uint32_t)spec->length;
+        /* An entry outside this image is kept, with a hash no lookup can match:
+         * that is exactly what a table for a different build looks like, and the
+         * loader must refuse it rather than abort the run. */
+        if (spec->rva > (unsigned long)image_size ||
+            spec->length > (unsigned long)image_size - spec->rva) {
+            test_symbol_table[index].fnv1a64 = 0;
+            continue;
+        }
+        test_symbol_table[index].fnv1a64 =
+            hyprlodr_fnv1a64(image_bytes + spec->rva, (size_t)spec->length);
+        if (spec->stale) image_bytes[spec->rva] ^= 0x01u;
+    }
+    return 0;
+}
+
 /* Dump the image after the loader has restored every patch, so a test can
  * compare the result with the bytes it supplied. Like --image-file this needs
  * stdio seeking/writing the minimal CRT does not have, so it is Linux-only. */
@@ -228,6 +290,19 @@ int main(int argc, char **argv) {
         else if (!strcmp(arg, "--state-root") && i + 1 < argc) state_root = argv[++i];
         else if (!strcmp(arg, "--image-file") && i + 1 < argc) image_file = argv[++i];
         else if (!strcmp(arg, "--image-out") && i + 1 < argc) image_out = argv[++i];
+        else if ((!strcmp(arg, "--symbol") || !strcmp(arg, "--symbol-stale")) && i + 1 < argc) {
+            int stale = !strcmp(arg, "--symbol-stale");
+            const char *spec = argv[++i];
+            if (test_symbol_count == HYPRLODR_MAX_TEST_SYMBOLS) {
+                fprintf(stderr, "hyprlodr-host: too many symbols\n");
+                ok = 0;
+            } else if (parse_symbol_spec(spec, &test_symbol_specs[test_symbol_count], stale) != 0) {
+                fprintf(stderr, "hyprlodr-host: bad symbol spec %s\n", spec);
+                ok = 0;
+            } else {
+                ++test_symbol_count;
+            }
+        }
         else if (!strcmp(arg, "--seed") && i + 1 < argc) seed = (unsigned)strtoul(argv[++i], NULL, 10);
         else if (!strcmp(arg, "--redirect-probe") && i + 1 < argc) {
             if (probe_count == HYPRLODR_MAX_PROBES) {
@@ -256,6 +331,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "hyprlodr-host: cannot read --image-file %s\n", image_file);
         ok = 0;
     }
+    if (ok && test_symbol_count && build_symbol_table() != 0) {
+        fprintf(stderr, "hyprlodr-host: symbol range is outside the image\n");
+        ok = 0;
+    }
 
     if (!ok) {
         fprintf(stderr, "hyprlodr-host: invalid arguments\n");
@@ -278,6 +357,8 @@ int main(int argc, char **argv) {
         image.write = image_write_bytes;
         status = hyprlodr_loader_set_image(loader, &image);
     }
+    if (status == HYPRLODR_OK && test_symbol_count)
+        status = hyprlodr_loader_set_symbols(loader, test_symbol_table, test_symbol_count);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_resolve(loader);
 
     if (describe) {

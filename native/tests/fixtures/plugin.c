@@ -79,6 +79,27 @@ static FIX_UNUSED int mod_initialize(const hyprlodr_host_api *host) {
         }
     }
 #endif
+#ifdef FIX_SYMBOL
+    /* ABI 7: resolve a named location. The suite supplies the table, so a known
+     * name must resolve, an unknown one must be refused, and a name whose bytes
+     * were altered must be refused even though the name exists. */
+    if (!HYPRLODR_HOST_API_HAS(host, symbol_lookup) || !host->symbol_lookup) {
+        host->log(host->context, "error", FIX_ID, "symbol_lookup unavailable");
+        return -1;
+    }
+    {
+        uint64_t rva = 0;
+        size_t length = 0;
+        if (host->symbol_lookup(host->context, FIX_SYMBOL, &rva, &length) != 0) {
+            host->log(host->context, "warn", FIX_ID, "symbol " FIX_SYMBOL " refused");
+        } else {
+            char message[128];
+            snprintf(message, sizeof message, "symbol " FIX_SYMBOL " rva %lx len %lu",
+                     (unsigned long)rva, (unsigned long)length);
+            host->log(host->context, "info", FIX_ID, message);
+        }
+    }
+#endif
 #ifdef FIX_IMAGE_WRITE
     /* ABI 6: patch eight bytes at a fixed offset, then read them back. The suite
      * compares the logged value with what it wrote and, through --image-out,

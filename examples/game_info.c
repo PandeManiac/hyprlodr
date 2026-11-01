@@ -29,11 +29,11 @@
 #define MOD_ID "example.game-info"
 #define MOD_VERSION "1.0.0"
 
-/* Offsets for hyperdemon.exe sha256 7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611,
- * the build native/win32/game_anchors.h was generated from. A mod for another
- * build must use that build's offsets; build_matches() is what makes the mistake
- * safe rather than fatal. */
-#define GAME_RVA_RESOURCE_PATH 0x0036f640ul
+/* The location is requested by *name* (ABI 7), so this example carries no RVA at
+ * all: the host publishes the entries its pipeline recorded for the running
+ * build and re-hashes the bytes on every lookup. The hash below is the mod's own
+ * independent check that the bytes are the ones this example was written for. */
+#define GAME_SYMBOL_RESOURCE_PATH "string:resource_path"
 #define GAME_RESOURCE_PATH_LENGTH 12ul
 #define GAME_RESOURCE_PATH_FNV 0x935e7de761104fdcull
 
@@ -70,9 +70,27 @@ static int mod_initialize(const hyprlodr_host_api *host) {
              (unsigned long long)size);
     host->log(host->context, "info", MOD_ID, message);
 
+    if (!HYPRLODR_HOST_API_HAS(host, symbol_lookup) || !host->symbol_lookup) {
+        host->log(host->context, "warn", MOD_ID, "host publishes no symbol table");
+        return 0;
+    }
+    uint64_t rva = 0;
+    size_t length = 0;
+    if (host->symbol_lookup(host->context, GAME_SYMBOL_RESOURCE_PATH, &rva, &length) != 0) {
+        host->log(host->context, "warn", MOD_ID, "symbol lookup refused; not reading game data");
+        return 0;
+    }
+    snprintf(message, sizeof message, "symbol %s at rva %lx (%lu bytes)",
+             GAME_SYMBOL_RESOURCE_PATH, (unsigned long)rva, (unsigned long)length);
+    host->log(host->context, "info", MOD_ID, message);
+
+    if (length != GAME_RESOURCE_PATH_LENGTH) {
+        host->log(host->context, "error", MOD_ID, "symbol length differs from this build");
+        return 0;
+    }
     unsigned char bytes[GAME_RESOURCE_PATH_LENGTH];
     memset(bytes, 0, sizeof bytes);
-    if (host->image_read(host->context, (uint64_t)GAME_RVA_RESOURCE_PATH, bytes, sizeof bytes) != 0) {
+    if (host->image_read(host->context, rva, bytes, sizeof bytes) != 0) {
         host->log(host->context, "warn", MOD_ID, "resource path read refused");
         return 0;
     }
@@ -80,7 +98,7 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     uint64_t hash = fnv1a64(bytes, sizeof bytes);
     if (hash == GAME_RESOURCE_PATH_FNV) {
         snprintf(message, sizeof message, "resource path anchor verified at rva %lx",
-                 (unsigned long)GAME_RVA_RESOURCE_PATH);
+                 (unsigned long)rva);
         host->log(host->context, "info", MOD_ID, message);
         if (host->capability_register(host->context, "example.game-info", MOD_ID) != 0)
             host->log(host->context, "warn", MOD_ID, "capability already registered");

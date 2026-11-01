@@ -53,7 +53,7 @@ K32="$OUT/lib/kernel32.lib"
 echo "== host =="
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/hyprlodr-host.exe" \
-  "$OUT/obj/loader.obj" "$OUT/obj/host.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+  "$OUT/obj/loader.obj" "$OUT/obj/host.obj" "$OUT/obj/anchors.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 
 echo "== sample mods =="
 link_mod() { # link_mod <source> <mod-id>

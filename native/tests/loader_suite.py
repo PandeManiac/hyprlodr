@@ -49,7 +49,7 @@ class Runner:
         return path
 
     def run(self, seed=None, disable=(), disabled_file=None, state_root=None, redirect_probes=(),
-            image_file=None, image_out=None):
+            image_file=None, image_out=None, symbols=(), stale_symbols=()):
         log = self.tmp / "events.jsonl"
         if log.exists():
             log.unlink()
@@ -68,6 +68,10 @@ class Runner:
             args += ["--image-file", str(image_file)]
         if image_out:
             args += ["--image-out", str(image_out)]
+        for spec in symbols:
+            args += ["--symbol", spec]
+        for spec in stale_symbols:
+            args += ["--symbol-stale", spec]
         proc = subprocess.run(args, capture_output=True, text=True)
         events = []
         if log.exists():
@@ -311,11 +315,12 @@ def example_game_info_refuses_a_small_image():
         runner.add("example.game-info", kind="example")
         image = runner.tmp / "image.bin"
         image.write_bytes(bytes(range(64)))
-        proc, events, _ = runner.run(image_file=image)
+        proc, events, _ = runner.run(
+            image_file=image, symbols=["string:resource_path@0x36f640:12"])
         check(proc.returncode == 0, f"the example must not fail the run: {proc.stderr}")
         messages = [e["message"] for e in events
                     if e["event"] == "log" and e["mod"] == "example.game-info"]
-        check(any("resource path read refused" in message for message in messages), messages)
+        check(any("symbol lookup refused" in message for message in messages), messages)
         check(any("image 64 bytes verified" in message for message in messages), messages)
     finally:
         runner.close()
@@ -334,10 +339,13 @@ def example_game_info_detects_an_unknown_build():
         runner.add("example.game-info", kind="example")
         image = runner.tmp / "image.bin"
         image.write_bytes(b"\x41" * (0x36F640 + 12))
-        proc, events, _ = runner.run(image_file=image)
+        proc, events, _ = runner.run(
+            image_file=image, symbols=["string:resource_path@0x36f640:12"])
         check(proc.returncode == 0, f"a mismatching build must not fail the run: {proc.stderr}")
         messages = [e["message"] for e in events
                     if e["event"] == "log" and e["mod"] == "example.game-info"]
+        check(any("symbol string:resource_path at rva 36f640" in message
+                  for message in messages), messages)
         check(any("resource path hash mismatch" in message for message in messages), messages)
         check(not any("anchor verified" in message for message in messages), messages)
     finally:
@@ -424,6 +432,62 @@ def image_write_rolled_back_with_failing_mod():
                   for e in events if e["event"] == "rollback"),
               f"the patch was not rolled back: {events}")
         check(dump.read_bytes() == original, "a failed mod's patch survived rollback")
+    finally:
+        runner.close()
+
+
+@scenario("symbol_lookup_resolves_verified_bytes")
+def symbol_lookup_resolves_verified_bytes():
+    """ABI 7: a published name resolves to the RVA its hash describes."""
+    runner = Runner()
+    try:
+        runner.add("symbol_probe")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, _ = runner.run(image_file=image, symbols=["probe@16:8"])
+        check(proc.returncode == 0, f"symbol run failed: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "s.probe"]
+        check("symbol probe rva 10 len 8" in " ".join(messages),
+              f"expected rva 16 (0x10) and length 8, saw {messages}")
+    finally:
+        runner.close()
+
+
+@scenario("symbol_lookup_refuses_unknown_name")
+def symbol_lookup_refuses_unknown_name():
+    runner = Runner()
+    try:
+        runner.add("symbol_missing")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, _ = runner.run(image_file=image, symbols=["probe@16:8"])
+        check(proc.returncode == 0, f"an unknown name must not fail the mod: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "s.missing"]
+        check(any("symbol missing refused" in message for message in messages), messages)
+    finally:
+        runner.close()
+
+
+@scenario("symbol_lookup_refuses_tampered_bytes")
+def symbol_lookup_refuses_tampered_bytes():
+    """A known name whose bytes no longer match must never resolve.
+
+    This is the patched-build case: the name exists, the address is in range, and
+    only the hash stands between the mod and using the wrong data.
+    """
+    runner = Runner()
+    try:
+        runner.add("symbol_stale")
+        image = runner.tmp / "image.bin"
+        image.write_bytes(bytes(range(64)))
+        proc, events, _ = runner.run(image_file=image, stale_symbols=["probe@16:8"])
+        check(proc.returncode == 0, f"a stale symbol must not fail the mod: {proc.stderr}")
+        messages = [e["message"] for e in events
+                    if e["event"] == "log" and e["mod"] == "s.stale"]
+        check(any("symbol probe refused" in message for message in messages), messages)
+        check(not any("rva" in message and "len" in message for message in messages), messages)
     finally:
         runner.close()
 

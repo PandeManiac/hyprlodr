@@ -24,11 +24,11 @@
 #  define HYPR_EXPORT __attribute__((visibility("default")))
 #endif
 
-/* Bumped to 6: a verified mod may now patch the running image and the host
- * restores every patch when the process shuts down. ABI 5 added read-only image
- * access, ABI 4 added file_redirect(). Earlier ABIs are rejected: mods are
- * recompiled against this header. */
-#define HYPRLODR_ABI_VERSION 6u
+/* Bumped to 7: the host publishes named, hash-verified game locations, so a mod
+ * asks for "string:resource_path" instead of hardcoding an RVA. ABI 6 added
+ * guarded image writes, ABI 5 read-only image access, ABI 4 file_redirect().
+ * Earlier ABIs are rejected: mods are recompiled against this header. */
+#define HYPRLODR_ABI_VERSION 7u
 #define HYPRLODR_PLUGIN_ENTRY "hyprlodr_plugin_query"
 
 /* True when the descriptor is large enough to contain `field`. */
@@ -94,6 +94,21 @@ typedef struct hyprlodr_host_api {
     /* Undo every patch this process applied and return the number of bytes put
      * back (0 when none). Hosts with nothing to restore return 0. */
     size_t (*image_restore)(void *context);
+    /* --- ABI 7 additions --- */
+    /* The host publishes the game locations its reverse-engineering pipeline
+     * recorded for this build: a name, an RVA, a length and the FNV-1a 64 hash of
+     * the bytes expected there. This is the portable way for a mod to reach game
+     * data: no build-specific numbers in the mod, and the hash is re-checked on
+     * every lookup. */
+    size_t (*symbol_count)(void *context);
+    /* Name at `index`, or NULL when out of range. Valid for the process. */
+    const char *(*symbol_name)(void *context, size_t index);
+    /* Resolve `name` to an RVA. Returns 0 and fills the out parameters when the
+     * name is known AND the bytes there still hash to the recorded value;
+     * non-zero otherwise: -1 unknown name, -2 no verified image, -3 range or hash
+     * mismatch. A mismatch means the executable is not what the entry describes,
+     * so do not use the address. */
+    int (*symbol_lookup)(void *context, const char *name, uint64_t *rva, size_t *length);
 } hyprlodr_host_api;
 
 /* True when the host API is large enough to contain `field`. */

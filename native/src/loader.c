@@ -127,6 +127,9 @@ struct hyprlodr_loader {
      * observe a redirect. Readers check it first and only then read the table. */
     volatile int redirects_published;
     hyprlodr_image image;
+    hyprlodr_anchor symbols[HYPRLODR_MAX_SYMBOLS];
+    char symbol_names[HYPRLODR_MAX_SYMBOLS][HYPRLODR_SYMBOL_NAME_MAX];
+    size_t symbol_count;
     hyprlodr_image_write image_writes[HYPRLODR_MAX_IMAGE_WRITES];
     size_t image_write_count;
     size_t image_write_bytes;
@@ -640,6 +643,39 @@ static size_t api_image_restore(void *ctx) {
     return restored;
 }
 
+/* --- ABI 7: named game locations verified on every lookup ------------------- */
+static size_t api_symbol_count(void *ctx) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    return l ? l->symbol_count : 0;
+}
+
+static const char *api_symbol_name(void *ctx, size_t index) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l || index >= l->symbol_count) return NULL;
+    return l->symbols[index].name;
+}
+
+static int api_symbol_lookup(void *ctx, const char *name, uint64_t *rva, size_t *length) {
+    hyprlodr_loader *l = (hyprlodr_loader *)ctx;
+    if (!l || !name) return -1;
+    if (!l->image.build_matches || !l->image.base) return -2;
+    for (size_t index = 0; index < l->symbol_count; ++index) {
+        const hyprlodr_anchor *symbol = &l->symbols[index];
+        if (strcmp(symbol->name, name)) continue;
+        if (symbol->length == 0) return -3;
+        if ((uint64_t)symbol->rva + (uint64_t)symbol->length > (uint64_t)l->image.size) return -3;
+        /* The hash is the whole point: a name never resolves to bytes that are
+         * not what the pipeline recorded. */
+        if (hyprlodr_fnv1a64((const unsigned char *)l->image.base + symbol->rva,
+                             symbol->length) != symbol->fnv1a64)
+            return -3;
+        if (rva) *rva = symbol->rva;
+        if (length) *length = symbol->length;
+        return 0;
+    }
+    return -1;
+}
+
 static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     hyprlodr_host_api api;
     memset(&api, 0, sizeof api);
@@ -660,6 +696,9 @@ static hyprlodr_host_api host_api(hyprlodr_loader *l) {
     api.image_read = api_image_read;
     api.image_write = api_image_write;
     api.image_restore = api_image_restore;
+    api.symbol_count = api_symbol_count;
+    api.symbol_name = api_symbol_name;
+    api.symbol_lookup = api_symbol_lookup;
     return api;
 }
 
@@ -1041,6 +1080,25 @@ int hyprlodr_loader_set_image(hyprlodr_loader *loader, const hyprlodr_image *ima
     /* An image without a base cannot be read, and claiming a match without one
      * would let a mod walk a dangling pointer. */
     if (!loader->image.base) loader->image.build_matches = 0;
+    return HYPRLODR_OK;
+}
+
+int hyprlodr_loader_set_symbols(hyprlodr_loader *loader, const hyprlodr_anchor *symbols,
+                                size_t count) {
+    if (!loader) return HYPRLODR_ERR_ARG;
+    loader->symbol_count = 0;
+    if (!symbols || count == 0) return HYPRLODR_OK;
+    if (count > HYPRLODR_MAX_SYMBOLS) return HYPRLODR_ERR_LIMIT;
+    for (size_t index = 0; index < count; ++index) {
+        const char *name = symbols[index].name;
+        if (!name || !*name) return HYPRLODR_ERR_ARG;
+        size_t length = strlen(name);
+        if (length >= HYPRLODR_SYMBOL_NAME_MAX) return HYPRLODR_ERR_LIMIT;
+        memcpy(loader->symbol_names[index], name, length + 1u);
+        loader->symbols[index] = symbols[index];
+        loader->symbols[index].name = loader->symbol_names[index];
+        ++loader->symbol_count;
+    }
     return HYPRLODR_OK;
 }
 
