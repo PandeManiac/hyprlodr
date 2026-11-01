@@ -109,7 +109,10 @@ public partial class MainWindow : Window
             : "Not installed. Installing copies the original OpenAL32.dll to OpenAL32_real.dll, " +
               "then places the HYPRLODR proxy in its place.";
 
-        RunSummary.Text = RunReportReader.Read(_install.GamePath).Describe();
+        // The file hook summary belongs beside the run summary: it is the only
+        // evidence of what the game actually opened during that run.
+        RunSummary.Text = RunReportReader.Read(_install.GamePath).Describe() + "\n" +
+                          FileLogReader.Read(_install.GamePath).Describe();
 
         var config = LoaderConfig.Load(_install.GamePath);
         DelayBox.Text = config.DelayMs.ToString(CultureInfo.InvariantCulture);

@@ -51,6 +51,9 @@ internal static class Program
         Register("profiles_tolerate_corrupt_file", ProfilesCorrupt);
         Register("run_report_reads_evidence", RunReportReadsEvidence);
         Register("run_report_tolerates_absence", RunReportToleratesAbsence);
+        Register("file_log_reads_opens", FileLogReadsOpens);
+        Register("file_log_tolerates_garbage_and_caps", FileLogToleratesGarbageAndCaps);
+        Register("file_log_absent", FileLogAbsent);
 
         foreach (var (name, body) in Scenarios)
         {
@@ -236,6 +239,74 @@ internal static class Program
         var partial = RunReportReader.Read(root);
         Check(!partial.AttachPresent, "a corrupt attach record must not count as a run");
         Check(partial.ModsInitialized == 1, $"events should still parse, got {partial.ModsInitialized}");
+    }
+
+    // ------------------------------------------------------------------ file log
+
+    private static void FileLogReadsOpens()
+    {
+        var root = NewTemp();
+        try
+        {
+            File.WriteAllLines(Path.Combine(root, FileLogReader.FileName), new[]
+            {
+                "{\"seq\":1,\"t_ms\":35,\"thread\":360,\"event\":\"file_open\",\"via\":\"CreateFileA\"," +
+                "\"redirected\":false,\"ok\":true,\"requested\":\"a.dat\",\"opened\":\"a.dat\"}",
+                // Double-escaped so the file contains valid JSON escapes for the
+                // backslashes a real Windows path has.
+                "{\"seq\":2,\"t_ms\":900,\"thread\":361,\"event\":\"file_open\",\"via\":\"_wfopen\"," +
+                "\"redirected\":true,\"ok\":true,\"requested\":\"asset\\\\key.dat\",\"opened\":\"mods\\\\mine.dat\"}",
+                "{\"seq\":3,\"event\":\"initialize_ok\",\"mod\":\"a.one\",\"message\":\"\"}",
+            });
+
+            var log = FileLogReader.Read(root);
+            Check(log.TotalOpens == 2, $"expected 2 file opens, got {log.TotalOpens}");
+            Check(log.RedirectedOpens == 1, $"expected 1 redirect, got {log.RedirectedOpens}");
+            Check(log.DistinctPaths == 2, $"expected 2 distinct paths, got {log.DistinctPaths}");
+            Check(log.FirstElapsedMs == 35, $"first open was at {log.FirstElapsedMs} ms");
+            Check(log.Records[1].Via == "_wfopen" && log.Records[1].Redirected,
+                  "the wide record was not parsed");
+            Check(log.Describe().Contains("1 redirected", StringComparison.Ordinal), log.Describe());
+            Check(log.Describe().Contains("35 ms", StringComparison.Ordinal), log.Describe());
+            // A different event kind in the same log must not be counted as an open.
+            Check(log.Records.All(record => record.Via is not null), "non-open event was parsed as an open");
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void FileLogToleratesGarbageAndCaps()
+    {
+        var root = NewTemp();
+        try
+        {
+            var lines = new List<string>();
+            for (var index = 1; index <= 250; index++)
+                lines.Add($"{{\"seq\":{index},\"t_ms\":{index},\"event\":\"file_open\",\"via\":\"CreateFileA\"," +
+                          "\"redirected\":false,\"ok\":true,\"requested\":\"f.dat\",\"opened\":\"f.dat\"}");
+            lines.Add("{ not json at all");
+            File.WriteAllLines(Path.Combine(root, FileLogReader.FileName), lines);
+
+            var log = FileLogReader.Read(root);
+            Check(log.TotalOpens == 250, $"garbage line changed the count: {log.TotalOpens}");
+            Check(log.Records.Count == FileLog.DefaultLimit,
+                  $"expected the last {FileLog.DefaultLimit} records, got {log.Records.Count}");
+            Check(log.Truncated == 250 - FileLog.DefaultLimit, $"truncated {log.Truncated}");
+            Check(log.Records[^1].Seq == 250, "the newest record must be kept");
+            Check(log.Describe().Contains("Showing the last", StringComparison.Ordinal), log.Describe());
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    private static void FileLogAbsent()
+    {
+        var root = NewTemp();
+        try
+        {
+            var log = FileLogReader.Read(root);
+            Check(!log.Any && log.TotalOpens == 0, "an absent log must report no opens");
+            Check(log.Describe().Contains("no opens recorded", StringComparison.Ordinal), log.Describe());
+        }
+        finally { Directory.Delete(root, true); }
     }
 
     // ---------------------------------------------------------------- profiles
