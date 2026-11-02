@@ -223,7 +223,7 @@ def main() -> None:
     parser.add_argument("--meta", type=Path, default=DEFAULT_META)
     parser.add_argument("--scale", type=float, default=0.32)
     parser.add_argument("--offset", type=float, nargs=3,
-                        default=(-0.0440, -0.1442, -0.1000),
+                        default=(-0.0540, -0.0240, 0.1200),
                         metavar=("X", "Y", "Z"))
     parser.add_argument("--rotate-x", type=float, default=180.0, metavar="DEGREES",
                         help="flip the exported -Z long axis into screen-up +Z (default 180)")

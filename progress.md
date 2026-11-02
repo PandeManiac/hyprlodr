@@ -1,5 +1,27 @@
 # Session progress
 
+## 2026-11-02 (original-arm extraction, Blender feathers, runtime overlay)
+
+**Pivoted from palette tweaking to the original game arm as the deformation source.** Local
+dumps (`/tmp/hand-vbo.bin`, `/tmp/hand-ibo.bin`) were re-analysed: 238 vertices, 72-byte stride,
+396 triangles, one connected component, two 594-index groups sharing 197 vertices. The four-float
+attribute at +32 is UV/mask data, not skin data; the mesh is already posed and no bone indices or
+weights exist in the draw buffer.
+
+New tooling reconstructs the captured arm in Blender (`tools/assets/import_hand_vbo.py`) and
+authors 43 feather cards bound to the four nearest original vertices
+(`tools/assets/build_feather_overlay.py`). The overlay is 860 vertices / 774 triangles / 64,360
+bytes, with normalized bind weights and a compact runtime binary. The extracted `.blend`, VBO/IBO
+and renders are kept in ignored `assets/hand-extract/` and are not committed.
+
+`example.hand-hook` 0.9.0 adds `overlay` mode: it leaves the native arm draw untouched, reads the
+live VBO, deforms the feather mesh by the weighted vertex deltas, and draws it after the second
+hand pass with the authored blue/gold palette. Live lobby verification: feather mesh and bind
+loaded, 15,364 overlay updates/draws, GL error 0, native arm alive. **Not visually accepted:** the
+feathers still read as part of the gold arm silhouette in the captured frame; they need an
+overlay-only placement check, a bind pose captured in the same pose, and roots lifted clear of
+the native surface. The working fallback remains `palette` mode.
+
 ## 2026-11-01 (sixteenth pass: arm orientation corrected)
 
 **The authored arm now points into the gameplay area instead of back at the

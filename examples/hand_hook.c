@@ -12,7 +12,10 @@
  *   "suppress"  draw the hand passes with count zero
  *   "cube"      draw a solid test cube through the same program instead
  *   "arm"       draw the authored Berdly arm from <state_dir>/hand-mesh.bin
- *   "palette"   keep the native animated hand; recolor through its tex_grad
+ *   "palette"   keep the native animated hand; recolor its tex_grad ramp or,
+ *               when the program has none, its tex_diffuse skin atlas
+ *   "overlay"   keep the native animated hand and draw authored feather cards
+ *               bound to its live vertex positions
  *   anything else (or no file)  pass every draw through unchanged
  *
  * Cube mode is the geometry-replacement proof. The first hand draw creates a
@@ -40,7 +43,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.7.17"
+#define MOD_VERSION "0.9.0"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -56,6 +59,16 @@ int _fltused = 0;
 #define ARM_HEADER_BYTES 48
 #define ARM_MAX_FILE_BYTES (4u * 1024u * 1024u)
 
+/* The original arm is a 238-vertex, 72-byte posed buffer. The feather overlay
+ * binds to those vertices and follows their per-frame deltas. */
+#define HAND_VERTEX_COUNT 238
+#define HAND_VBO_BYTES (HAND_VERTEX_COUNT * 72)
+#define FEATHER_HEADER_BYTES 32
+#define FEATHER_VERTEX_BYTES 64
+#define FEATHER_MAX_VERTICES 4096
+#define FEATHER_MAX_INDICES 8192
+#define FEATHER_MAX_BYTES (4u * 1024u * 1024u)
+
 #define GL_TRIANGLES 4u
 #define GL_FLOAT 0x1406u
 /* The live draw declares 5125 = GL_UNSIGNED_INT, and the 4,752-byte element
@@ -65,6 +78,11 @@ int _fltused = 0;
 #define GL_ARRAY_BUFFER 0x8892u
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893u
 #define GL_VERTEX_ARRAY_BINDING 0x85B5u
+#define GL_ARRAY_BUFFER_BINDING 0x8894u
+#define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889Fu
+#define GL_CURRENT_PROGRAM 0x8B8Du
+#define GL_CULL_FACE 0x0B44u
+#define GL_DEPTH_TEST 0x0B71u
 
 #define GL_TEXTURE_2D 0x0DE1u
 #define GL_TEXTURE0 0x84C0u
@@ -91,6 +109,11 @@ int _fltused = 0;
 #define GL_REPEAT 0x2901u
 #define GL_CLAMP_TO_EDGE 0x812Fu
 #define BLUE_TEXTURE_MAX_SIZE 256
+/* The hand's skin is a small colour atlas sampled through tex_diffuse; the
+ * screen-space blend pass also uses tex_diffuse but binds a viewport-sized
+ * texture. Anything larger than this cap is treated as that screen texture and
+ * is never recoloured. */
+#define BLUE_DIFFUSE_MAX_SIZE 1024
 
 typedef void (WINAPI *draw_elements_fn)(unsigned mode, int count, unsigned type,
                                         const void *indices);
@@ -126,6 +149,11 @@ typedef void (WINAPI *tex_parameteri_fn)(unsigned target, unsigned pname, int va
 typedef void (WINAPI *active_texture_fn)(unsigned texture);
 typedef int (WINAPI *get_uniform_location_fn)(unsigned program, const char *name);
 typedef void (WINAPI *get_uniformiv_fn)(unsigned program, int location, int *values);
+typedef void (WINAPI *get_vertex_attribiv_fn)(unsigned index, unsigned pname, int *value);
+typedef void (WINAPI *get_buffer_subdata_fn)(unsigned target, long long offset,
+                                             long long size, void *data);
+typedef void (WINAPI *buffer_sub_data_fn)(unsigned target, long long offset,
+                                          long long size, const void *data);
 typedef void *(*wgl_get_proc_fn)(const char *name);
 
 static const hyprlodr_host_api *g_host;
@@ -154,6 +182,9 @@ static tex_parameteri_fn g_tex_parameteri;
 static active_texture_fn g_active_texture;
 static get_uniform_location_fn g_get_uniform_location;
 static get_uniformiv_fn g_get_uniformiv;
+static get_vertex_attribiv_fn g_get_vertex_attribiv;
+static get_buffer_subdata_fn g_get_buffer_subdata;
+static buffer_sub_data_fn g_buffer_sub_data;
 
 static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm, 4 palette */
 static unsigned long g_hand_draws;
@@ -177,6 +208,44 @@ static unsigned g_geometry_count;
  * its own recolored copy. The game's diffuse screen sample, reflection and
  * specular inputs stay bound; only tex_grad is redirected. */
 static unsigned char g_blue_pixels[BLUE_TEXTURE_MAX_SIZE * BLUE_TEXTURE_MAX_SIZE * 4];
+static unsigned char g_blue_diffuse_pixels[BLUE_DIFFUSE_MAX_SIZE * BLUE_DIFFUSE_MAX_SIZE * 4];
+
+/* Authored five-column feather palette for the replacement mesh. The converter
+ * packs the source material slot into the U coordinate, so each column is one
+ * material: deep blue body, lit blue, cream, dark claw and gold accent. The
+ * game's reflection and screen-blend samplers stay bound; only the skin colour
+ * sampler is redirected. */
+#define ARM_PALETTE_COLUMNS 5
+#define ARM_PALETTE_COLUMN_WIDTH 64
+#define ARM_PALETTE_WIDTH (ARM_PALETTE_COLUMNS * ARM_PALETTE_COLUMN_WIDTH)
+#define ARM_PALETTE_HEIGHT 128
+static unsigned char g_arm_palette_pixels[ARM_PALETTE_WIDTH * ARM_PALETTE_HEIGHT * 4];
+static int g_arm_palette_ready;
+
+/* Feather overlay: authored bind-pose vertices plus four weights into the live
+ * 238-vertex arm buffer. The overlay is expanded into the same 72-byte layout
+ * the hand program already consumes. */
+typedef struct feather_vertex {
+    float position[3];
+    float normal[3];
+    float uv[2];
+    unsigned bind[4];
+    float weight[4];
+} feather_vertex;
+
+static unsigned char g_feather_file[FEATHER_MAX_BYTES];
+static feather_vertex g_feather_vertices[FEATHER_MAX_VERTICES];
+static unsigned g_feather_indices[FEATHER_MAX_INDICES];
+static unsigned g_feather_vertex_count;
+static unsigned g_feather_index_count;
+static unsigned char g_feather_vbo[FEATHER_MAX_VERTICES * 72];
+static unsigned char g_native_vbo[HAND_VBO_BYTES];
+static unsigned char g_bind_vbo[HAND_VBO_BYTES];
+static int g_bind_valid;
+static int g_feather_state; /* 0 unprepared, 1 ready, -1 unavailable */
+static unsigned g_feather_vao;
+static unsigned g_feather_gl_vbo;
+static unsigned g_feather_palette_texture;
 
 /* The two hand passes may use different programs and gradient ramps. Keep a
  * recolored texture per program so each pass preserves its own source colors. */
@@ -185,12 +254,13 @@ typedef struct material_state {
     int gradient_sampler;
     int gradient_unit;
     unsigned gradient_texture;
+    unsigned palette_kind; /* 1 = tex_grad ramp, 2 = tex_diffuse skin atlas */
 } material_state;
 static material_state g_materials[2];
 static unsigned g_material_count;
 
 /* Read-only diagnostics for a debugger; never part of the mod API. */
-HYPR_EXPORT volatile unsigned long long hypr_hand_debug[40];
+HYPR_EXPORT volatile unsigned long long hypr_hand_debug[64];
 
 static void log_message(const char *level, const char *message) {
     if (g_host && g_host->log) g_host->log(g_host->context, level, MOD_ID, message);
@@ -228,6 +298,7 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
         else if (has_prefix(word, "cube")) mode = 2;
         else if (has_prefix(word, "arm")) mode = 3;
         else if (has_prefix(word, "palette")) mode = 4;
+        else if (has_prefix(word, "overlay")) mode = 5;
     }
     fclose(file);
     return mode;
@@ -238,6 +309,7 @@ static const char *mode_name(unsigned mode) {
     if (mode == 2) return "cube";
     if (mode == 3) return "arm";
     if (mode == 4) return "palette";
+    if (mode == 5) return "overlay";
     return "pass-through";
 }
 
@@ -339,6 +411,9 @@ static void resolve_gl(void) {
         g_active_texture = (active_texture_fn)wgl("glActiveTexture");
         g_get_uniform_location = (get_uniform_location_fn)wgl("glGetUniformLocation");
         g_get_uniformiv = (get_uniformiv_fn)wgl("glGetUniformiv");
+        g_get_vertex_attribiv = (get_vertex_attribiv_fn)wgl("glGetVertexAttribiv");
+        g_get_buffer_subdata = (get_buffer_subdata_fn)wgl("glGetBufferSubData");
+        g_buffer_sub_data = (buffer_sub_data_fn)wgl("glBufferSubData");
     }
     if (!g_bind_buffer) g_bind_buffer = (bind_buffer_fn)GetProcAddress(module, "glBindBuffer");
     if (!g_buffer_data) g_buffer_data = (buffer_data_fn)GetProcAddress(module, "glBufferData");
@@ -359,6 +434,14 @@ static void resolve_gl(void) {
     /* GL 1.1 entry points come from opengl32's export table, not
      * wglGetProcAddress, which returns NULL for them. */
     if (!g_get_integerv) g_get_integerv = (get_integerv_fn)GetProcAddress(module, "glGetIntegerv");
+    if (!g_get_vertex_attribiv)
+        g_get_vertex_attribiv =
+            (get_vertex_attribiv_fn)GetProcAddress(module, "glGetVertexAttribiv");
+    if (!g_get_buffer_subdata)
+        g_get_buffer_subdata =
+            (get_buffer_subdata_fn)GetProcAddress(module, "glGetBufferSubData");
+    if (!g_buffer_sub_data)
+        g_buffer_sub_data = (buffer_sub_data_fn)GetProcAddress(module, "glBufferSubData");
     if (wgl) g_get_attrib_location = (get_attrib_location_fn)wgl("glGetAttribLocation");
     if (!g_get_attrib_location)
         g_get_attrib_location =
@@ -419,6 +502,79 @@ static void build_blue_pixels(unsigned width, unsigned height) {
     }
 }
 
+static void build_arm_palette_texture(void) {
+    if (g_arm_palette_ready) return;
+    static const unsigned char base[ARM_PALETTE_COLUMNS][3] = {
+        {14, 46, 142},   /* deep cobalt body */
+        {48, 116, 208},  /* lit blue coverts */
+        {206, 214, 218}, /* cream wrist/underwing */
+        {5, 14, 38},     /* dark blue claw */
+        {228, 176, 54},  /* warm gold accent */
+    };
+    for (unsigned column = 0; column < ARM_PALETTE_COLUMNS; ++column) {
+        for (unsigned y = 0; y < ARM_PALETTE_HEIGHT; ++y) {
+            /* Brighter toward the feather tip, with fine barbs every few rows
+             * so linear filtering still reads as a surface rather than a
+             * flat colour. */
+            unsigned lift = y * 46u / (ARM_PALETTE_HEIGHT - 1u);
+            unsigned barb = (y & 7u) < 3u ? 10u : 0u;
+            for (unsigned x = 0; x < ARM_PALETTE_COLUMN_WIDTH; ++x) {
+                size_t index = ((size_t)y * ARM_PALETTE_WIDTH +
+                                column * ARM_PALETTE_COLUMN_WIDTH + x) * 4u;
+                unsigned edge = (x < 3u || x + 3u >= ARM_PALETTE_COLUMN_WIDTH) ? 12u : 0u;
+                for (unsigned channel = 0; channel < 3; ++channel) {
+                    unsigned value = base[column][channel] + lift + barb;
+                    if (channel == 2 && edge) value += edge; /* cool rim */
+                    if (channel == 0 && column == 4) value += barb; /* gold shiver */
+                    g_arm_palette_pixels[index + channel] =
+                        (unsigned char)(value > 255u ? 255u : value);
+                }
+                g_arm_palette_pixels[index + 3] = 255;
+            }
+        }
+    }
+    g_arm_palette_ready = 1;
+}
+
+/* Recolor the hand's own skin atlas. The live hand program has no tex_grad, so
+ * this is the texture that makes the stock arm gold. Keep the authored
+ * luminance and the brightest saturated warm band as gold, and map the body to
+ * deep cobalt with a cool cyan upper range. The alpha channel is untouched:
+ * the same atlas carries the hand's cutout/coverage data. */
+static void build_blue_diffuse_pixels(unsigned width, unsigned height) {
+    size_t count = (size_t)width * height;
+    for (size_t i = 0; i < count; ++i) {
+        unsigned char *pixel = g_blue_diffuse_pixels + i * 4u;
+        unsigned red = pixel[0], green = pixel[1], blue = pixel[2];
+        unsigned luma = (red * 54u + green * 183u + blue * 19u) >> 8u;
+        /* Gold skin is warm: red leads blue and green sits above blue. Neutral
+         * white specular highlights have all three channels close together and
+         * are deliberately excluded so they stay white. */
+        int warm = red > blue + 14u && green > blue + 8u && red > 72u;
+        unsigned gold_mix = 0;
+        if (warm && luma > 176u) {
+            gold_mix = (luma - 176u) * 255u / 70u;
+            if (gold_mix > 255u) gold_mix = 255u;
+            /* Smooth shoulder instead of a hard gold/blue seam. */
+            unsigned remaining = 255u - gold_mix;
+            gold_mix = 255u - remaining * remaining / 255u;
+        }
+        /* Deep cobalt body: blue tracks luminance, green stays well below it,
+         * red stays low. The shader squares the sampled RGB, so keep the blue
+         * channel high enough to survive that square. */
+        unsigned recolored[3] = {6u + luma * 20u / 100u,
+                                 22u + luma * 54u / 100u,
+                                 72u + luma * 100u / 100u};
+        for (unsigned channel = 0; channel < 3; ++channel) {
+            unsigned base = recolored[channel] > 255u ? 255u : recolored[channel];
+            unsigned original = channel == 0 ? red : (channel == 1 ? green : blue);
+            unsigned value = base * (255u - gold_mix) + original * gold_mix;
+            pixel[channel] = (unsigned char)((value + 127u) / 255u);
+        }
+        /* pixel[3] is the source alpha. */
+    }
+}
+
 /* Rebinding a unit changes every sampler assigned to it. Only replace the
  * gradient when it has a dedicated unit so the screen blend and reflections
  * continue reading the game's original textures. */
@@ -458,8 +614,43 @@ static int material_state_for(unsigned program) {
     }
 
     int gradient_sampler = g_get_uniform_location(program, "tex_grad");
+    int diffuse_sampler = g_get_uniform_location(program, "tex_diffuse");
+    unsigned palette_kind = 1;
+    /* Prefer the skin atlas when it is a small texture. The live colour pass
+     * carries both: tex_grad is only its iridescence ramp, while the visible
+     * gold skin comes from tex_diffuse. The depth pass carries neither, and the
+     * screen-blend pass binds a viewport-sized tex_diffuse, which the size gate
+     * rejects. */
+    if (diffuse_sampler >= 0) {
+        int diffuse_unit = 0;
+        g_get_uniformiv(program, diffuse_sampler, &diffuse_unit);
+        if (diffuse_unit >= 0) {
+            int previous_active = 0, source_texture = 0, width = 0, height = 0;
+            g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+            g_active_texture(GL_TEXTURE0 + (unsigned)diffuse_unit);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &source_texture);
+            if (source_texture != 0) {
+                g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+                g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+            }
+            g_active_texture((unsigned)previous_active);
+            if (source_texture != 0 && width >= 8 && height >= 8 &&
+                width <= BLUE_DIFFUSE_MAX_SIZE && height <= BLUE_DIFFUSE_MAX_SIZE) {
+                gradient_sampler = diffuse_sampler;
+                palette_kind = 2;
+            } else if (g_mode == 3) {
+                /* The replacement mesh owns its colour sample even when the
+                 * stock program binds a viewport-sized texture there. */
+                gradient_sampler = diffuse_sampler;
+                palette_kind = 2;
+            } else if (gradient_sampler < 0) {
+                hypr_hand_debug[35] = 12; /* only a screen-sized diffuse exists */
+                return -1;
+            }
+        }
+    }
     if (gradient_sampler < 0) {
-        hypr_hand_debug[35] = 3; /* this hand pass does not use tex_grad */
+        hypr_hand_debug[35] = 3; /* neither palette sampler is present */
         return -1;
     }
     int sampler_unit = 0;
@@ -471,6 +662,49 @@ static int material_state_for(unsigned program) {
     if (!gradient_unit_is_exclusive(program, gradient_sampler, sampler_unit)) {
         hypr_hand_debug[35] = 5; /* unit is shared with a protected game sampler */
         return -1;
+    }
+
+    /* The replacement mesh carries its own five-column feather palette. Bind
+     * that instead of recolouring the stock atlas; the active program still
+     * supplies its original reflection, mask and screen-blend inputs. */
+    if (g_mode == 3) {
+        int previous_active = 0;
+        int previous_texture = 0;
+        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+        g_active_texture(GL_TEXTURE0 + (unsigned)sampler_unit);
+        g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+        build_arm_palette_texture();
+        unsigned texture = 0;
+        g_gen_textures(1, &texture);
+        if (!texture) {
+            g_active_texture((unsigned)previous_active);
+            hypr_hand_debug[35] = 6;
+            return -1;
+        }
+        g_bind_texture(GL_TEXTURE_2D, texture);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_REPEAT);
+        g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, ARM_PALETTE_WIDTH,
+                       ARM_PALETTE_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                       g_arm_palette_pixels);
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        g_active_texture((unsigned)previous_active);
+
+        material_state *state = &g_materials[g_material_count];
+        state->program = program;
+        state->gradient_sampler = gradient_sampler;
+        state->gradient_unit = sampler_unit;
+        state->gradient_texture = texture;
+        state->palette_kind = 3;
+        ++g_material_count;
+        hypr_hand_debug[35] = 14; /* authored arm palette bound */
+        hypr_hand_debug[20] = (unsigned long long)(gradient_sampler + 1);
+        hypr_hand_debug[21] = texture;
+        hypr_hand_debug[22] = (unsigned long long)sampler_unit;
+        hypr_hand_debug[23] = 1;
+        return (int)(g_material_count - 1);
     }
 
     int previous_active = 0;
@@ -503,12 +737,15 @@ static int material_state_for(unsigned program) {
         hypr_hand_debug[35] = 8; /* tex_grad unit has no source texture */
         return -1;
     }
-    if (width <= 0 || height <= 0 || width > BLUE_TEXTURE_MAX_SIZE ||
-        height > BLUE_TEXTURE_MAX_SIZE || width > max_size || height > max_size) {
+    unsigned limit = palette_kind == 1 ? BLUE_TEXTURE_MAX_SIZE : BLUE_DIFFUSE_MAX_SIZE;
+    if (width <= 0 || height <= 0 || width > (int)limit || height > (int)limit ||
+        width > max_size || height > max_size) {
         g_active_texture((unsigned)previous_active);
-        hypr_hand_debug[35] = 9; /* source gradient dimensions exceed the safe buffer */
+        /* A viewport-sized tex_diffuse is the game's screen blend, not skin. */
+        hypr_hand_debug[35] = palette_kind == 1 ? 9 : 12;
         return -1;
     }
+    unsigned char *pixels = palette_kind == 1 ? g_blue_pixels : g_blue_diffuse_pixels;
     /* glGetTexImage follows global pack state. Normalize it and detach any
      * pixel-pack buffer so the destination is always the CPU scratch array,
      * then restore every value the game had configured. */
@@ -524,14 +761,17 @@ static int material_state_for(unsigned program) {
     g_pixel_storei(GL_PACK_ROW_LENGTH, 0);
     g_pixel_storei(GL_PACK_SKIP_ROWS, 0);
     g_pixel_storei(GL_PACK_SKIP_PIXELS, 0);
-    g_get_tex_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
+    g_get_tex_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     g_pixel_storei(GL_PACK_ALIGNMENT, pack_alignment);
     g_pixel_storei(GL_PACK_ROW_LENGTH, pack_row_length);
     g_pixel_storei(GL_PACK_SKIP_ROWS, pack_skip_rows);
     g_pixel_storei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
     g_bind_buffer(GL_PIXEL_PACK_BUFFER, (unsigned)pack_buffer);
     g_active_texture((unsigned)previous_active);
-    build_blue_pixels((unsigned)width, (unsigned)height);
+    if (palette_kind == 1)
+        build_blue_pixels((unsigned)width, (unsigned)height);
+    else
+        build_blue_diffuse_pixels((unsigned)width, (unsigned)height);
 
     int previous_texture = 0;
     g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
@@ -547,7 +787,7 @@ static int material_state_for(unsigned program) {
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_s);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_t);
     g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, width, height, 0, GL_RGBA,
-                   GL_UNSIGNED_BYTE, g_blue_pixels);
+                   GL_UNSIGNED_BYTE, pixels);
     g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
 
     material_state *state = &g_materials[g_material_count];
@@ -555,8 +795,12 @@ static int material_state_for(unsigned program) {
     state->gradient_sampler = gradient_sampler;
     state->gradient_unit = sampler_unit;
     state->gradient_texture = texture;
+    state->palette_kind = palette_kind;
     ++g_material_count;
-    hypr_hand_debug[35] = 1; /* palette texture prepared for a dedicated tex_grad unit */
+    hypr_hand_debug[35] = palette_kind == 1 ? 1 : 13; /* 1 = ramp, 13 = skin atlas */
+    hypr_hand_debug[25] = palette_kind;
+    hypr_hand_debug[26] = (unsigned long long)width;
+    hypr_hand_debug[27] = (unsigned long long)height;
     hypr_hand_debug[20] = (unsigned long long)(gradient_sampler + 1);
     hypr_hand_debug[21] = texture;
     hypr_hand_debug[22] = (unsigned long long)sampler_unit;
@@ -801,6 +1045,292 @@ static void draw_native_palette(unsigned mode, int count, unsigned type,
     }
 }
 
+/* ------------------------------------------------------ feather overlay */
+
+static void cross3(const float a[3], const float b[3], float out[3]) {
+    out[0] = a[1] * b[2] - a[2] * b[1];
+    out[1] = a[2] * b[0] - a[0] * b[2];
+    out[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+/* The Windows target links without a math library, so normalise with a small
+ * Newton iteration instead of pulling in sqrt(). */
+static float local_sqrt(float value) {
+    if (value <= 0.0f) return 0.0f;
+    float guess = value > 1.0f ? value : 1.0f;
+    for (unsigned i = 0; i < 16; ++i) guess = 0.5f * (guess + value / guess);
+    return guess;
+}
+
+static void normalise3(float value[3]) {
+    float length = value[0] * value[0] + value[1] * value[1] + value[2] * value[2];
+    if (length <= 1e-12f) {
+        value[0] = 0.0f; value[1] = 0.0f; value[2] = 1.0f;
+        return;
+    }
+    length = local_sqrt(length);
+    value[0] /= length; value[1] /= length; value[2] /= length;
+}
+
+static void feather_write_record(unsigned index, const float position[3],
+                                 const float normal[3]) {
+    unsigned char *record = g_feather_vbo + (size_t)index * 72u;
+    memcpy(record + 0, position, 12);
+    memcpy(record + 12, normal, 12);
+    memcpy(record + 24, g_feather_vertices[index].uv, 8);
+    static const float uv1[4] = {0.023678f, 0.092198f, 0.0f, 0.0f};
+    memcpy(record + 32, uv1, 16);
+    float tangent[3], bitangent[3];
+    static const float up[3] = {0.0f, 0.0f, 1.0f};
+    cross3(up, normal, tangent);
+    if (tangent[0] * tangent[0] + tangent[1] * tangent[1] + tangent[2] * tangent[2] <
+        1e-8f) {
+        static const float fallback[3] = {1.0f, 0.0f, 0.0f};
+        cross3(fallback, normal, tangent);
+    }
+    normalise3(tangent);
+    cross3(normal, tangent, bitangent);
+    normalise3(bitangent);
+    memcpy(record + 48, tangent, 12);
+    memcpy(record + 60, bitangent, 12);
+}
+
+static int load_feather_mesh(void) {
+    char path[1024];
+    if (!state_path(g_host, "feather-overlay.bin", path, sizeof path)) return 0;
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    size_t size = fread(g_feather_file, 1, FEATHER_MAX_BYTES, file);
+    fclose(file);
+    if (size < FEATHER_HEADER_BYTES || size >= FEATHER_MAX_BYTES) return 0;
+    static const char magic[8] = {'H', 'Y', 'P', 'R', 'F', 'E', 'A', 'T'};
+    for (unsigned i = 0; i < 8; ++i)
+        if (g_feather_file[i] != (unsigned char)magic[i]) return 0;
+    unsigned version = 0, vertices = 0, indices = 0, bind_count = 0;
+    memcpy(&version, g_feather_file + 8, 4);
+    memcpy(&vertices, g_feather_file + 12, 4);
+    memcpy(&indices, g_feather_file + 16, 4);
+    memcpy(&bind_count, g_feather_file + 20, 4);
+    if (version != 1 || bind_count != 4 || !vertices || !indices ||
+        vertices > FEATHER_MAX_VERTICES || indices > FEATHER_MAX_INDICES)
+        return 0;
+    if ((unsigned long)size != FEATHER_HEADER_BYTES +
+        (unsigned long)vertices * FEATHER_VERTEX_BYTES + (unsigned long)indices * 4ul)
+        return 0;
+
+    for (unsigned i = 0; i < vertices; ++i) {
+        const unsigned char *source = g_feather_file + FEATHER_HEADER_BYTES +
+                                     (size_t)i * FEATHER_VERTEX_BYTES;
+        feather_vertex *vertex = &g_feather_vertices[i];
+        memcpy(vertex->position, source + 0, 12);
+        memcpy(vertex->normal, source + 12, 12);
+        memcpy(vertex->uv, source + 24, 8);
+        memcpy(vertex->bind, source + 32, 16);
+        memcpy(vertex->weight, source + 48, 16);
+        float total = 0.0f;
+        for (unsigned j = 0; j < 4; ++j) {
+            if (vertex->bind[j] >= HAND_VERTEX_COUNT) return 0;
+            total += vertex->weight[j];
+        }
+        if (total < 0.99f || total > 1.01f) return 0;
+    }
+    const unsigned char *source_indices = g_feather_file + FEATHER_HEADER_BYTES +
+                                          (size_t)vertices * FEATHER_VERTEX_BYTES;
+    for (unsigned i = 0; i < indices; ++i) {
+        memcpy(&g_feather_indices[i], source_indices + (size_t)i * 4u, 4);
+        if (g_feather_indices[i] >= vertices) return 0;
+    }
+    g_feather_vertex_count = vertices;
+    g_feather_index_count = indices;
+    hypr_hand_debug[40] = 1;
+    hypr_hand_debug[41] = vertices;
+    hypr_hand_debug[42] = indices;
+    return 1;
+}
+
+static int load_bind_pose(void) {
+    char path[1024];
+    if (!state_path(g_host, "hand-bind.bin", path, sizeof path)) return 0;
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    size_t size = fread(g_bind_vbo, 1, HAND_VBO_BYTES, file);
+    fclose(file);
+    if (size != HAND_VBO_BYTES) return 0;
+    g_bind_valid = 1;
+    hypr_hand_debug[43] = 1;
+    return 1;
+}
+
+static void prepare_feather_geometry(void) {
+    if (g_feather_state != 0) return;
+    g_feather_state = -1;
+    resolve_gl();
+    if (!g_bind_vertex_array || !g_bind_buffer || !g_buffer_data ||
+        !g_vertex_attrib_pointer || !g_enable_vertex_attrib_array ||
+        !g_get_integerv || !g_get_vertex_attribiv || !g_get_buffer_subdata ||
+        !g_buffer_sub_data || !g_gen_buffers || !g_gen_vertex_arrays)
+        return;
+    for (unsigned i = 0; i < g_feather_vertex_count; ++i)
+        feather_write_record(i, g_feather_vertices[i].position, g_feather_vertices[i].normal);
+
+    unsigned array = 0, buffer = 0, element = 0;
+    g_gen_vertex_arrays(1, &array);
+    g_gen_buffers(1, &buffer);
+    g_gen_buffers(1, &element);
+    if (!array || !buffer || !element) return;
+    int previous = 0;
+    g_get_integerv(GL_VERTEX_ARRAY_BINDING, &previous);
+    g_bind_vertex_array(array);
+    g_bind_buffer(GL_ARRAY_BUFFER, buffer);
+    g_buffer_data(GL_ARRAY_BUFFER, (long long)g_feather_vertex_count * 72,
+                  g_feather_vbo, 0x88E8u); /* GL_DYNAMIC_DRAW */
+    static const char *const names[5] = {"in_position", "in_normal", "in_uv0", "in_uv1",
+                                          "in_tangent"};
+    static const int sizes[5] = {3, 3, 2, 4, 3};
+    static const int offsets[5] = {0, 12, 24, 32, 48};
+    int program = 0;
+    g_get_integerv(GL_CURRENT_PROGRAM, &program);
+    for (unsigned i = 0; i < 5; ++i) {
+        int location = (g_get_attrib_location && program > 0)
+                           ? g_get_attrib_location((unsigned)program, names[i])
+                           : (int)i;
+        if (location < 0) location = (int)i;
+        g_enable_vertex_attrib_array((unsigned)location);
+        g_vertex_attrib_pointer((unsigned)location, sizes[i], GL_FLOAT, 0, 72,
+                                (const void *)(size_t)offsets[i]);
+    }
+    g_bind_buffer(GL_ELEMENT_ARRAY_BUFFER, element);
+    g_buffer_data(GL_ELEMENT_ARRAY_BUFFER, (long long)g_feather_index_count * 4,
+                  g_feather_indices, 0x88E4u); /* GL_STATIC_DRAW */
+    g_bind_vertex_array((unsigned)previous);
+    g_feather_vao = array;
+    g_feather_gl_vbo = buffer;
+    g_feather_state = 1;
+    hypr_hand_debug[48] = 1;
+}
+
+static int update_feather_pose(void) {
+    if (!g_bind_valid) {
+        int hand = 0;
+        g_get_vertex_attribiv(0, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &hand);
+        if (!hand) return 0;
+    }
+    int previous = 0;
+    g_get_integerv(GL_ARRAY_BUFFER_BINDING, &previous);
+    int hand_buffer = 0;
+    g_get_vertex_attribiv(0, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &hand_buffer);
+    if (!hand_buffer) return 0;
+    g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)hand_buffer);
+    g_get_buffer_subdata(GL_ARRAY_BUFFER, 0, HAND_VBO_BYTES, g_native_vbo);
+    g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)previous);
+    if (!g_bind_valid) {
+        memcpy(g_bind_vbo, g_native_vbo, HAND_VBO_BYTES);
+        g_bind_valid = 1;
+        hypr_hand_debug[43] = 2;
+    }
+
+    for (unsigned i = 0; i < g_feather_vertex_count; ++i) {
+        const feather_vertex *vertex = &g_feather_vertices[i];
+        float position[3] = {vertex->position[0], vertex->position[1], vertex->position[2]};
+        float normal[3] = {0.0f, 0.0f, 0.0f};
+        for (unsigned j = 0; j < 4; ++j) {
+            unsigned index = vertex->bind[j];
+            const float *current = (const float *)(g_native_vbo + (size_t)index * 72u);
+            const float *bind = (const float *)(g_bind_vbo + (size_t)index * 72u);
+            float weight = vertex->weight[j];
+            for (unsigned axis = 0; axis < 3; ++axis) {
+                position[axis] += weight * (current[axis] - bind[axis]);
+                normal[axis] += weight * current[3 + axis];
+            }
+        }
+        normalise3(normal);
+        feather_write_record(i, position, normal);
+    }
+
+    g_bind_buffer(GL_ARRAY_BUFFER, g_feather_gl_vbo);
+    g_buffer_sub_data(GL_ARRAY_BUFFER, 0, (long long)g_feather_vertex_count * 72,
+                      g_feather_vbo);
+    g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)previous);
+    ++hypr_hand_debug[44];
+    return 1;
+}
+
+static int ensure_feather_palette(unsigned program, int *out_unit, unsigned *out_texture) {
+    if (!g_feather_palette_texture) {
+        if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
+            !g_active_texture || !g_get_integerv)
+            return 0;
+        build_arm_palette_texture();
+        int previous_active = 0, previous_texture = 0;
+        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+        g_active_texture(GL_TEXTURE0);
+        g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+        unsigned texture = 0;
+        g_gen_textures(1, &texture);
+        if (!texture) {
+            g_active_texture((unsigned)previous_active);
+            return 0;
+        }
+        g_bind_texture(GL_TEXTURE_2D, texture);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+        g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_REPEAT);
+        g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, ARM_PALETTE_WIDTH,
+                       ARM_PALETTE_HEIGHT, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                       g_arm_palette_pixels);
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        g_active_texture((unsigned)previous_active);
+        g_feather_palette_texture = texture;
+        hypr_hand_debug[47] = texture;
+    }
+    if (!g_get_uniform_location || !g_get_uniformiv) return 0;
+    int sampler = g_get_uniform_location(program, "tex_diffuse");
+    if (sampler < 0) sampler = g_get_uniform_location(program, "tex_grad");
+    if (sampler < 0) return 0;
+    int unit = -1;
+    g_get_uniformiv(program, sampler, &unit);
+    if (unit < 0) return 0;
+    *out_unit = unit;
+    *out_texture = g_feather_palette_texture;
+    return 1;
+}
+
+static void draw_feather_overlay(void) {
+    if (g_feather_state == 0) prepare_feather_geometry();
+    if (g_feather_state != 1) return;
+    if (!update_feather_pose()) return;
+    int program = 0;
+    g_get_integerv(GL_CURRENT_PROGRAM, &program);
+    int palette_unit = -1;
+    unsigned palette_texture = 0;
+    int have_palette = program > 0 && ensure_feather_palette((unsigned)program,
+                                                              &palette_unit,
+                                                              &palette_texture);
+    int previous_vao = 0, previous_active = 0, previous_texture = 0;
+    g_get_integerv(GL_VERTEX_ARRAY_BINDING, &previous_vao);
+    g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+    if (have_palette) {
+        g_active_texture(GL_TEXTURE0 + (unsigned)palette_unit);
+        g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+        g_bind_texture(GL_TEXTURE_2D, palette_texture);
+    }
+    unsigned char cull_on = 0;
+    if (g_is_enabled && g_disable) {
+        cull_on = g_is_enabled(GL_CULL_FACE);
+        g_disable(GL_CULL_FACE);
+    }
+    g_bind_vertex_array(g_feather_vao);
+    g_original_draw(GL_TRIANGLES, (int)g_feather_index_count, GL_UNSIGNED_INT, NULL);
+    g_bind_vertex_array((unsigned)previous_vao);
+    if (g_enable && cull_on) g_enable(GL_CULL_FACE);
+    if (have_palette) {
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        g_active_texture((unsigned)previous_active);
+    }
+    ++hypr_hand_debug[45];
+}
+
 /* The shim runs on the render thread inside the engine's own draw call. It
  * must not call the host logger or any other code that can take a loader lock:
  * the first version did, and the game died on the first gameplay hand draw. It
@@ -822,6 +1352,13 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
         }
         if (g_mode == 4) {
             draw_native_palette(mode, count, type, indices);
+            return;
+        }
+        if (g_mode == 5) {
+            /* Keep the game's own animated arm draw; add the authored feather
+             * shell after the second (last) hand pass. */
+            g_original_draw(mode, count, type, indices);
+            if ((g_hand_draws & 1u) == 0) draw_feather_overlay();
             return;
         }
         if (g_mode == 1) count = 0;
@@ -855,6 +1392,16 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     g_original_draw = (draw_elements_fn)original;
     g_mode = read_mode(host);
     build_cube();
+    if (g_mode == 5) {
+        int mesh_ok = load_feather_mesh();
+        int bind_ok = load_bind_pose();
+        if (mesh_ok)
+            log_message("info", "overlay mode: feather mesh loaded; native arm stays live");
+        else
+            log_message("warn", "overlay mode: feather mesh missing/invalid; native arm only");
+        if (!bind_ok)
+            log_message("info", "overlay mode: no hand-bind.bin; first live pose becomes bind");
+    }
     if (g_mode == 3) {
         /* Load before patching: this runs on the mod thread, not inside the
          * engine's draw call, so no file or loader work happens on the render

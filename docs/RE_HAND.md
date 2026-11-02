@@ -615,6 +615,39 @@ The transform is applied to static geometry, so it inherits the game's hand
 world/view transform each frame and stays camera-locked. It is still bind-pose
 geometry: the seven baked actions and feather springs are not applied yet.
 
+## Original-arm extraction and feather overlay (2026-11-02)
+
+**The original arm is recoverable as posed geometry, not as a source rig.** A local live dump
+(`/tmp/hand-vbo.bin`, 17,136 bytes; `/tmp/hand-ibo.bin`, 4,752 bytes; neither committed) gives
+238 vertices at the measured 72-byte stride and 1,188 u32 indices (396 triangles). All 238
+vertices are used by one connected component. The two 594-index halves overlap 197 vertices, so
+they are material/part groupings, not two hands.
+
+The record layout is confirmed from the bytes: position at 0, normal at 12, `uv0` at 24, a
+four-float attribute at 32 (`x` varies 0.0051..0.0668, `y` is constant 0.0922, `z/w` zero),
+tangent at 48 and bitangent at 60. The four-float attribute is **UV/mask data, not bone indices
+or weights**; the mesh is posed before upload. The undeformed source mesh and rig are therefore
+not recoverable from the draw buffer alone. Recovering them would require the CPU skinning path
+or the original asset, neither of which this buffer contains.
+
+`tools/assets/import_hand_vbo.py` reconstructs the captured mesh in Blender with positions,
+per-vertex normals, both UV sets and the two index groups. It writes only to the ignored
+`assets/hand-extract/` directory; the dump and the `.blend` are never committed.
+`tools/assets/build_feather_overlay.py` then authors 43 feather cards on that surface. Every
+feather vertex is bound to its four nearest original vertices (weight-sum error 2.2e-16), and the
+tool exports a 64,360-byte `feather_overlay.bin` (860 vertices, 774 triangles) using a small
+binary format with positions, normals, UVs and the four bind indices/weights.
+
+`example.hand-hook` 0.9.0's `overlay` mode keeps the native arm draw and animation, reads the
+live 238-vertex VBO, deforms the feather vertices by the same weighted per-vertex deltas and
+draws the result after the second hand pass with the authored blue/gold palette. A live lobby
+run loaded the feather mesh and bind pose, prepared the private VAO, and recorded **15,364
+overlay updates and draws with GL error 0**; the native arm stayed visible. **Visual result:**
+the overlay draws, but the captured frame does not show separable feather layers — most cards
+still read as part of the gold arm silhouette. This is a placement/occlusion result, not a draw
+failure. The next check is an overlay-only diagnostic and a bind capture from the same live
+pose; do not treat the counter as visual acceptance.
+
 ## Next experiments, in order
 
 1. **Substitute geometry through the verified hook.** The shim now owns the two hand draws.

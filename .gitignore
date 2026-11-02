@@ -8,5 +8,7 @@ __pycache__/
 manager/**/bin/
 manager/**/obj/
 .tmp/
+# Local extractions of the user's own game geometry; never vendored.
+/assets/hand-extract/
 # Generated from a face inside the user's own installation; never vendored.
 /assets/hyprlodr-title-mask.raw
