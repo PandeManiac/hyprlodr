@@ -45,7 +45,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.9.2"
+#define MOD_VERSION "0.9.3"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -67,8 +67,8 @@ int _fltused = 0;
 #define HAND_VBO_BYTES (HAND_VERTEX_COUNT * 72)
 #define FEATHER_HEADER_BYTES 32
 #define FEATHER_VERTEX_BYTES 64
-#define FEATHER_MAX_VERTICES 4096
-#define FEATHER_MAX_INDICES 8192
+#define FEATHER_MAX_VERTICES 65536
+#define FEATHER_MAX_INDICES 131072
 #define FEATHER_MAX_BYTES (4u * 1024u * 1024u)
 
 #define GL_TRIANGLES 4u
@@ -1076,6 +1076,55 @@ static void normalise3(float value[3]) {
     value[0] /= length; value[1] /= length; value[2] /= length;
 }
 
+/* Rotate the authored normal by the same shortest-arc rotation that takes the
+ * native bind-pose normal to its current normal. Using the current native
+ * normal directly (as the shell originally did) discards the authored
+ * curvature and makes a dense mesh look like a flat card. */
+static void rotate_between_normals(const float authored[3], const float from[3],
+                                   const float to[3], float out[3]) {
+    float source[3] = {authored[0], authored[1], authored[2]};
+    normalise3(source);
+    float axis[3];
+    cross3(from, to, axis);
+    float sine_sq = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+    float cosine = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+    if (cosine < -1.0f) cosine = -1.0f;
+    if (cosine > 1.0f) cosine = 1.0f;
+    if (sine_sq < 1e-10f) {
+        if (cosine >= 0.0f) {
+            out[0] = source[0]; out[1] = source[1]; out[2] = source[2];
+            return;
+        }
+        /* 180 degrees: rotate around any axis perpendicular to the surface. */
+        float perp[3] = {1.0f, 0.0f, 0.0f};
+        if (from[1] * from[1] + from[2] * from[2] > 0.1f) {
+            perp[0] = 0.0f; perp[1] = 1.0f; perp[2] = 0.0f;
+        }
+        float side[3];
+        cross3(from, perp, side);
+        normalise3(side);
+        float along_side = source[0] * side[0] + source[1] * side[1] +
+                           source[2] * side[2];
+        out[0] = 2.0f * along_side * side[0] - source[0];
+        out[1] = 2.0f * along_side * side[1] - source[1];
+        out[2] = 2.0f * along_side * side[2] - source[2];
+        normalise3(out);
+        return;
+    }
+    float axis_dot_source = axis[0] * source[0] + axis[1] * source[1] +
+                            axis[2] * source[2];
+    float factor = (1.0f - cosine) / sine_sq;
+    float rotated[3];
+    rotated[0] = source[0] * cosine + axis[1] * source[2] - axis[2] * source[1] +
+                 axis[0] * axis_dot_source * factor;
+    rotated[1] = source[1] * cosine + axis[2] * source[0] - axis[0] * source[2] +
+                 axis[1] * axis_dot_source * factor;
+    rotated[2] = source[2] * cosine + axis[0] * source[1] - axis[1] * source[0] +
+                 axis[2] * axis_dot_source * factor;
+    normalise3(rotated);
+    out[0] = rotated[0]; out[1] = rotated[1]; out[2] = rotated[2];
+}
+
 static void feather_write_record(unsigned index, const float position[3],
                                  const float normal[3]) {
     unsigned char *record = g_feather_vbo + (size_t)index * 72u;
@@ -1245,7 +1294,8 @@ static int update_feather_pose(void) {
     for (unsigned i = 0; i < g_feather_vertex_count; ++i) {
         const feather_vertex *vertex = &g_feather_vertices[i];
         float position[3] = {vertex->position[0], vertex->position[1], vertex->position[2]};
-        float normal[3] = {0.0f, 0.0f, 0.0f};
+        float bind_normal[3] = {0.0f, 0.0f, 0.0f};
+        float current_normal[3] = {0.0f, 0.0f, 0.0f};
         for (unsigned j = 0; j < 4; ++j) {
             unsigned index = vertex->bind[j];
             const float *current = (const float *)(g_native_vbo + (size_t)index * 72u);
@@ -1253,10 +1303,14 @@ static int update_feather_pose(void) {
             float weight = vertex->weight[j];
             for (unsigned axis = 0; axis < 3; ++axis) {
                 position[axis] += weight * (current[axis] - bind[axis]);
-                normal[axis] += weight * current[3 + axis];
+                bind_normal[axis] += weight * bind[3 + axis];
+                current_normal[axis] += weight * current[3 + axis];
             }
         }
-        normalise3(normal);
+        normalise3(bind_normal);
+        normalise3(current_normal);
+        float normal[3];
+        rotate_between_normals(vertex->normal, bind_normal, current_normal, normal);
         feather_write_record(i, position, normal);
         for (unsigned axis = 0; axis < 3; ++axis) {
             if (position[axis] < bounds_min[axis]) bounds_min[axis] = position[axis];
@@ -1350,10 +1404,15 @@ static void draw_feather_overlay(void) {
     if (g_is_enabled && g_disable) {
         cull_on = g_is_enabled(GL_CULL_FACE);
         g_disable(GL_CULL_FACE);
-        if (g_mode == 6) {
+        if (g_mode == 5) {
+            /* In combined mode the native gold arm has already written depth.
+             * The authored surface is not coplanar, so draw over it. */
             depth_on = g_is_enabled(GL_DEPTH_TEST);
             g_disable(GL_DEPTH_TEST);
         }
+        /* Authored-only mode draws with the depth test left on: the native
+         * hand wrote no depth, so the authored layers occlude each other
+         * correctly instead of stacking into one feather mass. */
     }
     g_bind_vertex_array(g_feather_vao);
     g_original_draw(GL_TRIANGLES, (int)g_feather_index_count, GL_UNSIGNED_INT, NULL);

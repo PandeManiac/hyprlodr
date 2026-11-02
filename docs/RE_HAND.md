@@ -715,3 +715,27 @@ only writes derived test data and prints layout facts; it never embeds the dump.
 
 The asset generator is independent of any game content: every mesh, feather, bone, weight
 and material is authored in the script.
+
+## 0.9.3 authored overlay capacity and depth (2026-11-02)
+
+`example.hand-hook` 0.9.3 raises `FEATHER_MAX_VERTICES`/`FEATHER_MAX_INDICES` to 65,536 /
+131,072. The generated 41,482-vertex / 62,436-index authored mesh therefore loads through both
+`overlay` and `arm` modes; the Windows build and all 7 CTest tests pass.
+
+The overlay now preserves the authored normal rather than copying the nearest native normal. For
+each overlay vertex it takes the weighted native bind normal and current normal, computes the
+shortest-arc rotation between them, and applies it to the authored normal. The shell and cards
+still follow the live native per-vertex deltas.
+
+Depth behavior is mode-specific. Combined `overlay` mode draws after the native first color pass
+with depth testing disabled, because the authored surface is not coplanar with the native gold
+arm. `overlay-only` suppresses the native draws and leaves depth testing enabled so the authored
+layers self-occlude instead of stacking into a feather mass.
+
+**Live verification and limits:** `.tmp/99-shell-093.png` verifies the 0.9.3 shell fallback in
+gameplay. The authored-mesh captures `.tmp/99-authored-normals.png`, `.tmp/99-auth-depth.png`
+and `.tmp/99-arm-41k.png` confirm loading and visibility but are not accepted as the final arm.
+The overlay still presents a low wrist/feather mass without a readable authored hand, and direct
+`arm` mode is static, centered and gold because it does not inherit the native first-person
+transform. The shell remains the verified fallback; authored fit, hand alignment and the
+animated gold iridescence are still blockers.

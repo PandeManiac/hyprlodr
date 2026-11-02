@@ -1,5 +1,28 @@
 # Session progress
 
+## 2026-11-02 (authored overlay depth/normal/capacity probe)
+
+**The authored mesh now loads through the overlay and direct-arm paths, but it is still not
+visually accepted.** `example.hand-hook` 0.9.3 raises the feather limits to 65,536 vertices and
+131,072 indices, so the generated 41,482-vertex / 62,436-index authored mesh loads in both
+`overlay` and `arm` modes. The Windows build is clean and 7/7 CTest tests pass.
+
+Two real integration defects were fixed. The overlay previously sampled the nearest native
+normal instead of the authored normal, flattening a dense mesh into a card; it now rotates the
+authored normal by the shortest-arc rotation from the weighted native bind normal to the current
+normal. Combined (`overlay`) mode also drew the authored surface behind the native hand's depth;
+it now draws after the first color pass without depth testing. Authored-only mode suppresses the
+native hand and leaves depth testing on so its own layers occlude each other.
+
+**Live captures:** `.tmp/99-shell-093.png` shows the 0.9.3 shell fallback (blue shell, white/blue
+feathers, native arm covered) and is the accepted visual state. `.tmp/99-authored-normals.png`,
+`.tmp/99-auth-depth.png` and `.tmp/99-arm-41k.png` record the authored-mesh probes. They show
+that the 41k mesh is loading and rendering, but it still reads as a low wrist/feather mass in the
+overlay and as a centered, static gold arm in direct-arm mode. The authored hand/claws do not yet
+align with the native first-person hand, and the palette still does not reproduce the original
+animated gold iridescence. The shell overlay is restored in the installed state; the authored
+fit remains the next blocker.
+
 ## 2026-11-02 (live blue arm shell on Xvfb)
 
 **The overlay path now renders a blue feathered arm in real gameplay.** The builder appends a
