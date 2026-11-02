@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Attach authored feather cards to the extracted HYPER DEMON hand mesh.
+"""Attach authored feather cards and a blue arm shell to the extracted HYPER DEMON hand mesh.
 
 The original arm buffer is already posed and carries no skinning data, so the
 feathers cannot be rigged to hidden bones. Instead each feather vertex is bound
@@ -208,12 +208,29 @@ def build_feathers(source):
         direction = Vector((0.0, 0.86, 0.0)) + normal * 0.28
         add_card(location + normal * 0.0035, normal, direction, 0.026, 0.0085)
 
+    # A blue shell over the extracted arm itself. It is a copy of the captured
+    # surface biased slightly outward, so the native gold arm is hidden while
+    # the same live vertex deltas drive the shell. The shader still supplies
+    # the lighting and iridescent reflection.
+    source.data.calc_loop_triangles()
+    shell_base = len(vertices)
+    shell_faces: list[tuple[int, int, int]] = []
+    for vertex in source.data.vertices:
+        normal = vertex.normal.normalized() if vertex.normal.length > 1e-6 else Vector((0.0, 0.0, 1.0))
+        vertices.append(vertex.co + normal * 0.0025)
+        uvs.append((0.24 if vertex.index % 7 else 0.42, 0.50))
+    for triangle in source.data.loop_triangles:
+        shell_faces.append(tuple(shell_base + index for index in triangle.vertices))
+
     triangles: list[tuple[int, int, int]] = []
     triangle_materials: list[int] = []
     for face, material_index in faces:
         a, b, c, d = face
         triangles.extend(((a, b, c), (a, c, d)))
         triangle_materials.extend((material_index, material_index))
+    for face in shell_faces:
+        triangles.append(face)
+        triangle_materials.append(2)
 
     mesh = bpy.data.meshes.new("FeatherOverlayMesh")
     mesh.from_pydata([tuple(point) for point in vertices], [], triangles)
@@ -223,8 +240,10 @@ def build_feathers(source):
         uv_layer.data[loop.index].uv = uvs[loop.vertex_index]
     blue = material("FeatherBlue", (0.020, 0.095, 0.50), 0.35, 0.34)
     gold = material("FeatherGold", (0.82, 0.50, 0.045), 0.80, 0.22)
+    shell_blue = material("ArmBlue", (0.012, 0.055, 0.36), 0.45, 0.28)
     mesh.materials.append(blue)
     mesh.materials.append(gold)
+    mesh.materials.append(shell_blue)
     for index, polygon in enumerate(mesh.polygons):
         polygon.material_index = triangle_materials[index]
         polygon.use_smooth = False

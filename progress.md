@@ -1,5 +1,24 @@
 # Session progress
 
+## 2026-11-02 (live blue arm shell on Xvfb)
+
+**The overlay path now renders a blue feathered arm in real gameplay.** The builder appends a
+blue shell made from the 238-vertex extracted arm, offset 0.0025 outward, to the 24 feather
+cards. The combined overlay is 718 vertices / 2,484 indices / 828 triangles / 55,920 bytes and
+still binds every vertex to the four nearest original vertices. A live `overlay` capture on the
+Xvfb `:99` instance shows the native gold arm covered by the blue shell with the blue/white
+feather crest at the wrist and gold highlights. The local capture is `.tmp/99-shell.png`.
+
+**Display/input unblock:** Gunfire Reborn still holds `:0`. A direct Proton launch on Xvfb `:99`
+ran a second HYPER DEMON instance without disturbing it. XTest and Win32 `PostMessage` were
+ignored; `tools/re/win_input_probe.c`, run in the same prefix, enters gameplay with
+`SetCursorPos` + `mouse_event`/`keybd_event`. This is the reproducible route for future visual
+iteration.
+
+The shell is not final: its feathers form a wrist cape rather than a forearm wing, its blue/white
+material only weakly reproduces the original gold iridescence, and the authored 41,482-vertex
+Berdly mesh / 16-bone rig is still not driving the overlay. Do not claim the final look yet.
+
 ## 2026-11-02 (overlay pass fix and palette sweep)
 
 **Found the overlay visibility bug.** The feather shell was drawn after the second hand pass,

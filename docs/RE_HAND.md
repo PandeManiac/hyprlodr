@@ -633,25 +633,36 @@ or the original asset, neither of which this buffer contains.
 `tools/assets/import_hand_vbo.py` reconstructs the captured mesh in Blender with positions,
 per-vertex normals, both UV sets and the two index groups. It writes only to the ignored
 `assets/hand-extract/` directory; the dump and the `.blend` are never committed.
-`tools/assets/build_feather_overlay.py` then authors 24 feather cards on that surface. Every
-feather vertex is bound to its four nearest original vertices (weight-sum error 2.2e-16), and the
-tool exports a 35,936-byte `feather_overlay.bin` (480 vertices, 432 triangles) using a small
-binary format with positions, normals, UVs and the four bind indices/weights. The first 43-card
-layout was a dense 64,360-byte shell and read as a blob; the current layout uses four shorter
-covert rows, five swept primaries and two hand coverts.
+`tools/assets/build_feather_overlay.py` authors 24 feather cards on that surface and appends a
+blue shell made from the extracted arm itself. The shell is the 238-vertex captured surface
+offset 0.0025 outward along its normals; the whole overlay is 718 vertices / 2,484 indices
+(828 triangles) / 55,920 bytes. Every shell and feather vertex is bound to its four nearest
+original vertices (weight-sum error 2.2e-16), so the shell and cards follow the same live
+per-vertex deltas. The first 43-card layout was a dense 64,360-byte shell and read as a blob;
+the current layout uses four shorter covert rows, five swept primaries and two hand coverts.
 
 `example.hand-hook` 0.9.2's `overlay` mode keeps the native arm draw and animation, reads the
-live 238-vertex VBO, deforms the feather vertices by the same weighted per-vertex deltas and
-draws the result. **The pass order was the integration bug:** drawing after the second hand pass
-used the screen-blend program, so the shell was invisible or sampled the wrong state. Drawing
-after the first color pass made it visible in the `overlay-only` diagnostic: **9,081 overlay
-updates/draws**, bind loaded, palette created, GL error 0. The diagnostic frame shows a dense
-gold feather mass, confirming geometry and the live deformation path but not yet the intended
-blue wing. The palette is now bound across every texture unit for the feather draw instead of
-only the single `tex_diffuse`/`tex_grad` sampler; the 24-card reduced shell is rendered offline
-in `assets/hand-extract/feathered_arm_fp.png`. A combined gameplay/palette capture is pending:
-the unrelated Gunfire Reborn session held the only display, so it must not be treated as
-visually accepted yet.
+live 238-vertex VBO, deforms the shell and feather vertices by the same weighted per-vertex
+deltas and draws the result. **The pass order was the integration bug:** drawing after the second
+hand pass used the screen-blend program, so the shell was invisible or sampled the wrong state.
+Drawing after the first color pass made it visible in the `overlay-only` diagnostic: **9,081
+overlay updates/draws**, bind loaded, palette created, GL error 0. The palette is bound across
+every texture unit for the feather draw instead of only the single `tex_diffuse`/`tex_grad`
+sampler.
+
+**Live gameplay verification:** a second instance was launched directly through Proton on the
+existing Xvfb `:99` display at 1920x1080, leaving the unrelated Gunfire Reborn session on `:0`
+untouched. XTest and Win32 `PostMessage` are ignored by the game's input path; a Win32 helper
+running in the same Proton prefix using `SetCursorPos` + `mouse_event`/`keybd_event` reached the
+title menu and entered gameplay. The `overlay` capture shows the native animated gold arm with
+the blue shell covering the forearm and the blue/white feather crest at the wrist, with gold
+highlights. The local capture is `.tmp/99-shell.png` (not committed). This is the first combined
+live blue/gold shell capture.
+
+**Still not accepted:** the feather cards cluster as a cape at the wrist rather than following
+the forearm, the shell's material reads mostly blue/white instead of reproducing the original
+gold interference, and the modeled 41,482-vertex Berdly mesh / 16-bone rig is not yet bound to
+the live buffer. The shell is a copy of the original arm, not yet the authored Berdly arm.
 
 ## Next experiments, in order
 
