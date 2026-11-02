@@ -633,20 +633,25 @@ or the original asset, neither of which this buffer contains.
 `tools/assets/import_hand_vbo.py` reconstructs the captured mesh in Blender with positions,
 per-vertex normals, both UV sets and the two index groups. It writes only to the ignored
 `assets/hand-extract/` directory; the dump and the `.blend` are never committed.
-`tools/assets/build_feather_overlay.py` then authors 43 feather cards on that surface. Every
+`tools/assets/build_feather_overlay.py` then authors 24 feather cards on that surface. Every
 feather vertex is bound to its four nearest original vertices (weight-sum error 2.2e-16), and the
-tool exports a 64,360-byte `feather_overlay.bin` (860 vertices, 774 triangles) using a small
-binary format with positions, normals, UVs and the four bind indices/weights.
+tool exports a 35,936-byte `feather_overlay.bin` (480 vertices, 432 triangles) using a small
+binary format with positions, normals, UVs and the four bind indices/weights. The first 43-card
+layout was a dense 64,360-byte shell and read as a blob; the current layout uses four shorter
+covert rows, five swept primaries and two hand coverts.
 
-`example.hand-hook` 0.9.0's `overlay` mode keeps the native arm draw and animation, reads the
+`example.hand-hook` 0.9.2's `overlay` mode keeps the native arm draw and animation, reads the
 live 238-vertex VBO, deforms the feather vertices by the same weighted per-vertex deltas and
-draws the result after the second hand pass with the authored blue/gold palette. A live lobby
-run loaded the feather mesh and bind pose, prepared the private VAO, and recorded **15,364
-overlay updates and draws with GL error 0**; the native arm stayed visible. **Visual result:**
-the overlay draws, but the captured frame does not show separable feather layers — most cards
-still read as part of the gold arm silhouette. This is a placement/occlusion result, not a draw
-failure. The next check is an overlay-only diagnostic and a bind capture from the same live
-pose; do not treat the counter as visual acceptance.
+draws the result. **The pass order was the integration bug:** drawing after the second hand pass
+used the screen-blend program, so the shell was invisible or sampled the wrong state. Drawing
+after the first color pass made it visible in the `overlay-only` diagnostic: **9,081 overlay
+updates/draws**, bind loaded, palette created, GL error 0. The diagnostic frame shows a dense
+gold feather mass, confirming geometry and the live deformation path but not yet the intended
+blue wing. The palette is now bound across every texture unit for the feather draw instead of
+only the single `tex_diffuse`/`tex_grad` sampler; the 24-card reduced shell is rendered offline
+in `assets/hand-extract/feathered_arm_fp.png`. A combined gameplay/palette capture is pending:
+the unrelated Gunfire Reborn session held the only display, so it must not be treated as
+visually accepted yet.
 
 ## Next experiments, in order
 

@@ -16,6 +16,8 @@
  *               when the program has none, its tex_diffuse skin atlas
  *   "overlay"   keep the native animated hand and draw authored feather cards
  *               bound to its live vertex positions
+ *   "overlay-only"  diagnostic: suppress the native hand, draw only the
+ *               feather cards deformed from its live vertex positions
  *   anything else (or no file)  pass every draw through unchanged
  *
  * Cube mode is the geometry-replacement proof. The first hand draw creates a
@@ -43,7 +45,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.9.0"
+#define MOD_VERSION "0.9.2"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -298,6 +300,7 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
         else if (has_prefix(word, "cube")) mode = 2;
         else if (has_prefix(word, "arm")) mode = 3;
         else if (has_prefix(word, "palette")) mode = 4;
+        else if (has_prefix(word, "overlay-only")) mode = 6;
         else if (has_prefix(word, "overlay")) mode = 5;
     }
     fclose(file);
@@ -310,6 +313,7 @@ static const char *mode_name(unsigned mode) {
     if (mode == 3) return "arm";
     if (mode == 4) return "palette";
     if (mode == 5) return "overlay";
+    if (mode == 6) return "overlay-only";
     return "pass-through";
 }
 
@@ -1209,6 +1213,12 @@ static void prepare_feather_geometry(void) {
     hypr_hand_debug[48] = 1;
 }
 
+static unsigned long long float_bits(float value) {
+    unsigned bits = 0;
+    memcpy(&bits, &value, 4);
+    return (unsigned long long)bits;
+}
+
 static int update_feather_pose(void) {
     if (!g_bind_valid) {
         int hand = 0;
@@ -1229,6 +1239,9 @@ static int update_feather_pose(void) {
         hypr_hand_debug[43] = 2;
     }
 
+    float bounds_min[3] = {1.0e9f, 1.0e9f, 1.0e9f};
+    float bounds_max[3] = {-1.0e9f, -1.0e9f, -1.0e9f};
+    float max_delta = 0.0f;
     for (unsigned i = 0; i < g_feather_vertex_count; ++i) {
         const feather_vertex *vertex = &g_feather_vertices[i];
         float position[3] = {vertex->position[0], vertex->position[1], vertex->position[2]};
@@ -1245,7 +1258,21 @@ static int update_feather_pose(void) {
         }
         normalise3(normal);
         feather_write_record(i, position, normal);
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            if (position[axis] < bounds_min[axis]) bounds_min[axis] = position[axis];
+            if (position[axis] > bounds_max[axis]) bounds_max[axis] = position[axis];
+        }
+        float delta = position[0] - vertex->position[0];
+        if (delta < 0.0f) delta = -delta;
+        if (delta > max_delta) max_delta = delta;
     }
+    hypr_hand_debug[49] = float_bits(bounds_min[0]);
+    hypr_hand_debug[50] = float_bits(bounds_min[1]);
+    hypr_hand_debug[51] = float_bits(bounds_min[2]);
+    hypr_hand_debug[52] = float_bits(bounds_max[0]);
+    hypr_hand_debug[53] = float_bits(bounds_max[1]);
+    hypr_hand_debug[54] = float_bits(bounds_max[2]);
+    hypr_hand_debug[55] = float_bits(max_delta);
 
     g_bind_buffer(GL_ARRAY_BUFFER, g_feather_gl_vbo);
     g_buffer_sub_data(GL_ARRAY_BUFFER, 0, (long long)g_feather_vertex_count * 72,
@@ -1255,7 +1282,7 @@ static int update_feather_pose(void) {
     return 1;
 }
 
-static int ensure_feather_palette(unsigned program, int *out_unit, unsigned *out_texture) {
+static int ensure_feather_palette(unsigned *out_texture) {
     if (!g_feather_palette_texture) {
         if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
             !g_active_texture || !g_get_integerv)
@@ -1284,16 +1311,8 @@ static int ensure_feather_palette(unsigned program, int *out_unit, unsigned *out
         g_feather_palette_texture = texture;
         hypr_hand_debug[47] = texture;
     }
-    if (!g_get_uniform_location || !g_get_uniformiv) return 0;
-    int sampler = g_get_uniform_location(program, "tex_diffuse");
-    if (sampler < 0) sampler = g_get_uniform_location(program, "tex_grad");
-    if (sampler < 0) return 0;
-    int unit = -1;
-    g_get_uniformiv(program, sampler, &unit);
-    if (unit < 0) return 0;
-    *out_unit = unit;
     *out_texture = g_feather_palette_texture;
-    return 1;
+    return g_feather_palette_texture != 0;
 }
 
 static void draw_feather_overlay(void) {
@@ -1302,30 +1321,50 @@ static void draw_feather_overlay(void) {
     if (!update_feather_pose()) return;
     int program = 0;
     g_get_integerv(GL_CURRENT_PROGRAM, &program);
-    int palette_unit = -1;
     unsigned palette_texture = 0;
-    int have_palette = program > 0 && ensure_feather_palette((unsigned)program,
-                                                              &palette_unit,
-                                                              &palette_texture);
-    int previous_vao = 0, previous_active = 0, previous_texture = 0;
+    int have_palette = ensure_feather_palette(&palette_texture);
+    int previous_vao = 0, previous_active = 0, previous_textures[8] = {0};
+    int bound_units = 0, max_units = 0;
     g_get_integerv(GL_VERTEX_ARRAY_BINDING, &previous_vao);
-    g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
     if (have_palette) {
-        g_active_texture(GL_TEXTURE0 + (unsigned)palette_unit);
-        g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
-        g_bind_texture(GL_TEXTURE_2D, palette_texture);
+        /* The hand shader path changes samplers between passes; bind the
+         * authored palette to every image unit used by the current program so
+         * colour, mask and screen-blend lookups all resolve to it. */
+        g_get_integerv(0x8872, &max_units); /* GL_MAX_TEXTURE_IMAGE_UNITS */
+        if (max_units < 1) max_units = 1;
+        if (max_units > 8) max_units = 8;
+        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+        for (int unit = 0; unit < max_units; ++unit) {
+            g_active_texture(GL_TEXTURE0 + (unsigned)unit);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[unit]);
+            g_bind_texture(GL_TEXTURE_2D, palette_texture);
+        }
+        bound_units = max_units;
+        hypr_hand_debug[56] = (unsigned long long)(unsigned)program;
+        hypr_hand_debug[57] = (unsigned long long)have_palette;
+        hypr_hand_debug[58] = (unsigned long long)max_units;
+        hypr_hand_debug[59] = palette_texture;
     }
     unsigned char cull_on = 0;
+    unsigned char depth_on = 0;
     if (g_is_enabled && g_disable) {
         cull_on = g_is_enabled(GL_CULL_FACE);
         g_disable(GL_CULL_FACE);
+        if (g_mode == 6) {
+            depth_on = g_is_enabled(GL_DEPTH_TEST);
+            g_disable(GL_DEPTH_TEST);
+        }
     }
     g_bind_vertex_array(g_feather_vao);
     g_original_draw(GL_TRIANGLES, (int)g_feather_index_count, GL_UNSIGNED_INT, NULL);
     g_bind_vertex_array((unsigned)previous_vao);
     if (g_enable && cull_on) g_enable(GL_CULL_FACE);
+    if (g_enable && depth_on) g_enable(GL_DEPTH_TEST);
     if (have_palette) {
-        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        for (int unit = 0; unit < bound_units; ++unit) {
+            g_active_texture(GL_TEXTURE0 + (unsigned)unit);
+            g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_textures[unit]);
+        }
         g_active_texture((unsigned)previous_active);
     }
     ++hypr_hand_debug[45];
@@ -1354,11 +1393,20 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
             draw_native_palette(mode, count, type, indices);
             return;
         }
+        if (g_mode == 6) {
+            /* Diagnostic: suppress the stock arm but keep its posed VBO so the
+             * feather shell can be inspected, fitted and palette-checked on
+             * its own. */
+            g_original_draw(mode, 0, type, indices);
+            if ((g_hand_draws & 1u) != 0) draw_feather_overlay();
+            return;
+        }
         if (g_mode == 5) {
             /* Keep the game's own animated arm draw; add the authored feather
-             * shell after the second (last) hand pass. */
+             * shell after the first color pass, whose program owns the skin and
+             * mask samplers. The second pass is the screen blend. */
             g_original_draw(mode, count, type, indices);
-            if ((g_hand_draws & 1u) == 0) draw_feather_overlay();
+            if ((g_hand_draws & 1u) != 0) draw_feather_overlay();
             return;
         }
         if (g_mode == 1) count = 0;
@@ -1392,7 +1440,7 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     g_original_draw = (draw_elements_fn)original;
     g_mode = read_mode(host);
     build_cube();
-    if (g_mode == 5) {
+    if (g_mode == 5 || g_mode == 6) {
         int mesh_ok = load_feather_mesh();
         int bind_ok = load_bind_pose();
         if (mesh_ok)

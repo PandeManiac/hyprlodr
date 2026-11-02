@@ -1,5 +1,25 @@
 # Session progress
 
+## 2026-11-02 (overlay pass fix and palette sweep)
+
+**Found the overlay visibility bug.** The feather shell was drawn after the second hand pass,
+which is the screen-blend program. The normal counter showed tens of thousands of successful
+draws while the shell remained invisible. An `overlay-only` diagnostic plus first-pass drawing
+made it visible and recorded a sane deformed bound (`x -0.040..0.056`, `y -0.175..0.112`,
+`z -0.090..0.063`) and 9,081 draws. The diagnostic frame is a dense gold feather mass, so the
+next fault is material/shape, not placement.
+
+The palette creation no longer depends on a single `tex_diffuse`/`tex_grad` lookup. The feather
+draw binds the authored five-column blue/gold palette to every texture unit and restores them
+afterward, so colour, mask and screen-blend samplers all resolve to authored data. The card
+layout was reduced from 43/860 vertices to 24/480 vertices with shorter coverts and primaries;
+the offline front render is a layered crest rather than a full-body blob.
+
+The unrelated Gunfire Reborn session occupied the display for this pass, so the new palette and
+reduced shell have not been captured in gameplay yet. The static modeled arm (41,482 vertices)
+and the 16-bone runtime GLB remain available, but the overlay path is the one with verified live
+animation. Do not claim the blue/gold look until a fresh gameplay capture exists.
+
 ## 2026-11-02 (original-arm extraction, Blender feathers, runtime overlay)
 
 **Pivoted from palette tweaking to the original game arm as the deformation source.** Local

@@ -121,8 +121,8 @@ def make_card(root: Vector, normal: Vector, direction: Vector, length: float,
     rib_uvs: list[tuple[float, float]] = []
     for segment in range(segments + 1):
         t = segment / segments
-        centre = root + direction * (length * t) + normal * (0.006 * math.sin(math.pi * t))
-        centre -= normal * (0.008 * t * t)
+        centre = root + direction * (length * t) + normal * (0.0035 * math.sin(math.pi * t))
+        centre -= normal * (0.004 * t * t)
         half = width * (0.30 + 0.70 * math.sin(math.pi * (0.18 + 0.82 * t))) * (1.0 - 0.42 * t)
         if 0.55 < t < 0.9:
             half *= 1.05
@@ -169,11 +169,10 @@ def build_feathers(source):
             faces.append((tuple(rib_base + i for i in face), 1))
         cards.append(card)
 
-    # Forearm coverts: five overlapping rows on the upper/outer half. They lie
-    # toward the wrist so each row overlaps the next and reads as a coat rather
-    # than a fan of plates.
-    stations = (-0.175, -0.140, -0.105, -0.070, -0.035)
-    angles = (0.40, 1.00, 1.60, 2.20, 4.00, 4.60, 5.20)
+    # Forearm coverts: four overlapping rows on the upper/outer half. Keep the
+    # cards short and sparse so they read as a coat instead of a full shell.
+    stations = (-0.165, -0.120, -0.075, -0.030)
+    angles = (0.55, 1.10, 1.65, 4.55, 5.10)
     for row, y in enumerate(stations):
         center = cross_section_center(source, y)
         for column, angle in enumerate(angles):
@@ -182,32 +181,32 @@ def build_feathers(source):
                 continue
             location, normal = hit
             direction = Vector((0.0, 0.94, 0.0)) + normal * 0.16
-            length = 0.046 + 0.005 * ((row + column) % 3)
-            width = 0.013 + 0.002 * ((row + column) % 2)
-            add_card(location + normal * 0.0060, normal, direction, length, width)
+            length = 0.034 + 0.004 * ((row + column) % 3)
+            width = 0.010 + 0.0015 * ((row + column) % 2)
+            add_card(location + normal * 0.0035, normal, direction, length, width)
 
     # Wrist primaries sweep back over the forearm; they are longer and narrower
     # than the coverts and leave the hand itself clear.
     center = cross_section_center(source, -0.010)
-    for index, angle in enumerate((0.20, 0.80, 1.40, 2.00, 4.40, 5.00, 5.60)):
+    for index, angle in enumerate((0.45, 1.05, 1.65, 4.55, 5.15)):
         hit = surface_hit(source, center, angle)
         if hit is None:
             continue
         location, normal = hit
         direction = Vector((0.0, -0.96, 0.0)) + normal * 0.15
-        length = 0.120 + 0.010 * (index % 3)
-        width = 0.020 + 0.002 * (index % 2)
-        add_card(location + normal * 0.0080, normal, direction, length, width)
+        length = 0.080 + 0.008 * (index % 3)
+        width = 0.014 + 0.0015 * (index % 2)
+        add_card(location + normal * 0.0050, normal, direction, length, width)
 
     # Small coverts on the back of the hand.
-    for index, angle in enumerate((1.15, 1.75, 4.55)):
+    for index, angle in enumerate((1.25, 4.75)):
         center = cross_section_center(source, 0.050 + 0.018 * index)
         hit = surface_hit(source, center, angle)
         if hit is None:
             continue
         location, normal = hit
         direction = Vector((0.0, 0.86, 0.0)) + normal * 0.28
-        add_card(location + normal * 0.0060, normal, direction, 0.030, 0.010)
+        add_card(location + normal * 0.0035, normal, direction, 0.026, 0.0085)
 
     triangles: list[tuple[int, int, int]] = []
     triangle_materials: list[int] = []
