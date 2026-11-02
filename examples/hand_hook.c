@@ -152,18 +152,17 @@ static unsigned g_arm_vertex_count;
 static unsigned g_arm_index_count;
 static unsigned g_geometry_count;
 
-/* Our own blue feather texture, uploaded once with the arm VAO. The game's
- * program and material stay bound; only the diffuse sampler is redirected for
- * the two substituted draws, then every piece of state is restored. */
+/* Our blue/gold palette is uploaded once. The game's diffuse screen sample,
+ * reflection and specular inputs stay bound; only tex_grad is redirected. */
 static unsigned char g_blue_pixels[BLUE_TEXTURE_SIZE * BLUE_TEXTURE_SIZE * 4];
 static unsigned g_blue_texture;
 
 /* The two hand passes use different programs but share the same texture object.
- * Each program's existing tex_diffuse unit is read once and cached. */
+ * Each program's existing tex_grad unit is read once and cached. */
 typedef struct material_state {
     unsigned program;
-    int diffuse_sampler;
-    int texture_unit;
+    int gradient_sampler;
+    int gradient_unit;
 } material_state;
 static material_state g_materials[2];
 static unsigned g_material_count;
@@ -399,9 +398,35 @@ static void build_blue_pixels(void) {
     }
 }
 
+/* Rebinding a unit changes every sampler assigned to it. Only replace the
+ * gradient when it has a dedicated unit so the screen blend and reflections
+ * continue reading the game's original textures. */
+static int gradient_unit_is_exclusive(unsigned program, int gradient_sampler,
+                                     int gradient_unit) {
+    static const char *const protected_samplers[] = {
+        "tex_diffuse", "tex_reflect", "tex_mask", "tex_edgespec", "tex_spec", "tex_cns"
+    };
+    for (unsigned i = 0; i < sizeof protected_samplers / sizeof protected_samplers[0]; ++i) {
+        int location = g_get_uniform_location(program, protected_samplers[i]);
+        if (location < 0 || location == gradient_sampler) continue;
+        int unit = -1;
+        g_get_uniformiv(program, location, &unit);
+        if (unit == gradient_unit) return 0;
+    }
+    return 1;
+}
+
 static void prepare_blue_texture(unsigned program) {
     if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
-        !g_get_integerv || !g_get_uniform_location || !g_active_texture)
+        !g_get_integerv || !g_get_uniform_location || !g_get_uniformiv || !g_active_texture)
+        return;
+
+    int gradient_sampler = g_get_uniform_location(program, "tex_grad");
+    if (gradient_sampler < 0) return;
+    int sampler_unit = 0;
+    g_get_uniformiv(program, gradient_sampler, &sampler_unit);
+    if (sampler_unit < 0 || sampler_unit > 31 ||
+        !gradient_unit_is_exclusive(program, gradient_sampler, sampler_unit))
         return;
 
     build_blue_pixels();
@@ -419,18 +444,13 @@ static void prepare_blue_texture(unsigned program) {
                    GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
     g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
 
-    int diffuse_sampler = g_get_uniform_location(program, "tex_diffuse");
-    int sampler_unit = 0;
-    if (diffuse_sampler >= 0 && g_get_uniformiv)
-        g_get_uniformiv(program, diffuse_sampler, &sampler_unit);
-    if (sampler_unit < 0 || sampler_unit > 31) sampler_unit = 0;
     g_materials[0].program = program;
-    g_materials[0].diffuse_sampler = diffuse_sampler;
-    g_materials[0].texture_unit = sampler_unit;
+    g_materials[0].gradient_sampler = gradient_sampler;
+    g_materials[0].gradient_unit = sampler_unit;
     g_material_count = 1;
     g_blue_texture = texture;
     g_texture_ready = 1;
-    hypr_hand_debug[20] = (unsigned long long)(diffuse_sampler + 1);
+    hypr_hand_debug[20] = (unsigned long long)(gradient_sampler + 1);
     hypr_hand_debug[21] = texture;
     hypr_hand_debug[22] = (unsigned long long)sampler_unit;
     hypr_hand_debug[23] = 1;
@@ -444,21 +464,22 @@ static void prepare_blue_texture(unsigned program) {
     hypr_hand_debug[33] = g_get_error ? g_get_error() : 0;
 }
 
-/* Resolve the diffuse unit for a second hand program on first sight. The
+/* Resolve the gradient unit for a second hand program on first sight. The
  * program is current at this point, so the uniform queries are valid. */
 static int material_state_for(unsigned program) {
     for (unsigned i = 0; i < g_material_count; ++i)
         if (g_materials[i].program == program) return (int)i;
-    if (g_material_count >= 2 || !g_get_uniform_location) return -1;
-    int location = g_get_uniform_location(program, "tex_diffuse");
+    if (g_material_count >= 2 || !g_get_uniform_location || !g_get_uniformiv) return -1;
+    int location = g_get_uniform_location(program, "tex_grad");
     if (location < 0) return -1;
     int unit = 0;
-    if (g_get_uniformiv) g_get_uniformiv(program, location, &unit);
-    if (unit < 0 || unit > 31) unit = 0;
+    g_get_uniformiv(program, location, &unit);
+    if (unit < 0 || unit > 31 || !gradient_unit_is_exclusive(program, location, unit))
+        return -1;
     material_state *state = &g_materials[g_material_count];
     state->program = program;
-    state->diffuse_sampler = location;
-    state->texture_unit = unit;
+    state->gradient_sampler = location;
+    state->gradient_unit = unit;
     ++g_material_count;
     hypr_hand_debug[37] = program;
     return (int)(g_material_count - 1);
@@ -585,7 +606,6 @@ static void prepare_geometry(void) {
     g_geometry_count = index_count;
     hypr_hand_debug[2] = 1;
     hypr_hand_debug[13] = (unsigned long long)program;
-    if (g_mode == 3) prepare_blue_texture((unsigned)program);
     hypr_hand_debug[14] = g_get_error ? g_get_error() : 0;
     g_geometry_state = 1;
 }
@@ -604,16 +624,22 @@ static void draw_substitute(void) {
     int texture_bound = 0;
     int previous_active = 0;
     int previous_texture = 0;
-    int diffuse_unit = -1;
-    if (g_texture_ready && g_get_integerv && g_active_texture && g_bind_texture) {
+    int gradient_unit = -1;
+    if (g_mode == 3 && g_get_integerv) {
         int current_program = 0;
         g_get_integerv(0x8B8Du, &current_program);
         hypr_hand_debug[34] = (unsigned long long)(unsigned)current_program;
+        if (!g_texture_ready && current_program > 0)
+            prepare_blue_texture((unsigned)current_program);
+    }
+    if (g_texture_ready && g_get_integerv && g_active_texture && g_bind_texture) {
+        int current_program = 0;
+        g_get_integerv(0x8B8Du, &current_program);
         int state_index = material_state_for((unsigned)current_program);
         g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
         if (state_index >= 0) {
-            diffuse_unit = g_materials[state_index].texture_unit;
-            g_active_texture(GL_TEXTURE0 + (unsigned)diffuse_unit);
+            gradient_unit = g_materials[state_index].gradient_unit;
+            g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
             g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
             g_bind_texture(GL_TEXTURE_2D, g_blue_texture);
             texture_bound = 1;
@@ -627,7 +653,7 @@ static void draw_substitute(void) {
     g_original_draw(GL_TRIANGLES, (int)g_geometry_count, GL_UNSIGNED_INT, NULL);
     g_bind_vertex_array((unsigned)previous);
     if (texture_bound) {
-        g_active_texture(GL_TEXTURE0 + (unsigned)diffuse_unit);
+        g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
         g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
         g_active_texture((unsigned)previous_active);
         ++hypr_hand_debug[32];

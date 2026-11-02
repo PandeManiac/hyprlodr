@@ -141,11 +141,9 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
                 normal[0],
                 normal[1],
                 normal[2],
-                # Keep authored UVs: the replacement binds its own opaque blue
-                # feather texture to tex_diffuse, while the game's other
-                # material samplers remain untouched for its gold reflections.
-                # Five diffuse atlas columns preserve the authored material
-                # identity that a single game hand shader would otherwise lose.
+                # Five tex_grad palette columns preserve the authored material
+                # identity. Keep uv0 in the runtime layout for other shader
+                # inputs; tex_diffuse remains the game's screen-space blend.
                 # Keep a small gutter at each edge to prevent linear-filter bleed.
                 (material_slot + 0.035 + uv[0] * 0.93) / 5.0,
                 uv[1],
@@ -202,13 +200,13 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
         "bbox_min": [round(value, 6) for value in bbox_min],
         "bbox_max": [round(value, 6) for value in bbox_max],
         "bytes": out.stat().st_size,
-        "material_atlas": {
+        "gradient_atlas": {
             "columns": 5,
             "slots": sorted(set(material_slots)),
             "source_materials": [material.get("name", f"material_{index}")
                                  for index, material in enumerate(doc.get("materials", []))],
         },
-        "note": "Static bind-pose geometry in game hand space. Authored UVs address five blue/gold diffuse atlas regions; original game reflection and gradient samplers stay bound.",
+        "note": "Static bind-pose geometry in game hand space. Authored UVs address five palette regions bound to tex_grad; tex_diffuse screen blending and reflection samplers stay bound.",
     }
     meta.write_text(json.dumps(metadata, indent=2) + "\n")
     print(

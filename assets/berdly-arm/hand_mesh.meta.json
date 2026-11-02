@@ -24,7 +24,7 @@
     0.08461
   ],
   "bytes": 1349712,
-  "material_atlas": {
+  "gradient_atlas": {
     "columns": 5,
     "slots": [
       0,
@@ -41,5 +41,5 @@
       "BerdlyIridescent"
     ]
   },
-  "note": "Static bind-pose geometry in game hand space. Authored UVs address five blue/gold diffuse atlas regions; original game reflection and gradient samplers stay bound."
+  "note": "Static bind-pose geometry in game hand space. Authored UVs address five palette regions bound to tex_grad; tex_diffuse screen blending and reflection samplers stay bound."
 }

@@ -361,10 +361,11 @@ cube. No game buffer is touched.
 `tools/assets/convert_glb_to_hand_mesh.py` converts `berdly_arm.runtime16.glb`
 into that binary: positions in hand space, authored normals and UVs, and u32
 indices. The converter packs the source's five material slots into separate
-diffuse-atlas columns (blue, light blue, warm cream/gold, dark claw blue and
-iridescent blue). The hook binds that texture only to each active hand program's
-`tex_diffuse` unit, preserving the game's gradient and reflection texture
-bindings for its original gold/iridescent response. The live-verified
+palette columns (blue, light blue, warm cream/gold, dark claw blue and
+iridescent blue). The hook binds that palette only to each active hand
+program's `tex_grad` unit. It leaves `tex_diffuse` bound to the game's
+screen-space hand blend and preserves reflection and edge-specular inputs for
+the HYPER DEMON shimmer. The live-verified
 orientation is a 180-degree X remap. Based on the recorded oversized, centered
 capture and the stock mesh's measured span, the current asset fit is reduced to
 scale 0.32 and shifted right/down to offset (-0.0440, -0.1442, -0.1000).
@@ -378,9 +379,9 @@ winged claw silhouette, with its palm and spread digits, lit by the game's hand
 material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
 gone.
 
-The replacement uses its authored blue feather diffuse texture while retaining
-the game's other material inputs for gold reflections. The diffuse pattern now
-uses layered blue/cyan feather striations with sparse warm glints. The asset
+The replacement uses a blue/gold palette through `tex_grad` while retaining the
+game's screen blend and reflection inputs. The palette uses layered blue/cyan
+feather striations with sparse warm glints. The asset
 remains static bind-pose geometry and is not yet driven by the baked actions.
 Live verification of the sampler change and adjusted framing is still required.
 
