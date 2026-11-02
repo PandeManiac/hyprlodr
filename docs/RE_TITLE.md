@@ -603,6 +603,12 @@ falsified and retracted: it is the game that discards injected keyboard and poin
 what a client reading XI2 raw input from a physical device would do, since XTEST events arrive on the
 virtual device. The menu round-trip stays **unverified**.
 
+**Follow-up (2026-11-02).** A persistent `/dev/uinput` keyboard was visible to the kernel as
+`event24` (`HYPRLODR persistent input`), but `xinput list` on `:99` still showed only the
+XTEST and Xvfb keyboard/pointer devices. Sending `Return` through that device left the game
+at the title menu. This harness still cannot provide a gameplay input path; the installed
+palette hook can be initialization-checked here, but its hand draw cannot be visually checked.
+
 Note what did work: the same window **is** responsive to window-manager requests. `wmctrl -b
 remove,fullscreen` followed by a resize to 1280x720 re-laid out the title at the new size, and
 restoring 1920x1080 re-laid it out again - all three states still showing the replacement. So the

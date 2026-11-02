@@ -12,6 +12,7 @@
  *   "suppress"  draw the hand passes with count zero
  *   "cube"      draw a solid test cube through the same program instead
  *   "arm"       draw the authored Berdly arm from <state_dir>/hand-mesh.bin
+ *   "palette"   keep the native animated hand; recolor through its tex_grad
  *   anything else (or no file)  pass every draw through unchanged
  *
  * Cube mode is the geometry-replacement proof. The first hand draw creates a
@@ -39,7 +40,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.5.0"
+#define MOD_VERSION "0.7.17"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -68,6 +69,15 @@ int _fltused = 0;
 #define GL_TEXTURE_2D 0x0DE1u
 #define GL_TEXTURE0 0x84C0u
 #define GL_TEXTURE_BINDING_2D 0x8069u
+#define GL_TEXTURE_WIDTH 0x1000u
+#define GL_TEXTURE_HEIGHT 0x1001u
+#define GL_MAX_TEXTURE_SIZE 0x0D33u
+#define GL_PIXEL_PACK_BUFFER 0x88EBu
+#define GL_PIXEL_PACK_BUFFER_BINDING 0x88EDu
+#define GL_PACK_ROW_LENGTH 0x0D02u
+#define GL_PACK_SKIP_ROWS 0x0D03u
+#define GL_PACK_SKIP_PIXELS 0x0D04u
+#define GL_PACK_ALIGNMENT 0x0D05u
 #define GL_ACTIVE_TEXTURE 0x84E0u
 #define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS 0x8B4Du
 #define GL_RGBA 0x1908u
@@ -80,7 +90,7 @@ int _fltused = 0;
 #define GL_TEXTURE_WRAP_T 0x2803u
 #define GL_REPEAT 0x2901u
 #define GL_CLAMP_TO_EDGE 0x812Fu
-#define BLUE_TEXTURE_SIZE 256
+#define BLUE_TEXTURE_MAX_SIZE 256
 
 typedef void (WINAPI *draw_elements_fn)(unsigned mode, int count, unsigned type,
                                         const void *indices);
@@ -105,6 +115,13 @@ typedef void (WINAPI *bind_texture_fn)(unsigned target, unsigned texture);
 typedef void (WINAPI *tex_image_2d_fn)(unsigned target, int level, int internal_format,
                                        int width, int height, int border, unsigned format,
                                        unsigned type, const void *pixels);
+typedef void (WINAPI *get_tex_level_parameteriv_fn)(unsigned target, int level,
+                                                    unsigned parameter, int *value);
+typedef void (WINAPI *get_tex_parameteriv_fn)(unsigned target, unsigned parameter,
+                                               int *value);
+typedef void (WINAPI *get_tex_image_fn)(unsigned target, int level, unsigned format,
+                                        unsigned type, void *pixels);
+typedef void (WINAPI *pixel_storei_fn)(unsigned pname, int value);
 typedef void (WINAPI *tex_parameteri_fn)(unsigned target, unsigned pname, int value);
 typedef void (WINAPI *active_texture_fn)(unsigned texture);
 typedef int (WINAPI *get_uniform_location_fn)(unsigned program, const char *name);
@@ -129,12 +146,16 @@ static disable_fn g_disable;
 static gen_textures_fn g_gen_textures;
 static bind_texture_fn g_bind_texture;
 static tex_image_2d_fn g_tex_image_2d;
+static get_tex_level_parameteriv_fn g_get_tex_level_parameteriv;
+static get_tex_parameteriv_fn g_get_tex_parameteriv;
+static get_tex_image_fn g_get_tex_image;
+static pixel_storei_fn g_pixel_storei;
 static tex_parameteri_fn g_tex_parameteri;
 static active_texture_fn g_active_texture;
 static get_uniform_location_fn g_get_uniform_location;
 static get_uniformiv_fn g_get_uniformiv;
 
-static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm */
+static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm, 4 palette */
 static unsigned long g_hand_draws;
 static unsigned long g_substituted;
 static int g_active;
@@ -152,21 +173,21 @@ static unsigned g_arm_vertex_count;
 static unsigned g_arm_index_count;
 static unsigned g_geometry_count;
 
-/* Our blue/gold palette is uploaded once. The game's diffuse screen sample,
- * reflection and specular inputs stay bound; only tex_grad is redirected. */
-static unsigned char g_blue_pixels[BLUE_TEXTURE_SIZE * BLUE_TEXTURE_SIZE * 4];
-static unsigned g_blue_texture;
+/* Scratch storage for one source ramp at a time. Each hand program retains
+ * its own recolored copy. The game's diffuse screen sample, reflection and
+ * specular inputs stay bound; only tex_grad is redirected. */
+static unsigned char g_blue_pixels[BLUE_TEXTURE_MAX_SIZE * BLUE_TEXTURE_MAX_SIZE * 4];
 
-/* The two hand passes use different programs but share the same texture object.
- * Each program's existing tex_grad unit is read once and cached. */
+/* The two hand passes may use different programs and gradient ramps. Keep a
+ * recolored texture per program so each pass preserves its own source colors. */
 typedef struct material_state {
     unsigned program;
     int gradient_sampler;
     int gradient_unit;
+    unsigned gradient_texture;
 } material_state;
 static material_state g_materials[2];
 static unsigned g_material_count;
-static int g_texture_ready;
 
 /* Read-only diagnostics for a debugger; never part of the mod API. */
 HYPR_EXPORT volatile unsigned long long hypr_hand_debug[40];
@@ -206,6 +227,7 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
         if (has_prefix(word, "suppress")) mode = 1;
         else if (has_prefix(word, "cube")) mode = 2;
         else if (has_prefix(word, "arm")) mode = 3;
+        else if (has_prefix(word, "palette")) mode = 4;
     }
     fclose(file);
     return mode;
@@ -215,6 +237,7 @@ static const char *mode_name(unsigned mode) {
     if (mode == 1) return "suppress";
     if (mode == 2) return "cube";
     if (mode == 3) return "arm";
+    if (mode == 4) return "palette";
     return "pass-through";
 }
 
@@ -325,6 +348,12 @@ static void resolve_gl(void) {
         g_bind_texture = (bind_texture_fn)GetProcAddress(module, "glBindTexture");
     if (!g_tex_image_2d)
         g_tex_image_2d = (tex_image_2d_fn)GetProcAddress(module, "glTexImage2D");
+    g_get_tex_level_parameteriv =
+        (get_tex_level_parameteriv_fn)GetProcAddress(module, "glGetTexLevelParameteriv");
+    g_get_tex_parameteriv =
+        (get_tex_parameteriv_fn)GetProcAddress(module, "glGetTexParameteriv");
+    g_get_tex_image = (get_tex_image_fn)GetProcAddress(module, "glGetTexImage");
+    g_pixel_storei = (pixel_storei_fn)GetProcAddress(module, "glPixelStorei");
     if (!g_tex_parameteri)
         g_tex_parameteri = (tex_parameteri_fn)GetProcAddress(module, "glTexParameteri");
     /* GL 1.1 entry points come from opengl32's export table, not
@@ -340,79 +369,52 @@ static void resolve_gl(void) {
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
 }
 
-/* Blue/cyan feather diffuse with narrow gold-to-cyan interference ribs. The
- * game's reflection and screen-blend inputs still provide broad, moving
- * iridescence; these authored accents make the Berdly palette legible even
- * where the environment reflection is dark. */
-static void build_blue_pixels(void) {
-    for (unsigned y = 0; y < BLUE_TEXTURE_SIZE; ++y) {
-        for (unsigned x = 0; x < BLUE_TEXTURE_SIZE; ++x) {
-            /* The converter packs the five glTF materials into five UV
-             * columns. Keep their color identities while tying them together
-             * with shared blue feather grain and restrained gold glints. */
-            unsigned slot = x * 5u / BLUE_TEXTURE_SIZE;
-            unsigned local_x = x * 5u % BLUE_TEXTURE_SIZE;
-            unsigned cross = local_x < BLUE_TEXTURE_SIZE / 2u
-                                 ? BLUE_TEXTURE_SIZE / 2u - local_x
-                                 : local_x - BLUE_TEXTURE_SIZE / 2u;
-            unsigned barb = (y * 7u + local_x * 3u) & 31u;
-            unsigned row = (y >> 4u) & 1u;
-            static const unsigned char palette[5][3] = {
-                {20, 66, 154},  /* BerdlyBlue */
-                {50, 126, 214}, /* BerdlyLight */
-                {174, 126, 40}, /* luminous amber-gold */
-                {12, 29, 73},   /* deep blue claws */
-                {42, 91, 156},  /* BerdlyIridescent */
-            };
-            unsigned red = palette[slot][0] + ((y * 5u + local_x * 3u) & 15u);
-            unsigned green = palette[slot][1] + ((y * 3u + local_x) & 23u);
-            unsigned blue = palette[slot][2] + ((y * 5u + local_x * 2u) & 31u);
-            if (barb < 3u) {
-                red += slot == 2u ? 20u : 10u;
-                green += slot == 2u ? 27u : 31u;
-                blue += slot == 2u ? 18u : 29u;
-            }
-            if (row) {
-                red += 5u;
-                green += 9u;
-                blue += 7u;
-            }
-            if (cross < 3u) {
-                red += slot == 2u ? 23u : 18u;
-                green += 34u;
-                blue += 27u;
-            }
-            if (slot != 2u && slot != 3u) {
-                /* Two thin diagonal ribs per UV repeat. Their hue cycles
-                 * between warm gold and cool cyan like an interference film,
-                 * without turning the feather albedo into a yellow stripe. */
-                unsigned phase = (local_x + y * 5u) & 255u;
-                unsigned rib = phase < 3u || (phase >= 127u && phase < 130u);
-                if (rib) {
-                    unsigned cool = (y >> 4u) & 1u;
-                    unsigned char shimmer[3] = {
-                        (unsigned char)(cool ? 74u : 190u),
-                        (unsigned char)(cool ? 179u : 142u),
-                        (unsigned char)(cool ? 224u : 58u),
-                    };
-                    red = (red * 2u + shimmer[0]) / 3u;
-                    green = (green * 2u + shimmer[1]) / 3u;
-                    blue = (blue * 2u + shimmer[2]) / 3u;
-                }
-            }
-            if (((local_x * 29u + y * 17u) % 251u) == 0u && cross < 14u) {
-                /* Tiny warm pinpricks echo the gold reflections without
-                 * turning the diffuse albedo into a yellow surface. */
-                red = 154u;
-                green = 108u;
-                blue = 42u;
-            }
-            unsigned char *pixel =
-                g_blue_pixels + ((size_t)y * BLUE_TEXTURE_SIZE + x) * 4u;
-            pixel[0] = (unsigned char)(red > 255u ? 255u : red);
-            pixel[1] = (unsigned char)(green > 255u ? 255u : green);
-            pixel[2] = (unsigned char)(blue > 255u ? 255u : blue);
-            pixel[3] = 255u;
+/* Recolor the game's own tex_grad ramp in place. Its original dimensions and
+ * texels define how the shader samples color, so preserving that structure is
+ * a better fit for the native animated hand than projecting the replacement
+ * mesh's five-column atlas onto it. Keep only the brightest warm ramp texels
+ * as gold accents; shift warm midtones and cooler body tones to layered
+ * navy/cobalt/cyan so the hand reads blue at gameplay scale. The original
+ * reflection samplers remain the source of broad, moving iridescence. */
+static void build_blue_pixels(unsigned width, unsigned height) {
+    size_t count = (size_t)width * height;
+    for (size_t i = 0; i < count; ++i) {
+        unsigned char *pixel = g_blue_pixels + i * 4u;
+        unsigned red = pixel[0], green = pixel[1], blue = pixel[2];
+        unsigned luma = (red * 54u + green * 183u + blue * 19u) >> 8u;
+        /* Gold ramps often reach yellow rather than orange at their bright
+         * end, where red and green are nearly equal. Use the blue separation
+         * to distinguish saturated gold from neutral white highlights. */
+        unsigned original[3] = {red, green, blue};
+        /* Preserve more of each warm ramp as gold and soften its edge into
+         * blue. The hue gate excludes neutral highlights; the broader ramp
+         * keeps gold visible at hand scale. */
+        int warm_hue = red + 16u >= green && green > blue + 20u &&
+                       red > 110u && green > 62u;
+        unsigned gold_mix = 0;
+        if (warm_hue && luma > 128u) {
+            /* Preserve a broader warm shoulder so gold remains visible at
+             * first-person scale instead of collapsing to a one-pixel rim.
+             * Ease toward the source gold so the broad shoulder does not sit
+             * as long in a low-saturation RGB midpoint. The cubic ease-out
+             * makes the warm band read as gold while leaving the cool ramps
+             * blue. */
+            gold_mix = (luma - 128u) * 255u / 107u;
+            if (gold_mix > 255u) gold_mix = 255u;
+            unsigned remaining = 255u - gold_mix;
+            gold_mix = 255u - remaining * remaining * remaining / (255u * 255u);
+        }
+        /* Keep green below half of blue so cool ramps read cobalt rather than
+         * cyan. Warm highlights remain sourced from the original gold ramp,
+         * and the reflection path still supplies moving metallic iridescence. */
+        unsigned recolored[3] = {3u + luma / 12u,
+                                 14u + luma * 48u / 100u,
+                                 38u + luma * 95u / 100u};
+        for (unsigned channel = 0; channel < 3; ++channel) {
+            if (recolored[channel] > 255u) recolored[channel] = 255u;
+            unsigned value = recolored[channel] * (255u - gold_mix) +
+                             original[channel] * gold_mix;
+            pixel[channel] = (unsigned char)((value + 127u) / 255u);
         }
     }
 }
@@ -422,6 +424,11 @@ static void build_blue_pixels(void) {
  * continue reading the game's original textures. */
 static int gradient_unit_is_exclusive(unsigned program, int gradient_sampler,
                                      int gradient_unit) {
+    int max_units = 0;
+    if (!g_get_integerv) return 0;
+    g_get_integerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &max_units);
+    if (gradient_unit < 0 || max_units <= gradient_unit) return 0;
+
     static const char *const protected_samplers[] = {
         "tex_diffuse", "tex_reflect", "tex_mask", "tex_edgespec", "tex_spec", "tex_cns"
     };
@@ -435,53 +442,120 @@ static int gradient_unit_is_exclusive(unsigned program, int gradient_sampler,
     return 1;
 }
 
-static void prepare_blue_texture(unsigned program) {
+static int material_state_for(unsigned program) {
+    for (unsigned i = 0; i < g_material_count; ++i)
+        if (g_materials[i].program == program) return (int)i;
+    if (g_material_count >= sizeof g_materials / sizeof g_materials[0]) {
+        hypr_hand_debug[35] = 10; /* the hand uses more programs than the cache supports */
+        return -1;
+    }
+
     if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
-        !g_get_integerv || !g_get_uniform_location || !g_get_uniformiv || !g_active_texture) {
+        !g_get_integerv || !g_get_uniform_location || !g_get_uniformiv || !g_active_texture ||
+        !g_get_tex_level_parameteriv || !g_get_tex_image || !g_pixel_storei || !g_bind_buffer) {
         hypr_hand_debug[35] = 2; /* required GL query/upload entry point unavailable */
-        return;
+        return -1;
     }
 
     int gradient_sampler = g_get_uniform_location(program, "tex_grad");
     if (gradient_sampler < 0) {
         hypr_hand_debug[35] = 3; /* this hand pass does not use tex_grad */
-        return;
+        return -1;
     }
     int sampler_unit = 0;
     g_get_uniformiv(program, gradient_sampler, &sampler_unit);
-    if (sampler_unit < 0 || sampler_unit > 31) {
+    if (sampler_unit < 0) {
         hypr_hand_debug[35] = 4; /* invalid texture unit */
-        return;
+        return -1;
     }
     if (!gradient_unit_is_exclusive(program, gradient_sampler, sampler_unit)) {
         hypr_hand_debug[35] = 5; /* unit is shared with a protected game sampler */
-        return;
+        return -1;
     }
 
-    build_blue_pixels();
+    int previous_active = 0;
+    int source_texture = 0;
+    int width = 0, height = 0, max_size = 0;
+    int min_filter = (int)GL_LINEAR;
+    int mag_filter = (int)GL_LINEAR;
+    int wrap_s = (int)GL_CLAMP_TO_EDGE;
+    int wrap_t = (int)GL_REPEAT;
+    g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+    g_active_texture(GL_TEXTURE0 + (unsigned)sampler_unit);
+    g_get_integerv(GL_TEXTURE_BINDING_2D, &source_texture);
+    if (source_texture != 0) {
+        g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+        g_get_integerv(GL_MAX_TEXTURE_SIZE, &max_size);
+        if (g_get_tex_parameteriv) {
+            g_get_tex_parameteriv(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, &min_filter);
+            g_get_tex_parameteriv(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, &mag_filter);
+            g_get_tex_parameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, &wrap_s);
+            g_get_tex_parameteriv(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, &wrap_t);
+            /* The replacement contains level 0 only; mipmap filters would
+             * make it incomplete, so use the source's linear base filter. */
+            if (min_filter >= 0x2700 && min_filter <= 0x2703)
+                min_filter = (int)GL_LINEAR;
+        }
+    }
+    if (source_texture == 0) {
+        g_active_texture((unsigned)previous_active);
+        hypr_hand_debug[35] = 8; /* tex_grad unit has no source texture */
+        return -1;
+    }
+    if (width <= 0 || height <= 0 || width > BLUE_TEXTURE_MAX_SIZE ||
+        height > BLUE_TEXTURE_MAX_SIZE || width > max_size || height > max_size) {
+        g_active_texture((unsigned)previous_active);
+        hypr_hand_debug[35] = 9; /* source gradient dimensions exceed the safe buffer */
+        return -1;
+    }
+    /* glGetTexImage follows global pack state. Normalize it and detach any
+     * pixel-pack buffer so the destination is always the CPU scratch array,
+     * then restore every value the game had configured. */
+    int pack_alignment = 0, pack_row_length = 0, pack_skip_rows = 0, pack_skip_pixels = 0;
+    int pack_buffer = 0;
+    g_get_integerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    g_get_integerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+    g_get_integerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+    g_get_integerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+    g_get_integerv(GL_PIXEL_PACK_BUFFER_BINDING, &pack_buffer);
+    g_bind_buffer(GL_PIXEL_PACK_BUFFER, 0);
+    g_pixel_storei(GL_PACK_ALIGNMENT, 1);
+    g_pixel_storei(GL_PACK_ROW_LENGTH, 0);
+    g_pixel_storei(GL_PACK_SKIP_ROWS, 0);
+    g_pixel_storei(GL_PACK_SKIP_PIXELS, 0);
+    g_get_tex_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
+    g_pixel_storei(GL_PACK_ALIGNMENT, pack_alignment);
+    g_pixel_storei(GL_PACK_ROW_LENGTH, pack_row_length);
+    g_pixel_storei(GL_PACK_SKIP_ROWS, pack_skip_rows);
+    g_pixel_storei(GL_PACK_SKIP_PIXELS, pack_skip_pixels);
+    g_bind_buffer(GL_PIXEL_PACK_BUFFER, (unsigned)pack_buffer);
+    g_active_texture((unsigned)previous_active);
+    build_blue_pixels((unsigned)width, (unsigned)height);
+
     int previous_texture = 0;
     g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
     unsigned texture = 0;
     g_gen_textures(1, &texture);
     if (!texture) {
         hypr_hand_debug[35] = 6; /* GL did not allocate a texture object */
-        return;
+        return -1;
     }
     g_bind_texture(GL_TEXTURE_2D, texture);
-    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
-    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
-    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
-    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_REPEAT);
-    g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, BLUE_TEXTURE_SIZE, BLUE_TEXTURE_SIZE, 0,
-                   GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min_filter);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag_filter);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_s);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_t);
+    g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, width, height, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, g_blue_pixels);
     g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
 
-    g_materials[0].program = program;
-    g_materials[0].gradient_sampler = gradient_sampler;
-    g_materials[0].gradient_unit = sampler_unit;
-    g_material_count = 1;
-    g_blue_texture = texture;
-    g_texture_ready = 1;
+    material_state *state = &g_materials[g_material_count];
+    state->program = program;
+    state->gradient_sampler = gradient_sampler;
+    state->gradient_unit = sampler_unit;
+    state->gradient_texture = texture;
+    ++g_material_count;
     hypr_hand_debug[35] = 1; /* palette texture prepared for a dedicated tex_grad unit */
     hypr_hand_debug[20] = (unsigned long long)(gradient_sampler + 1);
     hypr_hand_debug[21] = texture;
@@ -495,25 +569,6 @@ static void prepare_blue_texture(unsigned program) {
         hypr_hand_debug[24 + i] = (unsigned long long)(location + 1);
     }
     hypr_hand_debug[33] = g_get_error ? g_get_error() : 0;
-}
-
-/* Resolve the gradient unit for a second hand program on first sight. The
- * program is current at this point, so the uniform queries are valid. */
-static int material_state_for(unsigned program) {
-    for (unsigned i = 0; i < g_material_count; ++i)
-        if (g_materials[i].program == program) return (int)i;
-    if (g_material_count >= 2 || !g_get_uniform_location || !g_get_uniformiv) return -1;
-    int location = g_get_uniform_location(program, "tex_grad");
-    if (location < 0) return -1;
-    int unit = 0;
-    g_get_uniformiv(program, location, &unit);
-    if (unit < 0 || unit > 31 || !gradient_unit_is_exclusive(program, location, unit))
-        return -1;
-    material_state *state = &g_materials[g_material_count];
-    state->program = program;
-    state->gradient_sampler = location;
-    state->gradient_unit = unit;
-    ++g_material_count;
     hypr_hand_debug[37] = program;
     return (int)(g_material_count - 1);
 }
@@ -658,29 +713,26 @@ static void draw_substitute(void) {
     int previous_active = 0;
     int previous_texture = 0;
     int gradient_unit = -1;
-    if (g_mode == 3 && g_get_integerv) {
+    if (g_mode == 3 && g_get_integerv && g_active_texture && g_bind_texture) {
         int current_program = 0;
         g_get_integerv(0x8B8Du, &current_program);
         hypr_hand_debug[34] = (unsigned long long)(unsigned)current_program;
-        if (!g_texture_ready && current_program > 0)
-            prepare_blue_texture((unsigned)current_program);
-    }
-    if (g_texture_ready && g_get_integerv && g_active_texture && g_bind_texture) {
-        int current_program = 0;
-        g_get_integerv(0x8B8Du, &current_program);
-        int state_index = material_state_for((unsigned)current_program);
-        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
-        if (state_index >= 0) {
-            gradient_unit = g_materials[state_index].gradient_unit;
-            g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
-            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
-            g_bind_texture(GL_TEXTURE_2D, g_blue_texture);
-            texture_bound = 1;
-        } else {
-            ++hypr_hand_debug[36];
+        if (current_program > 0) {
+            int state_index = material_state_for((unsigned)current_program);
+            g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+            if (state_index >= 0) {
+                gradient_unit = g_materials[state_index].gradient_unit;
+                g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
+                g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+                g_bind_texture(GL_TEXTURE_2D,
+                               g_materials[state_index].gradient_texture);
+                texture_bound = 1;
+            } else {
+                ++hypr_hand_debug[36];
+            }
+            hypr_hand_debug[38] = (unsigned long long)previous_active;
+            hypr_hand_debug[39] = (unsigned long long)previous_texture;
         }
-        hypr_hand_debug[38] = (unsigned long long)previous_active;
-        hypr_hand_debug[39] = (unsigned long long)previous_texture;
     }
     g_bind_vertex_array(g_vao);
     g_original_draw(GL_TRIANGLES, (int)g_geometry_count, GL_UNSIGNED_INT, NULL);
@@ -698,6 +750,55 @@ static void draw_substitute(void) {
     ++g_substituted;
     ++hypr_hand_debug[5];
     hypr_hand_debug[15] = g_get_error ? g_get_error() : 0;
+}
+
+/* Palette mode leaves the game's VAO, indices, and posed vertex buffer in
+ * place. It only redirects a dedicated tex_grad unit around the original draw,
+ * so native animation, proportions, and draw state remain intact. */
+static void draw_native_palette(unsigned mode, int count, unsigned type,
+                                const void *indices) {
+    /* Replacement modes resolve these while preparing a private VAO. Palette
+     * mode keeps the engine VAO, so it must resolve GL itself on the first
+     * owned draw, when the game's context is current. */
+    if (!g_get_integerv || !g_active_texture || !g_bind_texture)
+        resolve_gl();
+
+    int texture_bound = 0;
+    int previous_active = 0;
+    int previous_texture = 0;
+    int gradient_unit = -1;
+    if (!g_get_integerv || !g_active_texture || !g_bind_texture) {
+        hypr_hand_debug[35] = 2; /* GL state/bind entry point unavailable */
+        g_original_draw(mode, count, type, indices);
+        return;
+    }
+
+    int current_program = 0;
+    g_get_integerv(0x8B8Du, &current_program); /* GL_CURRENT_PROGRAM */
+    hypr_hand_debug[34] = (unsigned long long)(unsigned)current_program;
+    if (current_program <= 0) hypr_hand_debug[35] = 7; /* no active shader program */
+    if (current_program > 0) {
+        int state_index = material_state_for((unsigned)current_program);
+        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+        if (state_index >= 0) {
+            gradient_unit = g_materials[state_index].gradient_unit;
+            g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+            g_bind_texture(GL_TEXTURE_2D, g_materials[state_index].gradient_texture);
+            texture_bound = 1;
+            hypr_hand_debug[38] = (unsigned long long)previous_active;
+            hypr_hand_debug[39] = (unsigned long long)previous_texture;
+        } else {
+            ++hypr_hand_debug[36]; /* this native hand program has no safe gradient unit */
+        }
+    }
+    g_original_draw(mode, count, type, indices);
+    if (texture_bound) {
+        g_active_texture(GL_TEXTURE0 + (unsigned)gradient_unit);
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        g_active_texture((unsigned)previous_active);
+        ++hypr_hand_debug[32]; /* native draw used the custom gradient texture */
+    }
 }
 
 /* The shim runs on the render thread inside the engine's own draw call. It
@@ -718,6 +819,10 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
                 draw_substitute();
                 return;
             }
+        }
+        if (g_mode == 4) {
+            draw_native_palette(mode, count, type, indices);
+            return;
         }
         if (g_mode == 1) count = 0;
     }

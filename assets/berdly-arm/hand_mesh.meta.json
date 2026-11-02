@@ -2,9 +2,9 @@
   "schema": "hyprlodr.hand-mesh/1",
   "source": "assets/berdly-arm/berdly_arm.runtime16.glb",
   "output": "assets/berdly-arm/hand_mesh.bin",
-  "vertex_count": 17322,
-  "index_count": 25620,
-  "triangle_count": 8540,
+  "vertex_count": 41482,
+  "index_count": 62436,
+  "triangle_count": 20812,
   "stride": 72,
   "scale": 0.32,
   "offset": [
@@ -19,11 +19,11 @@
     -0.305068
   ],
   "bbox_max": [
-    0.071942,
+    0.020152,
     -0.102175,
     0.08461
   ],
-  "bytes": 1349712,
+  "bytes": 3236496,
   "gradient_atlas": {
     "columns": 5,
     "slots": [

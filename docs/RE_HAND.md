@@ -320,12 +320,54 @@ independently animated. Visual inspection of the four runtime renders confirms t
 faceted arm, layered feather rows and claws survive the bake, but no game draw path uses
 these objects yet.
 
+**Authoring correction (Blender preview only).** The feather builder unpacked
+`frame_for()`'s `(right, up, forward)` basis as `(forward, up, right)`, so the
+requested feather directions were replaced by their perpendicular axis. The
+unpack now matches the helper, and the lateral rows point mostly along the
+forearm with modest left/right splay. The regenerated preview reads as a compact
+layered feather coat instead of a broad side fan; its game-space framing and
+gold iridescence still need a live capture.
+
+Selected feather rachises now use the warm iridescent material while the vane
+bodies stay blue, making the gold interference readable as a narrow accent at
+first-person scale without broadening the gold coverage.
+
+The Blender material preview now feeds the view-dependent color ramp from the
+mesh's geometry normal. Generated texture coordinates remain on the fine-grain
+noise input; they are not used as a surface normal.
+
+The optional authored preview now uses a wider gold band in its blue-to-cyan
+prism ramp, a brighter warm-metal base, and gold on about one third of selected
+feather vanes. This makes the gold read alongside the blue in the offline
+first-person render. It changes only the Blender-authored model materials; the
+native animated `palette` path and its in-game gold selection are unchanged.
+
+Short overlapping covert feathers now continue along the exposed forearm in
+seven closer-spaced rows, reaching nearer to the wrist cuff. Each card is
+narrower than before, keeping the lower arm blue and feathered while preserving
+its narrow silhouette and leaving the gold interference to selected rachises,
+palette and game reflection path.
+
+The wrist-anchored primary, up and alula rows now sweep back along the forearm,
+and the primary row has narrower cards without a duplicated covert layer. This
+clears the generated palm/finger silhouette; the change is limited to the
+optional authored mesh and does not replace or retarget the game's native hand
+animation.
+
+The authored arm's upper and lateral feather rows are now narrower, and the
+forearm coverts are shorter. This reduces the large plate-like overlaps around
+the wrist and palm in the generated first-person previews while retaining the
+same outer arm silhouette. The runtime bake and hand-mesh conversion were
+regenerated; the resulting 3.32 MB mesh remains below the hook's 4 MiB asset
+limit. This is an authored-model improvement only; the live default remains the
+native animated hand in palette mode.
+
 Visual iteration was inspected from the generated renders in
 `assets/berdly-arm/renders/`: the arm reads as a deep-blue, faceted, clawed avian limb with
-layered vanes, visible iridescent blue/violet highlights and dark hooked claws. The framing
-is still an art-direction approximation of the game camera, and none of this is game-render
-verification. The current first-person render still has substantial empty frame around the
-arm and the vanes read more like sharp plates than fine barbs; both are open art issues.
+layered vanes, visible iridescent blue/violet highlights and dark hooked claws. Feather cards
+now use additional cross-sections and mild edge scalloping to suggest barbs while keeping the
+same outer silhouette. The framing is still an art-direction approximation of the game camera,
+and none of this is game-render verification.
 
 ## Geometry-substitution stage (verified visible)
 
@@ -362,9 +404,10 @@ cube. No game buffer is touched.
 into that binary: positions in hand space, authored normals and UVs, and u32
 indices. The converter packs the source's five material slots into separate
 palette columns (blue, light blue, warm cream/gold, dark claw blue and
-iridescent blue). The hook binds that palette only to each active hand
-program's `tex_grad` unit. It leaves `tex_diffuse` bound to the game's
-screen-space hand blend and preserves reflection and edge-specular inputs for
+warm metallic gold on the iridescent feather accents). The hook binds that
+palette only to each active hand program's `tex_grad` unit. It leaves
+`tex_diffuse` bound to the game's screen-space hand blend and preserves
+reflection and edge-specular inputs for
 the HYPER DEMON shimmer. The live-verified
 orientation is a 180-degree X remap. Based on the recorded oversized, centered
 capture and the stock mesh's measured span, the current asset fit is reduced to
@@ -379,15 +422,171 @@ winged claw silhouette, with its palm and spread digits, lit by the game's hand
 material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
 gone.
 
-The replacement uses a blue/gold palette through `tex_grad` while retaining the
-game's screen blend and reflection inputs. The palette combines layered
-blue/cyan feather striations with thin diagonal gold-to-cyan interference ribs
-on the feather materials and a brighter amber-gold cream region. The asset
-remains static bind-pose geometry and is not yet driven by the baked actions.
+The palette path preserves the game's screen blend and reflection inputs. The
+first version supplied a 256x256 five-column texture authored for the
+replacement mesh, which assumed the native hand used the same UV layout. Live
+texture dumps show the game uses 64x64 gradient ramps; version 0.7.0 reads the
+active `tex_grad` pixels and keeps their dimensions and alpha. Version 0.7.1
+shifts the native gradient to blue while reserving only its brightest warm
+texels as gold accents. Version 0.7.2 builds a separate recolored copy for
+each hand program, preserving distinct source ramps across both passes.
+Version 0.7.3 recognizes saturated yellow-gold as well as orange-gold while
+excluding neutral white highlights from the preserved accent range. Version
+0.7.4 keeps only the brightest warm band, so the native gold ramp stays a
+small accent over the blue recolor. Version 0.7.5 modestly lifts the blue and
+cyan channels in the remaining ramp to keep the hand legible at first-person
+scale. Version 0.7.6 blends the gold tip into blue over a short luminance range
+to avoid a hard boundary in warm gradients. Version 0.7.7 starts the warm-to-
+gold blend at luma 190 and gives it a wider transition, retaining more of the
+native gold ramp while the hue gate excludes neutral white highlights. Version
+0.7.8 lifts the blue/cyan channels and broadens the warm-to-gold transition
+again, keeping the red channel restrained so the hand stays blue outside the
+warm ramps. The game's original reflection samplers still provide animated
+iridescence. Version 0.7.8 was compared offline against the captured game
+gradients. Its blue formula could exceed 255 at the brightest texels and wrap
+to green when converted to 8-bit color. Version 0.7.9 clamps the recolored
+channels before blending, preventing that overflow while retaining the brighter
+blue/gold mapping. Version 0.7.10 lowers green while keeping blue bright,
+shifting the blue/cyan ramps toward cobalt without broadening the gold
+selection. The overflow comparison is `.tmp/palette-079-byte-clamp.png`, and the
+blue-balance comparison is `.tmp/palette-0710-blue-balance.png`. Live gameplay
+verification is still required to confirm the resulting color balance.
+Version 0.7.11 starts the warm-to-gold transition earlier and spreads it over
+a wider luminance band. The offline comparison in
+`.tmp/palette-gold-band-candidate.png` shows the extra gold shoulder on warm
+ramps while leaving the cyan ramp blue. It preserves the native geometry,
+animation and reflection path; a gameplay capture is still needed to verify
+the visual balance on the hand.
+Version 0.7.12 eases the same transition toward the original warm ramp, so gold
+appears sooner and the midrange spends less time in a muted RGB blend. The
+comparison is `.tmp/palette-gold-ease-candidate.png`; blue and cyan-only ramps
+are unchanged. Live gameplay is still needed to judge the result on the hand.
+Version 0.7.13 uses a stronger cubic ease-out over that same band. The preview
+`.tmp/palette-gold-easing-curves.png` shows the warm ramp reach gold sooner
+while retaining the blue upper half; the cyan-only ramp remains unchanged.
+Gameplay verification is still required.
+
 The hook records palette setup in `hypr_hand_debug[35]` (1 ready, 2 missing GL
 entry points, 3 no `tex_grad`, 4 invalid unit, 5 shared unit, 6 texture allocation
-failure). Live verification of the sampler change and adjusted framing is still
-required.
+failure, 7 no active shader, 8 no texture bound to `tex_grad`, 9 source gradient
+exceeds the safe 256x256 readback buffer, 10 more programs than the two-entry
+cache supports). Live verification of the sampler
+change and adjusted framing is still required.
+
+### Native animation palette mode
+
+The static replacement visibly drops the game's hand pose animation and
+proportions. Hook version 0.7.0 adds `hand-mode.txt` value `palette`: it keeps
+the original hand VAO, posed vertices, index buffer and both draw passes, and
+temporarily binds a recolored copy of the active game gradient only when
+`tex_grad` has a dedicated unit. The original `tex_diffuse` screen blend and
+reflection/specular samplers remain bound. If the shader has no safe gradient unit, the draw is forwarded
+unchanged. This restores the native hand's shape and animation; it does not add
+physical feathers. The authored `arm` replacement remains available for visual
+comparison. The first `palette` implementation never resolved GL functions
+because only replacement modes initialized them; this was fixed by resolving
+them during the first native hand draw. The pre-fix gameplay capture therefore
+shows the stock gold hand. The 2026-11-02 fresh Proton launch resolved hook
+version 0.7.3, installed the dispatch hook, and initialized in `palette` mode.
+Xephyr delivered raw mouse and keyboard events to the title window, but both
+the menu clicks and the existing `/dev/uinput` helper left the game on its
+title screen. The blue balance is therefore still not visually verified in
+gameplay. On the next live check, `hypr_hand_debug[4]` counts matched hand draws, `[34]` records
+the active program, `[35]` reports palette setup status, `[36]` counts native
+programs without a safe gradient unit, and `[32]` counts draws that used the
+replacement gradient texture.
+
+The 2026-11-02 0.7.3 launch again confirmed mod discovery, initialization,
+dispatch-hook installation, and `palette` mode. The game stayed at the title
+screen and no usable gameplay capture or gameplay hand draw was obtained, so this
+confirms loader integration only, not the revised gold selection or in-game
+appearance. The revised 0.7.4 gold cutoff was inspected against the captured
+64x64 gradient ramps offline; it has not yet been checked in a live hand draw.
+The subsequent 0.7.4 Proton launch confirmed mod discovery, initialization,
+hook installation, and `palette` mode, then was stopped at the title screen.
+Version 0.7.5's brighter blue mapping was compared offline against the same
+captured gradients; live color balance still needs a gameplay capture.
+The 0.7.5 Proton launch confirmed mod discovery, initialization, hook
+installation, and `palette` mode. It was stopped at the title screen, so the
+native hand draw did not exercise the updated palette in this launch.
+The 0.7.6 transition was previewed offline against the captured gradients;
+gameplay color still needs a live hand draw.
+The 0.7.6 Proton launch confirmed mod discovery, initialization, dispatch-hook
+installation, and `palette` mode, then was stopped at the title screen without
+reaching a native hand draw.
+The 0.7.7 Proton launch likewise resolved and initialized version 0.7.7, patched
+the dispatch slot, and reported `mode=palette`; the game rendered its animated
+title screen and remained alive. Mouse hover/click and Return did not enter Play,
+so the native hand draw still did not exercise this palette update. The capture
+is `.tmp/hand-hook-077-launch.png`; this confirms loader integration only, not
+in-game blue/gold appearance.
+The 0.7.8 cross-build was installed and launched through Proton. HYPRLODR
+resolved and initialized version 0.7.8, patched the same dispatch slot, and
+reported `mode=palette`; the game again reached the title screen but not a hand
+draw. The capture is `.tmp/hand-hook-078-launch.png`. This verifies startup for
+the new palette code, while its color balance remains an offline preview only.
+The 0.7.9 build was then loaded the same way: the loader resolved and
+initialized the version, patched the dispatch slot, and reported `mode=palette`.
+The game reached its animated title screen and was stopped there; no hand draw
+was reached. The capture is `.tmp/hand-hook-079-launch.png`. The overflow
+correction is build- and startup-verified, but still needs a gameplay frame for
+visual verification.
+The 0.7.10 build was launched through Proton and likewise resolved,
+initialized, and installed the dispatch hook in `palette` mode. It reached the
+animated title screen, where the run was stopped without a gameplay hand draw.
+The capture is `.tmp/hand-hook-0710-launch.png`; the blue-channel balance remains
+offline-previewed rather than gameplay-verified.
+The 0.7.11 build was installed and launched through Steam on the 1920x1080
+Xvfb display. HYPRLODR matched all eight build anchors, resolved and initialized
+version 0.7.11, installed the dispatch hook, and reported `mode=palette`. The
+game reached its animated title screen, but XTest click and Return input did not
+enter gameplay. The capture is `.tmp/handmod-0711-launch.png`; this verifies
+loader startup only, not the updated gold band's appearance on the hand.
+The 0.7.12 Steam launch also resolved and initialized the mod, matched all
+eight build anchors, and installed the dispatch hook in `palette` mode. The
+title screen remained unresponsive to XTest click and Return input, so the
+updated easing has not been visually verified on the animated hand. The capture
+is `.tmp/handmod-0712-after-input.png`.
+The 0.7.13 Steam launch likewise matched all eight anchors, initialized the
+mod and installed the hook in `palette` mode. XTest click and Return still did
+not enter gameplay; `.tmp/handmod-0713-after-input.png` shows the title screen,
+not the hand. The cubic easing is build- and startup-verified only.
+
+Version 0.7.14 lowers the green contribution in cool tex_grad ramps from 65%
+to 48% of luminance, making the blue body read more cobalt while leaving the
+warm-pixel gold selection and original reflection samplers unchanged. The
+offline comparison against captured ramps is `.tmp/palette-0714-cobalt-candidate.png`.
+The fresh Proton launch resolved 0.7.14, matched the build anchors, and installed
+the hook in `palette` mode. It reached the title screen, but the virtual input
+device still could not enter gameplay, so the new blue balance has not been
+visually verified on a hand draw.
+
+Version 0.7.15 lowers the warm-ramp gold onset from luma 145 to 128 and remaps
+the easing span so selected yellow highlights become gold sooner. The captured
+texture comparison is `.tmp/palette-0715-gold-transition-candidate.png`; the
+cobalt ramp is unchanged. A fresh Steam launch resolved 0.7.15, matched all
+eight build anchors, and installed the dispatch hook in `palette` mode. The
+capture `.tmp/hand-hook-0715-frame-480.png` is the title screen; no hand draw
+occurred, so startup is verified while gameplay color remains unverified.
+
+Version 0.7.16 copies the source `tex_grad` magnification and wrap parameters
+to its recolored texture, and keeps the source minification filter when it does
+not require mipmaps. Since the replacement only contains level 0, mipmap
+filters fall back to linear. The Windows build and a Steam startup both
+succeeded; the hook resolved 0.7.16, matched all eight anchors and installed in
+`palette` mode. The title-screen limitation still prevented a hand draw, so
+this runtime sampling adjustment has not been visually exercised.
+
+Version 0.7.17 normalizes OpenGL pixel-pack state around `glGetTexImage` and
+temporarily unbinds any pixel-pack buffer before reading the source gradient.
+It restores the prior alignment, row length, skipped rows/pixels, PBO binding,
+and active texture afterward. This protects the copied ramp from unrelated
+readback state. A fresh Steam launch resolved 0.7.17, matched the build, and
+installed the dispatch hook in `palette` mode. X11 click/key input and a
+Windows `SendInput` Enter/click both left the game at its title menu, so no
+hand draw exercised the updated readback path. The game was stopped after the
+capture; the installed DLL remains 0.7.17, with the 0.7.16 DLL backed up under
+`.tmp/` for rollback.
 
 ### Orientation fix (verified live)
 

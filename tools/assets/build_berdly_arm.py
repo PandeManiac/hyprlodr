@@ -120,10 +120,12 @@ def add_material(name: str, base, *, metallic=0.35, roughness=0.30,
     # reflection/refract/edgespec path; the runtime keeps the game's entity_hand material.
     texco = nodes.new("ShaderNodeTexCoord")
     texco.location = (-900, 120)
+    geometry = nodes.new("ShaderNodeNewGeometry")
+    geometry.location = (-900, 360)
     layer = nodes.new("ShaderNodeLayerWeight")
     layer.location = (-700, 220)
     set_input(layer, "Blend", 0.18)
-    links.new(texco.outputs["Generated"], layer.inputs["Normal"])
+    links.new(geometry.outputs["Normal"], layer.inputs["Normal"])
 
     ramp_node = nodes.new("ShaderNodeValToRGB")
     ramp_node.location = (-500, 240)
@@ -135,18 +137,20 @@ def add_material(name: str, base, *, metallic=0.35, roughness=0.30,
     elements[1].color = (0.02, 0.55, 1.0, 1.0)
     if ramp == "prism":
         palette = [
-            (0.01, 0.05, 0.55, 1.0),   # deep blue
-            (0.03, 0.32, 0.95, 1.0),   # blue
-            (0.02, 0.62, 1.00, 1.0),   # azure
-            (0.34, 0.12, 0.90, 1.0),   # violet highlight
-            (0.02, 0.55, 1.00, 1.0),   # azure again
+            (0.00, (0.01, 0.05, 0.55, 1.0)),  # deep blue
+            (0.18, (0.03, 0.32, 0.95, 1.0)),  # blue
+            (0.36, (0.02, 0.62, 1.00, 1.0)),  # azure
+            (0.52, (0.92, 0.48, 0.08, 1.0)),  # gold interference begins
+            (0.70, (0.92, 0.48, 0.08, 1.0)),  # hold gold across a visible band
+            (0.86, (0.34, 0.12, 0.90, 1.0)),  # violet afterglow
+            (1.00, (0.02, 0.55, 1.00, 1.0)),  # cyan return
         ]
-        for index, colour in enumerate(palette):
+        for index, (position, colour) in enumerate(palette):
             if index < 2:
-                elements[index].position = index / (len(palette) - 1)
+                elements[index].position = position
                 elements[index].color = colour
             else:
-                element = elements.new(index / (len(palette) - 1))
+                element = elements.new(position)
                 element.color = colour
     elif ramp == "cream":
         elements[0].position = 0.0
@@ -353,15 +357,17 @@ def feather(builder: MeshBuilder, base, direction, length, width, curve, bone,
             thickness=0.0026, parent_bone=None, twist=0.0):
     """One layered feather card with a raised rachis and a closed thin edge."""
     base = Vector(base)
-    forward, up, right = frame_for(Vector(direction), side_hint)
+    right, up, forward = frame_for(Vector(direction), side_hint)
     if abs(twist) > 1e-6:
         rotation = Euler((0.0, twist, 0.0), "XYZ").to_matrix()
         forward = rotation @ forward
         up = rotation @ up
         right = rotation @ right
 
-    rows = 8
-    cols = 3
+    # Extra cross-sections and slight edge scallops keep the vanes reading as
+    # feather barbs at close range instead of uninterrupted armor plates.
+    rows = 12
+    cols = 5
     top = []
     bottom = []
     for row in range(rows + 1):
@@ -370,15 +376,19 @@ def feather(builder: MeshBuilder, base, direction, length, width, curve, bone,
         if t > 0.78:
             taper *= max(0.02, (1.0 - t) / 0.22) ** 0.80
         taper *= 1.0 + 0.05 * math.sin(t * math.pi * 5.0)
-        half = max(0.0015, width * 0.5 * taper)
+        # Keep the frequency off the row-sample grid so the scallops survive
+        # vertex placement instead of evaluating to zero at every section.
+        barb = 1.0 + 0.075 * math.sin(t * math.pi * 5.0)
+        half = max(0.0015, width * 0.5 * taper * barb)
         centre = (base + forward * (length * t)
                   + up * (curve * t * t)
                   + right * (math.sin(t * math.pi) * 0.012))
         top_row = []
         bottom_row = []
         for col in range(cols):
-            across = (col - 1) * half
-            ridge = 0.0035 * (1.0 - abs(col - 1)) * taper
+            across_unit = col / (cols - 1) * 2.0 - 1.0
+            across = across_unit * half
+            ridge = 0.0035 * (1.0 - abs(across_unit)) * taper
             weight = 1.0 if parent_bone is None else lerp(0.72, 0.25, t)
             weights = {bone: weight}
             if parent_bone is not None:
@@ -413,12 +423,14 @@ def feather(builder: MeshBuilder, base, direction, length, width, curve, bone,
             builder.quad(a, b, c, d, material,
                          [(0.0, row / rows), (0.0, (row + 1) / rows),
                           (1.0, (row + 1) / rows), (1.0, row / rows)])
-    builder.quad(top[rows][0], bottom[rows][0], bottom[rows][1], top[rows][1],
-                 tip_material, [(0.0, 1.0), (0.0, 1.0), (1.0, 1.0), (1.0, 1.0)])
-    builder.quad(top[rows][1], bottom[rows][1], bottom[rows][2], top[rows][2],
-                 tip_material, [(0.0, 1.0), (0.0, 1.0), (1.0, 1.0), (1.0, 1.0)])
+    for col in range(cols - 1):
+        u0 = col / (cols - 1)
+        u1 = (col + 1) / (cols - 1)
+        builder.quad(top[rows][col], bottom[rows][col],
+                     bottom[rows][col + 1], top[rows][col + 1],
+                     tip_material, [(u0, 1.0), (u0, 1.0), (u1, 1.0), (u1, 1.0)])
 
-    # A raised, contrasting rachis makes the card read as a feather rather than a leaf.
+    # A raised, contrasting rachis reinforces the segmented barb silhouette.
     def shaft_weights(t, _point):
         weight = 1.0 if parent_bone is None else lerp(0.72, 0.25, t)
         result = {bone: weight}
@@ -428,7 +440,11 @@ def feather(builder: MeshBuilder, base, direction, length, width, curve, bone,
 
     shaft = [base + forward * (length * t) + up * (curve * t * t + 0.0025)
              for t in (0.03, 0.34, 0.68, 0.97)]
-    tube(builder, shaft, [0.0028, 0.0020, 0.0012, 0.0004], 4, MAT_LIGHT,
+    # Gold interference lives on a narrow rachis accent for selected feathers.
+    # This keeps the blue vane dominant while making the warm HYPER DEMON hue
+    # readable at first-person scale, even where the runtime reflection is dim.
+    shaft_material = MAT_IRID if tip_material == MAT_IRID else MAT_LIGHT
+    tube(builder, shaft, [0.0028, 0.0020, 0.0012, 0.0004], 4, shaft_material,
          shaft_weights, uv_scale=1.0, cap=False, mat_tip=MAT_LIGHT)
 
 
@@ -604,6 +620,28 @@ def build_geometry():
         centre = point + radial * radius * 0.95
         octahedron(builder, centre, gem_size, MAT_IRID, forearm_weights(t, centre))
 
+    # Continue the feather coat down the exposed forearm. The existing long
+    # primaries frame the wrist and hand; these short, overlapping coverts keep
+    # the lower arm from reading as a bare smooth tube in the first-person view.
+    for row, t in enumerate((0.08, 0.18, 0.28, 0.38, 0.48, 0.58, 0.68)):
+        point, radius, right, up = forearm_sample(t)
+        before = forearm_sample(max(0.0, t - 0.015))[0]
+        after = forearm_sample(min(1.0, t + 0.015))[0]
+        direction = safe_normal(after - before)
+        bone = forearm_bone_for_t(t)
+        parent = "forearm_01" if bone == "forearm_02" else None
+        for column, angle_deg in enumerate((68.0, 90.0, 112.0)):
+            angle = math.radians(angle_deg)
+            radial = (right * math.cos(angle) + up * math.sin(angle)).normalized()
+            base = point + radial * (radius * 0.98 + 0.001)
+            material = MAT_IRID if (row + column) % 3 == 0 else MAT_BLUE
+            tip_material = MAT_IRID if (row * 3 + column) % 4 == 0 else MAT_BLUE
+            feather(builder, base, direction, length=0.095, width=0.026,
+                    curve=0.006, bone=bone, material=material,
+                    tip_material=tip_material, side_hint=radial,
+                    thickness=0.0022, parent_bone=parent,
+                    twist=(column - 1) * 0.06)
+
     # Wrist cuff / scale collar.
     cuff_path = [(0.005, 0.285, 0.109), (0.003, 0.315, 0.107), (0.001, 0.345, 0.102)]
     tube(builder, cuff_path, [0.050, 0.058, 0.052], 14, MAT_BLUE,
@@ -671,15 +709,22 @@ def build_geometry():
     # family so the runtime can animate a whole row cheaply while the cards overlap.
     rows = [
         # bone, count, length range, width, spread, sweep, lift, parent
-        ("feather_up_01", 4, (0.180, 0.240), (0.050, 0.070), 0.075, (0.10, 0.16, 0.98), 0.00, "forearm_01"),
-        ("feather_up_02", 4, (0.200, 0.265), (0.055, 0.075), 0.080, (0.08, 0.18, 0.98), 0.00, "forearm_02"),
-        ("feather_up_03", 3, (0.170, 0.225), (0.050, 0.070), 0.070, (0.06, 0.20, 0.98), 0.00, "wrist"),
-        ("feather_outer_01", 3, (0.160, 0.215), (0.050, 0.070), 0.065, (0.90, 0.16, 0.40), 0.00, "forearm_01"),
-        ("feather_outer_02", 3, (0.170, 0.230), (0.052, 0.072), 0.070, (0.92, 0.18, 0.36), 0.00, "forearm_02"),
-        ("feather_inner_01", 2, (0.120, 0.170), (0.045, 0.065), 0.060, (-0.90, 0.16, 0.40), 0.00, "forearm_01"),
-        ("feather_inner_02", 2, (0.130, 0.180), (0.048, 0.068), 0.065, (-0.92, 0.18, 0.36), 0.00, "forearm_02"),
-        ("feather_primary", 4, (0.300, 0.400), (0.060, 0.080), 0.075, (0.08, 0.06, 1.00), 0.00, "wrist"),
-        ("feather_alula", 2, (0.120, 0.170), (0.045, 0.060), 0.055, (0.42, 0.12, 0.90), 0.00, "wrist"),
+        ("feather_up_01", 4, (0.165, 0.220), (0.040, 0.056), 0.075, (0.08, 0.98, 0.16), 0.00, "forearm_01"),
+        ("feather_up_02", 4, (0.180, 0.240), (0.044, 0.060), 0.080, (0.06, 0.98, 0.18), 0.00, "forearm_02"),
+        # Wrist-anchored rows follow the forearm axis back toward the sleeve,
+        # keeping the palm and animated finger silhouette clear.
+        ("feather_up_03", 3, (0.155, 0.205), (0.040, 0.056), 0.070, (0.04, -0.98, 0.20), 0.00, "wrist"),
+        # The first-person gameplay reference keeps the hand narrow and centered.
+        # Pull the lateral covert rows inward so they read as layered arm feathers,
+        # not a wide wing silhouette at gameplay scale.
+        ("feather_outer_01", 3, (0.105, 0.140), (0.036, 0.050), 0.030, (0.30, 0.94, 0.14), 0.00, "forearm_01"),
+        ("feather_outer_02", 3, (0.110, 0.150), (0.038, 0.052), 0.034, (0.32, 0.93, 0.16), 0.00, "forearm_02"),
+        ("feather_inner_01", 2, (0.080, 0.110), (0.034, 0.046), 0.028, (-0.30, 0.94, 0.14), 0.00, "forearm_01"),
+        ("feather_inner_02", 2, (0.090, 0.120), (0.035, 0.048), 0.032, (-0.32, 0.93, 0.16), 0.00, "forearm_02"),
+        # Keep the wrist primaries behind the hand silhouette: long cards ran
+        # through the palm and visually merged with the fingers in first-person.
+        ("feather_primary", 4, (0.190, 0.255), (0.036, 0.050), 0.075, (0.08, -0.98, 0.12), 0.00, "wrist"),
+        ("feather_alula", 2, (0.110, 0.150), (0.036, 0.050), 0.055, (0.42, -0.88, 0.12), 0.00, "wrist"),
     ]
 
     bone_heads = {name: Vector(head) for name, head, _tail, _parent in BONES}
@@ -691,12 +736,12 @@ def build_geometry():
             frac = 0.0 if count == 1 else (index / (count - 1) - 0.5)
             base = snap_to_forearm(base_anchor + side * (frac * spread)
                                    + Vector((0.0, 0.0, lift * abs(frac))))
-            direction = (sweep + side * (frac * 0.35)
+            direction = (sweep + side * (frac * 0.14)
                          + Vector((0.0, 0.0, RNG.uniform(-0.05, 0.05)))).normalized()
             length = RNG.uniform(*length_range)
             width = RNG.uniform(*width_range)
-            material = MAT_IRID if index % 5 == 0 else MAT_BLUE
-            tip_material = MAT_IRID if index % 6 == 0 else MAT_BLUE
+            material = MAT_IRID if index % 3 == 0 else MAT_BLUE
+            tip_material = MAT_IRID if index % 3 == 0 else MAT_BLUE
             parent_weight = 0.28 if parent else None
             feather(builder, base, direction, length, width,
                     curve=RNG.uniform(-0.02, 0.035), bone=bone_name,
@@ -705,7 +750,7 @@ def build_geometry():
                     thickness=0.0024, parent_bone=parent, twist=RNG.uniform(-0.18, 0.18))
             # A second, shorter covert layer in front of the main feather gives depth
             # without doubling the bone count.
-            if index % 2 == 0:
+            if index % 2 == 0 and bone_name != "feather_primary":
                 feather(builder, base + direction * 0.028 + side * 0.012,
                         direction + Vector((0.0, 0.0, 0.10)), length * 0.55, width * 0.72,
                         curve=-0.012, bone=bone_name, material=MAT_BLUE,
@@ -719,7 +764,7 @@ def build_geometry():
         base = Vector((math.cos(angle) * 0.050, 0.300 + 0.012 * math.sin(angle),
                        0.108 + math.sin(angle) * 0.040))
         direction = Vector((math.cos(angle) * 0.55, -0.75, math.sin(angle) * 0.45))
-        feather(builder, base, direction, 0.105 + 0.02 * (index % 2), 0.042,
+        feather(builder, base, direction, 0.095 + 0.015 * (index % 2), 0.034,
                 curve=0.01, bone="feather_up_03", material=MAT_BLUE,
                 tip_material=MAT_LIGHT, thickness=0.0022, parent_bone="wrist",
                 twist=0.1 * (index - 2))
@@ -1105,8 +1150,11 @@ def main():
                      iridescence=0.08, emission=0.0, ramp="cream"),
         add_material("BerdlyClaw", CLAW, metallic=0.18, roughness=0.46,
                      iridescence=0.08, emission=0.0, ramp="prism"),
-        add_material("BerdlyIridescent", (0.010, 0.075, 0.400, 1.0), metallic=0.55,
-                     roughness=0.24, iridescence=0.52, emission=0.04, ramp="prism"),
+        # Keep a readable warm-gold body beneath the blue/cyan/violet rim ramp.
+        # The prior dark bronze base disappeared at first-person scale, making
+        # selected vane accents look like ordinary blue-gray shading.
+        add_material("BerdlyIridescent", (0.72, 0.40, 0.075, 1.0), metallic=0.72,
+                     roughness=0.22, iridescence=0.32, emission=0.045, ramp="prism"),
     ]
 
     builder = build_geometry()
