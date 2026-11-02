@@ -6,23 +6,40 @@
   "index_count": 25620,
   "triangle_count": 8540,
   "stride": 72,
-  "scale": 0.34,
+  "scale": 0.32,
   "offset": [
-    -0.0715,
+    -0.044,
     -0.1442,
-    -0.08
+    -0.1
   ],
   "rotate_x_degrees": 180.0,
   "bbox_min": [
-    -0.111629,
-    -0.262768,
-    -0.297885
+    -0.081768,
+    -0.255794,
+    -0.305068
   ],
   "bbox_max": [
-    0.051688,
-    -0.099548,
-    0.116148
+    0.071942,
+    -0.102175,
+    0.08461
   ],
   "bytes": 1349712,
-  "note": "Static bind-pose geometry in game hand space. UVs are the known-opaque hand-atlas constant until our own blue feather texture is bound."
+  "material_atlas": {
+    "columns": 5,
+    "slots": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "source_materials": [
+      "BerdlyBlue",
+      "BerdlyLight",
+      "BerdlyCream",
+      "BerdlyClaw",
+      "BerdlyIridescent"
+    ]
+  },
+  "note": "Static bind-pose geometry in game hand space. Authored UVs address five blue/gold diffuse atlas regions; original game reflection and gradient samplers stay bound."
 }

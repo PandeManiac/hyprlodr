@@ -359,10 +359,17 @@ and uploads the vertices and indices into the same private VAO layout as the
 cube. No game buffer is touched.
 
 `tools/assets/convert_glb_to_hand_mesh.py` converts `berdly_arm.runtime16.glb`
-into that binary: positions in hand space, authored normals, u32 indices, and a
-known-opaque hand-atlas UV pair copied from the live hand vertex. The current verified
-transform is scale 0.34, offset (-0.0715, -0.1442, -0.0800), and a 180-degree
-X remap, giving bounds x -0.112..0.052, y -0.263..-0.100, z -0.298..0.116.
+into that binary: positions in hand space, authored normals and UVs, and u32
+indices. The converter packs the source's five material slots into separate
+diffuse-atlas columns (blue, light blue, warm cream/gold, dark claw blue and
+iridescent blue). The hook binds that texture only to each active hand program's
+`tex_diffuse` unit, preserving the game's gradient and reflection texture
+bindings for its original gold/iridescent response. The live-verified
+orientation is a 180-degree X remap. Based on the recorded oversized, centered
+capture and the stock mesh's measured span, the current asset fit is reduced to
+scale 0.32 and shifted right/down to offset (-0.0440, -0.1442, -0.1000).
+Its resulting bounds are generated in `hand_mesh.meta.json`; this latest fit
+has not yet been checked in gameplay.
 
 Live counters: 17,322 vertices and 25,620 indices (8,540 triangles, 1,349,712
 bytes) uploaded; **12,112 of 12,112 owned draws substituted**; GL error 0 after
@@ -371,9 +378,11 @@ winged claw silhouette, with its palm and spread digits, lit by the game's hand
 material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
 gone.
 
-This is real authored geometry, but not yet final: it samples the game's gold
-hand atlas instead of a blue feather texture, and it is static bind-pose
-geometry, not yet driven by the baked actions.
+The replacement uses its authored blue feather diffuse texture while retaining
+the game's other material inputs for gold reflections. The diffuse pattern now
+uses layered blue/cyan feather striations with sparse warm glints. The asset
+remains static bind-pose geometry and is not yet driven by the baked actions.
+Live verification of the sampler change and adjusted framing is still required.
 
 ### Orientation fix (verified live)
 

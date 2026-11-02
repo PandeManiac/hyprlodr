@@ -79,7 +79,8 @@ int _fltused = 0;
 #define GL_TEXTURE_WRAP_S 0x2802u
 #define GL_TEXTURE_WRAP_T 0x2803u
 #define GL_REPEAT 0x2901u
-#define BLUE_TEXTURE_SIZE 64
+#define GL_CLAMP_TO_EDGE 0x812Fu
+#define BLUE_TEXTURE_SIZE 256
 
 typedef void (WINAPI *draw_elements_fn)(unsigned mode, int count, unsigned type,
                                         const void *indices);
@@ -340,24 +341,53 @@ static void resolve_gl(void) {
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
 }
 
-/* A small authored feather-like blue texture. The constant opaque UV currently
- * used by the converted arm lands on a mid-blue texel; when the authored UVs
- * are restored this pattern becomes visible across the vanes. */
+/* Blue/cyan feather diffuse with a restrained warm glint. The game's gradient
+ * and reflection samplers provide the broad gold iridescence; this texture
+ * supplies fine surface color without flattening those material inputs. */
 static void build_blue_pixels(void) {
     for (unsigned y = 0; y < BLUE_TEXTURE_SIZE; ++y) {
         for (unsigned x = 0; x < BLUE_TEXTURE_SIZE; ++x) {
-            unsigned stripe = (x * 5u + y * 3u) & 31u;
-            unsigned red = 6u + (stripe >> 3u);
-            unsigned green = 48u + stripe * 2u;
-            unsigned blue = 150u + stripe * 3u;
-            if (((y >> 2u) & 1u) == 0u) {
-                green += 24u;
-                blue += 40u;
+            /* The converter packs the five glTF materials into five UV
+             * columns. Keep their color identities while tying them together
+             * with shared blue feather grain and restrained gold glints. */
+            unsigned slot = x * 5u / BLUE_TEXTURE_SIZE;
+            unsigned local_x = x * 5u % BLUE_TEXTURE_SIZE;
+            unsigned cross = local_x < BLUE_TEXTURE_SIZE / 2u
+                                 ? BLUE_TEXTURE_SIZE / 2u - local_x
+                                 : local_x - BLUE_TEXTURE_SIZE / 2u;
+            unsigned barb = (y * 7u + local_x * 3u) & 31u;
+            unsigned row = (y >> 4u) & 1u;
+            static const unsigned char palette[5][3] = {
+                {20, 66, 154},  /* BerdlyBlue */
+                {50, 126, 214}, /* BerdlyLight */
+                {116, 91, 39},  /* warm iridescent cream */
+                {12, 29, 73},   /* deep blue claws */
+                {31, 91, 165},  /* BerdlyIridescent */
+            };
+            unsigned red = palette[slot][0] + ((y * 5u + local_x * 3u) & 15u);
+            unsigned green = palette[slot][1] + ((y * 3u + local_x) & 23u);
+            unsigned blue = palette[slot][2] + ((y * 5u + local_x * 2u) & 31u);
+            if (barb < 3u) {
+                red += slot == 2u ? 20u : 10u;
+                green += slot == 2u ? 27u : 31u;
+                blue += slot == 2u ? 18u : 29u;
             }
-            if ((y & 15u) < 2u) {
-                red = 3u;
-                green = 20u;
-                blue = 70u;
+            if (row) {
+                red += 5u;
+                green += 9u;
+                blue += 7u;
+            }
+            if (cross < 3u) {
+                red += slot == 2u ? 23u : 18u;
+                green += 34u;
+                blue += 27u;
+            }
+            if (((local_x * 29u + y * 17u) % 251u) == 0u && cross < 14u) {
+                /* Tiny warm pinpricks echo the gold reflections without
+                 * turning the diffuse albedo into a yellow surface. */
+                red = 154u;
+                green = 108u;
+                blue = 42u;
             }
             unsigned char *pixel =
                 g_blue_pixels + ((size_t)y * BLUE_TEXTURE_SIZE + x) * 4u;
@@ -383,7 +413,7 @@ static void prepare_blue_texture(unsigned program) {
     g_bind_texture(GL_TEXTURE_2D, texture);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
-    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_REPEAT);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_REPEAT);
     g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, BLUE_TEXTURE_SIZE, BLUE_TEXTURE_SIZE, 0,
                    GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
@@ -573,33 +603,32 @@ static void draw_substitute(void) {
     }
     int texture_bound = 0;
     int previous_active = 0;
-    int previous_textures[8];
-    unsigned texture_units_used = 0;
+    int previous_texture = 0;
+    int diffuse_unit = -1;
     if (g_texture_ready && g_get_integerv && g_active_texture && g_bind_texture) {
         int current_program = 0;
         g_get_integerv(0x8B8Du, &current_program);
         hypr_hand_debug[34] = (unsigned long long)(unsigned)current_program;
         int state_index = material_state_for((unsigned)current_program);
-        if (state_index < 0) ++hypr_hand_debug[36];
         g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
-        for (unsigned unit = 0; unit < 8; ++unit) {
-            g_active_texture(GL_TEXTURE0 + unit);
-            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[unit]);
+        if (state_index >= 0) {
+            diffuse_unit = g_materials[state_index].texture_unit;
+            g_active_texture(GL_TEXTURE0 + (unsigned)diffuse_unit);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
             g_bind_texture(GL_TEXTURE_2D, g_blue_texture);
+            texture_bound = 1;
+        } else {
+            ++hypr_hand_debug[36];
         }
-        texture_units_used = 8;
-        texture_bound = 1;
         hypr_hand_debug[38] = (unsigned long long)previous_active;
-        hypr_hand_debug[39] = (unsigned long long)previous_textures[0];
+        hypr_hand_debug[39] = (unsigned long long)previous_texture;
     }
     g_bind_vertex_array(g_vao);
     g_original_draw(GL_TRIANGLES, (int)g_geometry_count, GL_UNSIGNED_INT, NULL);
     g_bind_vertex_array((unsigned)previous);
     if (texture_bound) {
-        for (unsigned unit = texture_units_used; unit-- > 0;) {
-            g_active_texture(GL_TEXTURE0 + unit);
-            g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_textures[unit]);
-        }
+        g_active_texture(GL_TEXTURE0 + (unsigned)diffuse_unit);
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
         g_active_texture((unsigned)previous_active);
         ++hypr_hand_debug[32];
     }

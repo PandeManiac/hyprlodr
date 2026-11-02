@@ -115,6 +115,7 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
 
     vertices: list[bytes] = []
     indices: list[int] = []
+    material_slots: list[int] = []
     for primitive in doc["meshes"][0]["primitives"]:
         attrs = primitive["attributes"]
         if "POSITION" not in attrs or "NORMAL" not in attrs or "TEXCOORD_0" not in attrs:
@@ -124,6 +125,10 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
         uvs = accessors.read(attrs["TEXCOORD_0"])
         if not (len(positions) == len(normals) == len(uvs)):
             raise SystemExit("primitive attribute counts differ")
+        material_slot = int(primitive.get("material", 0))
+        if not 0 <= material_slot < 5:
+            raise SystemExit(f"unsupported runtime material slot {material_slot}; expected 0..4")
+        material_slots.append(material_slot)
         base = len(vertices)
         for position, normal, uv in zip(positions, normals, uvs):
             position = rotate_x(position, rotate_x_degrees)
@@ -136,11 +141,14 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
                 normal[0],
                 normal[1],
                 normal[2],
-                # Known-opaque hand-atlas UV. Authored UVs sample the game's
-                # hand texture, which has transparent regions; they are kept in
-                # the GLB and can be restored once our own texture is bound.
-                0.0643,
-                0.7835,
+                # Keep authored UVs: the replacement binds its own opaque blue
+                # feather texture to tex_diffuse, while the game's other
+                # material samplers remain untouched for its gold reflections.
+                # Five diffuse atlas columns preserve the authored material
+                # identity that a single game hand shader would otherwise lose.
+                # Keep a small gutter at each edge to prevent linear-filter bleed.
+                (material_slot + 0.035 + uv[0] * 0.93) / 5.0,
+                uv[1],
                 # uv1 from the live hand vertex; the cube proved this mask is
                 # opaque, while zeroed uv1 sampled an empty region.
                 0.023678,
@@ -194,7 +202,13 @@ def convert(glb: Path, out: Path, meta: Path, scale: float, offset: tuple[float,
         "bbox_min": [round(value, 6) for value in bbox_min],
         "bbox_max": [round(value, 6) for value in bbox_max],
         "bytes": out.stat().st_size,
-        "note": "Static bind-pose geometry in game hand space. UVs are the known-opaque hand-atlas constant until our own blue feather texture is bound.",
+        "material_atlas": {
+            "columns": 5,
+            "slots": sorted(set(material_slots)),
+            "source_materials": [material.get("name", f"material_{index}")
+                                 for index, material in enumerate(doc.get("materials", []))],
+        },
+        "note": "Static bind-pose geometry in game hand space. Authored UVs address five blue/gold diffuse atlas regions; original game reflection and gradient samplers stay bound.",
     }
     meta.write_text(json.dumps(metadata, indent=2) + "\n")
     print(
@@ -209,9 +223,9 @@ def main() -> None:
     parser.add_argument("--glb", type=Path, default=DEFAULT_GLB)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--meta", type=Path, default=DEFAULT_META)
-    parser.add_argument("--scale", type=float, default=0.34)
+    parser.add_argument("--scale", type=float, default=0.32)
     parser.add_argument("--offset", type=float, nargs=3,
-                        default=(-0.0715, -0.1442, -0.0800),
+                        default=(-0.0440, -0.1442, -0.1000),
                         metavar=("X", "Y", "Z"))
     parser.add_argument("--rotate-x", type=float, default=180.0, metavar="DEGREES",
                         help="flip the exported -Z long axis into screen-up +Z (default 180)")
