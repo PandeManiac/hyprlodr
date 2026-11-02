@@ -739,3 +739,26 @@ The overlay still presents a low wrist/feather mass without a readable authored 
 `arm` mode is static, centered and gold because it does not inherit the native first-person
 transform. The shell remains the verified fallback; authored fit, hand alignment and the
 animated gold iridescence are still blockers.
+
+## Authored arm axis flip and reproducible binder (2026-11-02)
+
+The authored overlay's long axis was inverted in the first native-space fit. After the
+nearest-native bind, native Y is now negated (`--no-flip-y` disables it for diagnostics),
+which moves the authored claws to the top of the frame and the forearm/feathers below.
+The live captures are `.tmp/99-flip.png` (authored-only) and `.tmp/99-flip-overlay.png`
+(native plus authored). They show the authored claws and layered feathers following the
+live hand buffer.
+
+`tools/assets/build_custom_overlay.py` makes the derived overlay reproducible from the
+authored `hand_mesh.bin` and the local 238-vertex bind dump. It applies the verified
+centre/scale/outward-bias transform, binds each vertex to the four nearest native
+vertices with `1/(distance + 0.004)` weights, and writes the compact `HYPRFEAT` runtime
+record. Its pre-flip output is byte-identical to the captured overlay; the flipped output
+differs only in normal low bits (5.96e-8). Metrics: 41,482 vertices, 62,436 indices,
+2,904,624 bytes, 162 used native vertices, normalized weights (2.2e-16 error).
+
+A gold-tip palette variant was tested in `.tmp/99-gold-tip.png` and rejected because the
+arm washed pale ice/white. The committed blue/white palette is restored. The authored
+material still does not reproduce HYPER DEMON's animated gold iridescence, and combined
+mode can show native gold along the hand edge; material separation and final fit remain
+the next work.

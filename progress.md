@@ -20,8 +20,30 @@ feathers, native arm covered) and is the accepted visual state. `.tmp/99-authore
 that the 41k mesh is loading and rendering, but it still reads as a low wrist/feather mass in the
 overlay and as a centered, static gold arm in direct-arm mode. The authored hand/claws do not yet
 align with the native first-person hand, and the palette still does not reproduce the original
-animated gold iridescence. The shell overlay is restored in the installed state; the authored
-fit remains the next blocker.
+animated gold iridescence. The shell overlay remains the fallback; the current installed state is the flipped
+authored overlay in `overlay-only` mode. The authored fit remains the next blocker.
+
+## 2026-11-02 (authored axis flip and reproducible binder)
+
+**The authored arm is now right-side up and reproducible.** The earlier bounding-box
+fit had the native long axis inverted: it put the authored wrist and feather mass at the
+top and pushed the hand/claws below frame. Flipping native Y after nearest-native binding
+puts the authored claws at the top and the forearm/feathers below. Live authored-only and
+combined captures are `.tmp/99-flip.png` and `.tmp/99-flip-overlay.png`; both show the
+claws, layered feathers and animated native-buffer binding.
+
+`tools/assets/build_custom_overlay.py` now reconstructs the runtime overlay from
+`hand_mesh.bin` and the 238-vertex native bind dump. It reproduces the captured pre-flip
+overlay **byte-for-byte**; the flipped output differs only in normal low bits
+(5.96e-8). It writes 41,482 vertices / 62,436 indices / 2,904,624 bytes, binds to 162
+native vertices with normalized inverse-distance weights, and defaults to the corrected
+flip.
+
+A gold-tipped palette variant was tried and rejected: `.tmp/99-gold-tip.png` washes the
+arm into pale ice/white instead of gold. The committed palette was restored. The arm
+still reads blue/white rather than HYPER DEMON's animated gold, and the combined mode
+can expose native gold at the hand edge. Material separation and final hand fit remain
+the next blockers.
 
 ## 2026-11-02 (live blue arm shell on Xvfb)
 
