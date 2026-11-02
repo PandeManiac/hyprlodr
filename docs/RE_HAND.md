@@ -383,7 +383,10 @@ The replacement uses a blue/gold palette through `tex_grad` while retaining the
 game's screen blend and reflection inputs. The palette uses layered blue/cyan
 feather striations with sparse warm glints. The asset
 remains static bind-pose geometry and is not yet driven by the baked actions.
-Live verification of the sampler change and adjusted framing is still required.
+The hook records palette setup in `hypr_hand_debug[35]` (1 ready, 2 missing GL
+entry points, 3 no `tex_grad`, 4 invalid unit, 5 shared unit, 6 texture allocation
+failure). Live verification of the sampler change and adjusted framing is still
+required.
 
 ### Orientation fix (verified live)
 

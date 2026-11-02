@@ -418,23 +418,36 @@ static int gradient_unit_is_exclusive(unsigned program, int gradient_sampler,
 
 static void prepare_blue_texture(unsigned program) {
     if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
-        !g_get_integerv || !g_get_uniform_location || !g_get_uniformiv || !g_active_texture)
+        !g_get_integerv || !g_get_uniform_location || !g_get_uniformiv || !g_active_texture) {
+        hypr_hand_debug[35] = 2; /* required GL query/upload entry point unavailable */
         return;
+    }
 
     int gradient_sampler = g_get_uniform_location(program, "tex_grad");
-    if (gradient_sampler < 0) return;
+    if (gradient_sampler < 0) {
+        hypr_hand_debug[35] = 3; /* this hand pass does not use tex_grad */
+        return;
+    }
     int sampler_unit = 0;
     g_get_uniformiv(program, gradient_sampler, &sampler_unit);
-    if (sampler_unit < 0 || sampler_unit > 31 ||
-        !gradient_unit_is_exclusive(program, gradient_sampler, sampler_unit))
+    if (sampler_unit < 0 || sampler_unit > 31) {
+        hypr_hand_debug[35] = 4; /* invalid texture unit */
         return;
+    }
+    if (!gradient_unit_is_exclusive(program, gradient_sampler, sampler_unit)) {
+        hypr_hand_debug[35] = 5; /* unit is shared with a protected game sampler */
+        return;
+    }
 
     build_blue_pixels();
     int previous_texture = 0;
     g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
     unsigned texture = 0;
     g_gen_textures(1, &texture);
-    if (!texture) return;
+    if (!texture) {
+        hypr_hand_debug[35] = 6; /* GL did not allocate a texture object */
+        return;
+    }
     g_bind_texture(GL_TEXTURE_2D, texture);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
     g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
@@ -450,6 +463,7 @@ static void prepare_blue_texture(unsigned program) {
     g_material_count = 1;
     g_blue_texture = texture;
     g_texture_ready = 1;
+    hypr_hand_debug[35] = 1; /* palette texture prepared for a dedicated tex_grad unit */
     hypr_hand_debug[20] = (unsigned long long)(gradient_sampler + 1);
     hypr_hand_debug[21] = texture;
     hypr_hand_debug[22] = (unsigned long long)sampler_unit;
