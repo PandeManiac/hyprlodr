@@ -340,9 +340,10 @@ static void resolve_gl(void) {
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
 }
 
-/* Blue/cyan feather diffuse with a restrained warm glint. The game's gradient
- * and reflection samplers provide the broad gold iridescence; this texture
- * supplies fine surface color without flattening those material inputs. */
+/* Blue/cyan feather diffuse with narrow gold-to-cyan interference ribs. The
+ * game's reflection and screen-blend inputs still provide broad, moving
+ * iridescence; these authored accents make the Berdly palette legible even
+ * where the environment reflection is dark. */
 static void build_blue_pixels(void) {
     for (unsigned y = 0; y < BLUE_TEXTURE_SIZE; ++y) {
         for (unsigned x = 0; x < BLUE_TEXTURE_SIZE; ++x) {
@@ -359,9 +360,9 @@ static void build_blue_pixels(void) {
             static const unsigned char palette[5][3] = {
                 {20, 66, 154},  /* BerdlyBlue */
                 {50, 126, 214}, /* BerdlyLight */
-                {116, 91, 39},  /* warm iridescent cream */
+                {174, 126, 40}, /* luminous amber-gold */
                 {12, 29, 73},   /* deep blue claws */
-                {31, 91, 165},  /* BerdlyIridescent */
+                {42, 91, 156},  /* BerdlyIridescent */
             };
             unsigned red = palette[slot][0] + ((y * 5u + local_x * 3u) & 15u);
             unsigned green = palette[slot][1] + ((y * 3u + local_x) & 23u);
@@ -380,6 +381,24 @@ static void build_blue_pixels(void) {
                 red += slot == 2u ? 23u : 18u;
                 green += 34u;
                 blue += 27u;
+            }
+            if (slot != 2u && slot != 3u) {
+                /* Two thin diagonal ribs per UV repeat. Their hue cycles
+                 * between warm gold and cool cyan like an interference film,
+                 * without turning the feather albedo into a yellow stripe. */
+                unsigned phase = (local_x + y * 5u) & 255u;
+                unsigned rib = phase < 3u || (phase >= 127u && phase < 130u);
+                if (rib) {
+                    unsigned cool = (y >> 4u) & 1u;
+                    unsigned char shimmer[3] = {
+                        (unsigned char)(cool ? 74u : 190u),
+                        (unsigned char)(cool ? 179u : 142u),
+                        (unsigned char)(cool ? 224u : 58u),
+                    };
+                    red = (red * 2u + shimmer[0]) / 3u;
+                    green = (green * 2u + shimmer[1]) / 3u;
+                    blue = (blue * 2u + shimmer[2]) / 3u;
+                }
             }
             if (((local_x * 29u + y * 17u) % 251u) == 0u && cross < 14u) {
                 /* Tiny warm pinpricks echo the gold reflections without

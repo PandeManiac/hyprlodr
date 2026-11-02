@@ -380,8 +380,9 @@ material (hash in `docs/evidence/2026-11-01-hand-arm.json`). The stock arm is
 gone.
 
 The replacement uses a blue/gold palette through `tex_grad` while retaining the
-game's screen blend and reflection inputs. The palette uses layered blue/cyan
-feather striations with sparse warm glints. The asset
+game's screen blend and reflection inputs. The palette combines layered
+blue/cyan feather striations with thin diagonal gold-to-cyan interference ribs
+on the feather materials and a brighter amber-gold cream region. The asset
 remains static bind-pose geometry and is not yet driven by the baked actions.
 The hook records palette setup in `hypr_hand_debug[35]` (1 ready, 2 missing GL
 entry points, 3 no `tex_grad`, 4 invalid unit, 5 shared unit, 6 texture allocation
