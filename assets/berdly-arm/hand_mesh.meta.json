@@ -1,0 +1,28 @@
+{
+  "schema": "hyprlodr.hand-mesh/1",
+  "source": "assets/berdly-arm/berdly_arm.runtime16.glb",
+  "output": "assets/berdly-arm/hand_mesh.bin",
+  "vertex_count": 17322,
+  "index_count": 25620,
+  "triangle_count": 8540,
+  "stride": 72,
+  "scale": 0.34,
+  "offset": [
+    -0.0715,
+    -0.1442,
+    -0.08
+  ],
+  "rotate_x_degrees": 180.0,
+  "bbox_min": [
+    -0.111629,
+    -0.262768,
+    -0.297885
+  ],
+  "bbox_max": [
+    0.051688,
+    -0.099548,
+    0.116148
+  ],
+  "bytes": 1349712,
+  "note": "Static bind-pose geometry in game hand space. UVs are the known-opaque hand-atlas constant until our own blue feather texture is bound."
+}

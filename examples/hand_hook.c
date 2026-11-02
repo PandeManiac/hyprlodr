@@ -39,7 +39,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.4.0"
+#define MOD_VERSION "0.5.0"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -65,6 +65,22 @@ int _fltused = 0;
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893u
 #define GL_VERTEX_ARRAY_BINDING 0x85B5u
 
+#define GL_TEXTURE_2D 0x0DE1u
+#define GL_TEXTURE0 0x84C0u
+#define GL_TEXTURE_BINDING_2D 0x8069u
+#define GL_ACTIVE_TEXTURE 0x84E0u
+#define GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS 0x8B4Du
+#define GL_RGBA 0x1908u
+#define GL_RGBA8 0x8058u
+#define GL_UNSIGNED_BYTE 0x1401u
+#define GL_LINEAR 0x2601u
+#define GL_TEXTURE_MIN_FILTER 0x2801u
+#define GL_TEXTURE_MAG_FILTER 0x2800u
+#define GL_TEXTURE_WRAP_S 0x2802u
+#define GL_TEXTURE_WRAP_T 0x2803u
+#define GL_REPEAT 0x2901u
+#define BLUE_TEXTURE_SIZE 64
+
 typedef void (WINAPI *draw_elements_fn)(unsigned mode, int count, unsigned type,
                                         const void *indices);
 typedef void (WINAPI *bind_buffer_fn)(unsigned target, unsigned buffer);
@@ -83,6 +99,15 @@ typedef unsigned (WINAPI *get_error_fn)(void);
 typedef unsigned char (WINAPI *is_enabled_fn)(unsigned cap);
 typedef void (WINAPI *enable_fn)(unsigned cap);
 typedef void (WINAPI *disable_fn)(unsigned cap);
+typedef void (WINAPI *gen_textures_fn)(int count, unsigned *textures);
+typedef void (WINAPI *bind_texture_fn)(unsigned target, unsigned texture);
+typedef void (WINAPI *tex_image_2d_fn)(unsigned target, int level, int internal_format,
+                                       int width, int height, int border, unsigned format,
+                                       unsigned type, const void *pixels);
+typedef void (WINAPI *tex_parameteri_fn)(unsigned target, unsigned pname, int value);
+typedef void (WINAPI *active_texture_fn)(unsigned texture);
+typedef int (WINAPI *get_uniform_location_fn)(unsigned program, const char *name);
+typedef void (WINAPI *get_uniformiv_fn)(unsigned program, int location, int *values);
 typedef void *(*wgl_get_proc_fn)(const char *name);
 
 static const hyprlodr_host_api *g_host;
@@ -100,6 +125,13 @@ static get_error_fn g_get_error;
 static is_enabled_fn g_is_enabled;
 static enable_fn g_enable;
 static disable_fn g_disable;
+static gen_textures_fn g_gen_textures;
+static bind_texture_fn g_bind_texture;
+static tex_image_2d_fn g_tex_image_2d;
+static tex_parameteri_fn g_tex_parameteri;
+static active_texture_fn g_active_texture;
+static get_uniform_location_fn g_get_uniform_location;
+static get_uniformiv_fn g_get_uniformiv;
 
 static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm */
 static unsigned long g_hand_draws;
@@ -119,8 +151,25 @@ static unsigned g_arm_vertex_count;
 static unsigned g_arm_index_count;
 static unsigned g_geometry_count;
 
+/* Our own blue feather texture, uploaded once with the arm VAO. The game's
+ * program and material stay bound; only the diffuse sampler is redirected for
+ * the two substituted draws, then every piece of state is restored. */
+static unsigned char g_blue_pixels[BLUE_TEXTURE_SIZE * BLUE_TEXTURE_SIZE * 4];
+static unsigned g_blue_texture;
+
+/* The two hand passes use different programs but share the same texture object.
+ * Each program's existing tex_diffuse unit is read once and cached. */
+typedef struct material_state {
+    unsigned program;
+    int diffuse_sampler;
+    int texture_unit;
+} material_state;
+static material_state g_materials[2];
+static unsigned g_material_count;
+static int g_texture_ready;
+
 /* Read-only diagnostics for a debugger; never part of the mod API. */
-HYPR_EXPORT volatile unsigned long long hypr_hand_debug[20];
+HYPR_EXPORT volatile unsigned long long hypr_hand_debug[40];
 
 static void log_message(const char *level, const char *message) {
     if (g_host && g_host->log) g_host->log(g_host->context, level, MOD_ID, message);
@@ -260,9 +309,24 @@ static void resolve_gl(void) {
         g_enable_vertex_attrib_array =
             (enable_vertex_attrib_array_fn)wgl("glEnableVertexAttribArray");
         g_get_integerv = (get_integerv_fn)wgl("glGetIntegerv");
+        g_gen_textures = (gen_textures_fn)wgl("glGenTextures");
+        g_bind_texture = (bind_texture_fn)wgl("glBindTexture");
+        g_tex_image_2d = (tex_image_2d_fn)wgl("glTexImage2D");
+        g_tex_parameteri = (tex_parameteri_fn)wgl("glTexParameteri");
+        g_active_texture = (active_texture_fn)wgl("glActiveTexture");
+        g_get_uniform_location = (get_uniform_location_fn)wgl("glGetUniformLocation");
+        g_get_uniformiv = (get_uniformiv_fn)wgl("glGetUniformiv");
     }
     if (!g_bind_buffer) g_bind_buffer = (bind_buffer_fn)GetProcAddress(module, "glBindBuffer");
     if (!g_buffer_data) g_buffer_data = (buffer_data_fn)GetProcAddress(module, "glBufferData");
+    if (!g_gen_textures)
+        g_gen_textures = (gen_textures_fn)GetProcAddress(module, "glGenTextures");
+    if (!g_bind_texture)
+        g_bind_texture = (bind_texture_fn)GetProcAddress(module, "glBindTexture");
+    if (!g_tex_image_2d)
+        g_tex_image_2d = (tex_image_2d_fn)GetProcAddress(module, "glTexImage2D");
+    if (!g_tex_parameteri)
+        g_tex_parameteri = (tex_parameteri_fn)GetProcAddress(module, "glTexParameteri");
     /* GL 1.1 entry points come from opengl32's export table, not
      * wglGetProcAddress, which returns NULL for them. */
     if (!g_get_integerv) g_get_integerv = (get_integerv_fn)GetProcAddress(module, "glGetIntegerv");
@@ -274,6 +338,100 @@ static void resolve_gl(void) {
     g_is_enabled = (is_enabled_fn)GetProcAddress(module, "glIsEnabled");
     g_enable = (enable_fn)GetProcAddress(module, "glEnable");
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
+}
+
+/* A small authored feather-like blue texture. The constant opaque UV currently
+ * used by the converted arm lands on a mid-blue texel; when the authored UVs
+ * are restored this pattern becomes visible across the vanes. */
+static void build_blue_pixels(void) {
+    for (unsigned y = 0; y < BLUE_TEXTURE_SIZE; ++y) {
+        for (unsigned x = 0; x < BLUE_TEXTURE_SIZE; ++x) {
+            unsigned stripe = (x * 5u + y * 3u) & 31u;
+            unsigned red = 6u + (stripe >> 3u);
+            unsigned green = 48u + stripe * 2u;
+            unsigned blue = 150u + stripe * 3u;
+            if (((y >> 2u) & 1u) == 0u) {
+                green += 24u;
+                blue += 40u;
+            }
+            if ((y & 15u) < 2u) {
+                red = 3u;
+                green = 20u;
+                blue = 70u;
+            }
+            unsigned char *pixel =
+                g_blue_pixels + ((size_t)y * BLUE_TEXTURE_SIZE + x) * 4u;
+            pixel[0] = (unsigned char)(red > 255u ? 255u : red);
+            pixel[1] = (unsigned char)(green > 255u ? 255u : green);
+            pixel[2] = (unsigned char)(blue > 255u ? 255u : blue);
+            pixel[3] = 255u;
+        }
+    }
+}
+
+static void prepare_blue_texture(unsigned program) {
+    if (!g_gen_textures || !g_bind_texture || !g_tex_image_2d || !g_tex_parameteri ||
+        !g_get_integerv || !g_get_uniform_location || !g_active_texture)
+        return;
+
+    build_blue_pixels();
+    int previous_texture = 0;
+    g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    unsigned texture = 0;
+    g_gen_textures(1, &texture);
+    if (!texture) return;
+    g_bind_texture(GL_TEXTURE_2D, texture);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_REPEAT);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_REPEAT);
+    g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, BLUE_TEXTURE_SIZE, BLUE_TEXTURE_SIZE, 0,
+                   GL_RGBA, GL_UNSIGNED_BYTE, g_blue_pixels);
+    g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+
+    int diffuse_sampler = g_get_uniform_location(program, "tex_diffuse");
+    int sampler_unit = 0;
+    if (diffuse_sampler >= 0 && g_get_uniformiv)
+        g_get_uniformiv(program, diffuse_sampler, &sampler_unit);
+    if (sampler_unit < 0 || sampler_unit > 31) sampler_unit = 0;
+    g_materials[0].program = program;
+    g_materials[0].diffuse_sampler = diffuse_sampler;
+    g_materials[0].texture_unit = sampler_unit;
+    g_material_count = 1;
+    g_blue_texture = texture;
+    g_texture_ready = 1;
+    hypr_hand_debug[20] = (unsigned long long)(diffuse_sampler + 1);
+    hypr_hand_debug[21] = texture;
+    hypr_hand_debug[22] = (unsigned long long)sampler_unit;
+    hypr_hand_debug[23] = 1;
+    static const char *const samplers[7] = {"tex_diffuse", "tex_grad", "tex_reflect",
+                                            "tex_mask", "tex_edgespec", "tex_spec",
+                                            "tex_cns"};
+    for (unsigned i = 0; i < 7; ++i) {
+        int location = g_get_uniform_location(program, samplers[i]);
+        hypr_hand_debug[24 + i] = (unsigned long long)(location + 1);
+    }
+    hypr_hand_debug[33] = g_get_error ? g_get_error() : 0;
+}
+
+/* Resolve the diffuse unit for a second hand program on first sight. The
+ * program is current at this point, so the uniform queries are valid. */
+static int material_state_for(unsigned program) {
+    for (unsigned i = 0; i < g_material_count; ++i)
+        if (g_materials[i].program == program) return (int)i;
+    if (g_material_count >= 2 || !g_get_uniform_location) return -1;
+    int location = g_get_uniform_location(program, "tex_diffuse");
+    if (location < 0) return -1;
+    int unit = 0;
+    if (g_get_uniformiv) g_get_uniformiv(program, location, &unit);
+    if (unit < 0 || unit > 31) unit = 0;
+    material_state *state = &g_materials[g_material_count];
+    state->program = program;
+    state->diffuse_sampler = location;
+    state->texture_unit = unit;
+    ++g_material_count;
+    hypr_hand_debug[37] = program;
+    return (int)(g_material_count - 1);
 }
 
 /* Read and validate <state_dir>/hand-mesh.bin. The file is a little-endian
@@ -397,6 +555,7 @@ static void prepare_geometry(void) {
     g_geometry_count = index_count;
     hypr_hand_debug[2] = 1;
     hypr_hand_debug[13] = (unsigned long long)program;
+    if (g_mode == 3) prepare_blue_texture((unsigned)program);
     hypr_hand_debug[14] = g_get_error ? g_get_error() : 0;
     g_geometry_state = 1;
 }
@@ -412,9 +571,38 @@ static void draw_substitute(void) {
         g_disable(0x0B71u);
         g_disable(0x0B44u);
     }
+    int texture_bound = 0;
+    int previous_active = 0;
+    int previous_textures[8];
+    unsigned texture_units_used = 0;
+    if (g_texture_ready && g_get_integerv && g_active_texture && g_bind_texture) {
+        int current_program = 0;
+        g_get_integerv(0x8B8Du, &current_program);
+        hypr_hand_debug[34] = (unsigned long long)(unsigned)current_program;
+        int state_index = material_state_for((unsigned)current_program);
+        if (state_index < 0) ++hypr_hand_debug[36];
+        g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+        for (unsigned unit = 0; unit < 8; ++unit) {
+            g_active_texture(GL_TEXTURE0 + unit);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[unit]);
+            g_bind_texture(GL_TEXTURE_2D, g_blue_texture);
+        }
+        texture_units_used = 8;
+        texture_bound = 1;
+        hypr_hand_debug[38] = (unsigned long long)previous_active;
+        hypr_hand_debug[39] = (unsigned long long)previous_textures[0];
+    }
     g_bind_vertex_array(g_vao);
     g_original_draw(GL_TRIANGLES, (int)g_geometry_count, GL_UNSIGNED_INT, NULL);
     g_bind_vertex_array((unsigned)previous);
+    if (texture_bound) {
+        for (unsigned unit = texture_units_used; unit-- > 0;) {
+            g_active_texture(GL_TEXTURE0 + unit);
+            g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_textures[unit]);
+        }
+        g_active_texture((unsigned)previous_active);
+        ++hypr_hand_debug[32];
+    }
     if (g_enable) {
         if (cull_on) g_enable(0x0B44u);
         if (depth_on) g_enable(0x0B71u);
