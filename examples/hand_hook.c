@@ -224,6 +224,16 @@ static unsigned char g_blue_diffuse_pixels[BLUE_DIFFUSE_MAX_SIZE * BLUE_DIFFUSE_
 static unsigned char g_arm_palette_pixels[ARM_PALETTE_WIDTH * ARM_PALETTE_HEIGHT * 4];
 static int g_arm_palette_ready;
 
+/* The hand color result is built from tex_reflection1, not tex_diffuse. Keep
+ * a recolored copy of that animated reflection so the authored blue arm still
+ * receives the native gold highlights; tex_diffuse remains the screen blend. */
+#define REFLECTION_MAX_SIZE 1024
+static unsigned char g_reflection_pixels[REFLECTION_MAX_SIZE * REFLECTION_MAX_SIZE * 4];
+static unsigned g_feather_reflection_texture;
+static unsigned g_feather_reflection_source;
+static unsigned g_feather_reflection_width;
+static unsigned g_feather_reflection_height;
+
 /* Feather overlay: authored bind-pose vertices plus four weights into the live
  * 238-vertex arm buffer. The overlay is expanded into the same 72-byte layout
  * the hand program already consumes. */
@@ -463,10 +473,10 @@ static void resolve_gl(void) {
  * as gold accents; shift warm midtones and cooler body tones to layered
  * navy/cobalt/cyan so the hand reads blue at gameplay scale. The original
  * reflection samplers remain the source of broad, moving iridescence. */
-static void build_blue_pixels(unsigned width, unsigned height) {
+static void build_blue_pixels_into(unsigned char *pixels, unsigned width, unsigned height) {
     size_t count = (size_t)width * height;
     for (size_t i = 0; i < count; ++i) {
-        unsigned char *pixel = g_blue_pixels + i * 4u;
+        unsigned char *pixel = pixels + i * 4u;
         unsigned red = pixel[0], green = pixel[1], blue = pixel[2];
         unsigned luma = (red * 54u + green * 183u + blue * 19u) >> 8u;
         /* Gold ramps often reach yellow rather than orange at their bright
@@ -497,6 +507,42 @@ static void build_blue_pixels(unsigned width, unsigned height) {
         unsigned recolored[3] = {3u + luma / 12u,
                                  14u + luma * 48u / 100u,
                                  38u + luma * 95u / 100u};
+        for (unsigned channel = 0; channel < 3; ++channel) {
+            if (recolored[channel] > 255u) recolored[channel] = 255u;
+            unsigned value = recolored[channel] * (255u - gold_mix) +
+                             original[channel] * gold_mix;
+            pixel[channel] = (unsigned char)((value + 127u) / 255u);
+        }
+    }
+}
+
+static void build_blue_pixels(unsigned width, unsigned height) {
+    build_blue_pixels_into(g_blue_pixels, width, height);
+}
+
+/* The native reflection map is mostly warm gold, so the broader gold shoulder
+ * used for the skin ramp would preserve the whole arm. Keep only the brightest
+ * saturated warm texels as gold and map the rest to layered cobalt/cyan. The
+ * secondary reflection and edge-specular samplers stay native. */
+static void build_blue_reflection_into(unsigned char *pixels, unsigned width,
+                                       unsigned height) {
+    size_t count = (size_t)width * height;
+    for (size_t i = 0; i < count; ++i) {
+        unsigned char *pixel = pixels + i * 4u;
+        unsigned red = pixel[0], green = pixel[1], blue = pixel[2];
+        unsigned luma = (red * 54u + green * 183u + blue * 19u) >> 8u;
+        unsigned original[3] = {red, green, blue};
+        int warm_hue = red + 12u >= green && green > blue + 24u;
+        unsigned gold_mix = 0;
+        if (warm_hue && luma > 185u && red > 200u && green > 120u) {
+            gold_mix = (luma - 185u) * 255u / 70u;
+            if (gold_mix > 255u) gold_mix = 255u;
+            unsigned remaining = 255u - gold_mix;
+            gold_mix = 255u - remaining * remaining / 255u;
+        }
+        unsigned recolored[3] = {4u + luma / 9u,
+                                 20u + luma * 55u / 100u,
+                                 56u + luma};
         for (unsigned channel = 0; channel < 3; ++channel) {
             if (recolored[channel] > 255u) recolored[channel] = 255u;
             unsigned value = recolored[channel] * (255u - gold_mix) +
@@ -1369,35 +1415,165 @@ static int ensure_feather_palette(unsigned *out_texture) {
     return g_feather_palette_texture != 0;
 }
 
+/* Recolor the native reflection arm colour once per source texture. The
+ * reflection is the entity hand's base colour; replacing only this unit keeps
+ * the screen-space hand blend and the remaining reflection/edge-specular
+ * samplers native, so their moving gold highlights survive. */
+static int ensure_feather_reflection(unsigned *out_texture, int *out_unit) {
+    if (!g_get_integerv || !g_get_uniform_location || !g_get_uniformiv ||
+        !g_active_texture || !g_bind_texture || !g_gen_textures ||
+        !g_tex_image_2d || !g_tex_parameteri || !g_get_tex_level_parameteriv ||
+        !g_get_tex_image || !g_pixel_storei)
+        return 0;
+    int program = 0;
+    g_get_integerv(GL_CURRENT_PROGRAM, &program);
+    if (program <= 0) return 0;
+    int sampler = g_get_uniform_location((unsigned)program, "tex_reflection1");
+    if (sampler < 0) return 0;
+    int unit = -1;
+    g_get_uniformiv((unsigned)program, sampler, &unit);
+    if (unit < 0) return 0;
+
+    int previous_active = 0, source = 0, width = 0, height = 0;
+    g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+    g_active_texture(GL_TEXTURE0 + (unsigned)unit);
+    g_get_integerv(GL_TEXTURE_BINDING_2D, &source);
+    if (source) {
+        g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        g_get_tex_level_parameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
+    }
+    if (source && g_feather_reflection_texture &&
+        (unsigned)source == g_feather_reflection_source &&
+        (unsigned)width == g_feather_reflection_width &&
+        (unsigned)height == g_feather_reflection_height) {
+        g_active_texture((unsigned)previous_active);
+        *out_texture = g_feather_reflection_texture;
+        *out_unit = unit;
+        return 1;
+    }
+    if (!source || width < 1 || height < 1 ||
+        width > REFLECTION_MAX_SIZE || height > REFLECTION_MAX_SIZE) {
+        g_active_texture((unsigned)previous_active);
+        hypr_hand_debug[63] = 1; /* missing or oversized reflection */
+        return 0;
+    }
+
+    int pack_alignment = 0;
+    g_get_integerv(GL_PACK_ALIGNMENT, &pack_alignment);
+    g_pixel_storei(GL_PACK_ALIGNMENT, 1);
+    if (g_get_error) (void)g_get_error();
+    g_get_tex_image(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_reflection_pixels);
+    unsigned error = g_get_error ? g_get_error() : 0;
+    g_pixel_storei(GL_PACK_ALIGNMENT, pack_alignment);
+    if (error) {
+        g_active_texture((unsigned)previous_active);
+        hypr_hand_debug[63] = 2; /* source is not a readable 2D reflection */
+        return 0;
+    }
+
+    build_blue_reflection_into(g_reflection_pixels, (unsigned)width, (unsigned)height);
+    unsigned texture = 0;
+    g_gen_textures(1, &texture);
+    if (!texture) {
+        g_active_texture((unsigned)previous_active);
+        hypr_hand_debug[63] = 3;
+        return 0;
+    }
+    g_bind_texture(GL_TEXTURE_2D, texture);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (int)GL_LINEAR);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, (int)GL_LINEAR);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (int)GL_CLAMP_TO_EDGE);
+    g_tex_parameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (int)GL_CLAMP_TO_EDGE);
+    g_tex_image_2d(GL_TEXTURE_2D, 0, (int)GL_RGBA8, width, height, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, g_reflection_pixels);
+    g_bind_texture(GL_TEXTURE_2D, (unsigned)source);
+    g_active_texture((unsigned)previous_active);
+    g_feather_reflection_texture = texture;
+    g_feather_reflection_source = (unsigned)source;
+    g_feather_reflection_width = (unsigned)width;
+    g_feather_reflection_height = (unsigned)height;
+    hypr_hand_debug[56] = (unsigned long long)(unsigned)program;
+    hypr_hand_debug[57] = 1;
+    hypr_hand_debug[58] = (unsigned long long)(unsigned)unit;
+    hypr_hand_debug[59] = texture;
+    hypr_hand_debug[60] = (unsigned long long)(unsigned)source;
+    hypr_hand_debug[61] = (unsigned long long)(unsigned)width;
+    hypr_hand_debug[62] = (unsigned long long)(unsigned)height;
+    hypr_hand_debug[63] = 0;
+    *out_texture = texture;
+    *out_unit = unit;
+    return 1;
+}
+
 static void draw_feather_overlay(void) {
     if (g_feather_state == 0) prepare_feather_geometry();
     if (g_feather_state != 1) return;
     if (!update_feather_pose()) return;
     int program = 0;
     g_get_integerv(GL_CURRENT_PROGRAM, &program);
+    unsigned reflection_texture = 0;
+    int reflection_unit = -1;
+    int have_reflection = ensure_feather_reflection(&reflection_texture, &reflection_unit);
     unsigned palette_texture = 0;
-    int have_palette = ensure_feather_palette(&palette_texture);
-    int previous_vao = 0, previous_active = 0, previous_textures[8] = {0};
-    int bound_units = 0, max_units = 0;
+    int have_palette = 0;
+    int previous_vao = 0, previous_active = 0, previous_texture = 0;
+    int previous_textures[8] = {0};
+    int extra_units[2] = {-1, -1};
+    unsigned extra_textures[2] = {0, 0};
+    int extra_count = 0;
+    int bound_units = 0;
     g_get_integerv(GL_VERTEX_ARRAY_BINDING, &previous_vao);
-    if (have_palette) {
-        /* The hand shader path changes samplers between passes; bind the
-         * authored palette to every image unit used by the current program so
-         * colour, mask and screen-blend lookups all resolve to it. */
-        g_get_integerv(0x8872, &max_units); /* GL_MAX_TEXTURE_IMAGE_UNITS */
-        if (max_units < 1) max_units = 1;
-        if (max_units > 8) max_units = 8;
+    if (have_reflection && reflection_unit >= 0) {
+        static const char *const extra_samplers[2] = {
+            "tex_reflection2", "tex_reflection3"
+        };
         g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
-        for (int unit = 0; unit < max_units; ++unit) {
+        for (int i = 0; i < 2; ++i) {
+            int location = g_get_uniform_location((unsigned)program, extra_samplers[i]);
+            if (location < 0) continue;
+            int unit = -1;
+            g_get_uniformiv((unsigned)program, location, &unit);
+            if (unit < 0 || unit == reflection_unit) continue;
+            int duplicate = 0;
+            for (int j = 0; j < extra_count; ++j)
+                if (extra_units[j] == unit) duplicate = 1;
+            if (duplicate) continue;
             g_active_texture(GL_TEXTURE0 + (unsigned)unit);
-            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[unit]);
-            g_bind_texture(GL_TEXTURE_2D, palette_texture);
+            g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[extra_count]);
+            g_bind_texture(GL_TEXTURE_2D, reflection_texture);
+            extra_units[extra_count] = unit;
+            extra_textures[extra_count] = (unsigned)previous_textures[extra_count];
+            ++extra_count;
         }
-        bound_units = max_units;
+        g_active_texture(GL_TEXTURE0 + (unsigned)reflection_unit);
+        g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+        g_bind_texture(GL_TEXTURE_2D, reflection_texture);
         hypr_hand_debug[56] = (unsigned long long)(unsigned)program;
-        hypr_hand_debug[57] = (unsigned long long)have_palette;
-        hypr_hand_debug[58] = (unsigned long long)max_units;
-        hypr_hand_debug[59] = palette_texture;
+        hypr_hand_debug[57] = 1;
+        hypr_hand_debug[58] = (unsigned long long)(unsigned)reflection_unit;
+        hypr_hand_debug[59] = reflection_texture;
+    } else {
+        /* If the reflection is not a readable 2D texture, keep the authored
+         * mesh visible with the original all-unit palette rather than
+         * falling back to the native gold arm. */
+        have_palette = ensure_feather_palette(&palette_texture);
+        if (have_palette) {
+            int max_units = 0;
+            g_get_integerv(0x8872, &max_units); /* GL_MAX_TEXTURE_IMAGE_UNITS */
+            if (max_units < 1) max_units = 1;
+            if (max_units > 8) max_units = 8;
+            g_get_integerv(GL_ACTIVE_TEXTURE, &previous_active);
+            for (int unit = 0; unit < max_units; ++unit) {
+                g_active_texture(GL_TEXTURE0 + (unsigned)unit);
+                g_get_integerv(GL_TEXTURE_BINDING_2D, &previous_textures[unit]);
+                g_bind_texture(GL_TEXTURE_2D, palette_texture);
+            }
+            bound_units = max_units;
+            hypr_hand_debug[56] = (unsigned long long)(unsigned)program;
+            hypr_hand_debug[57] = 2;
+            hypr_hand_debug[58] = (unsigned long long)(unsigned)max_units;
+            hypr_hand_debug[59] = palette_texture;
+        }
     }
     unsigned char cull_on = 0;
     unsigned char depth_on = 0;
@@ -1419,6 +1595,15 @@ static void draw_feather_overlay(void) {
     g_bind_vertex_array((unsigned)previous_vao);
     if (g_enable && cull_on) g_enable(GL_CULL_FACE);
     if (g_enable && depth_on) g_enable(GL_DEPTH_TEST);
+    if (have_reflection) {
+        for (int i = 0; i < extra_count; ++i) {
+            g_active_texture(GL_TEXTURE0 + (unsigned)extra_units[i]);
+            g_bind_texture(GL_TEXTURE_2D, extra_textures[i]);
+        }
+        g_active_texture(GL_TEXTURE0 + (unsigned)reflection_unit);
+        g_bind_texture(GL_TEXTURE_2D, (unsigned)previous_texture);
+        g_active_texture((unsigned)previous_active);
+    }
     if (have_palette) {
         for (int unit = 0; unit < bound_units; ++unit) {
             g_active_texture(GL_TEXTURE0 + (unsigned)unit);
