@@ -13,7 +13,7 @@ never modified.
 Usage::
 
     python3 tools/re/pack_patch.py --exe "$GAME/hyperdemon.exe" --pack "$GAME/asset/asset" \\
-        --out /tmp/asset.patched --name georgia --offset 303451631 --size 219736 \\
+        --out .tmp/asset.patched --name georgia --offset 303451631 --size 219736 \\
         --payload new_georgia.bin
 """
 
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import pathlib
 import sys
 
@@ -38,11 +39,26 @@ def patch_pack(source: pathlib.Path, target: pathlib.Path,
     The caller supplies already-encrypted bytes: the edit has to occupy exactly as many bytes
     as the slice it replaces, because every other record's offset is baked into the table.
     """
+    source = pathlib.Path(source)
+    target = pathlib.Path(target)
+    if not source.is_file():
+        raise ValueError(f"source archive is not a regular file: {source}")
+    if source.resolve() == target.resolve() or (target.exists() and os.path.samefile(source, target)):
+        raise ValueError("output archive must not alias the source archive")
+    source_size = source.stat().st_size
+    if expected_size is not None and expected_size != source_size:
+        raise ValueError(f"expected archive size {expected_size} does not match source size {source_size}")
     edits = sorted(edits)
+    for offset, cipher in edits:
+        if offset < 0 or not isinstance(cipher, bytes) or not cipher:
+            raise ValueError("each edit must have a non-negative offset and non-empty bytes")
+        if offset > source_size or len(cipher) > source_size - offset:
+            raise ValueError(f"edit at {offset} with {len(cipher)} bytes exceeds source archive bounds")
     for (a, a_cipher), (b, _) in zip(edits, edits[1:]):
         if a + len(a_cipher) > b:
             raise ValueError(f"edits at {a} and {b} overlap")
     written = 0
+    target.parent.mkdir(parents=True, exist_ok=True)
     with source.open("rb") as src, target.open("wb") as dst:
         position = 0
         for offset, cipher in edits:
@@ -90,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
 
     t0, t1, _ = load_tables(args.exe)
     plaintext = args.payload.read_bytes()
+    if len(plaintext) != args.size:
+        parser.error(f"replacement payload is {len(plaintext)} bytes; record size is {args.size}")
+    if args.out.resolve() == args.pack.resolve() or (args.out.exists() and
+                                                       os.path.samefile(args.out, args.pack)):
+        parser.error("--out must not alias the installed/source archive")
     seed = seed_for_name(args.name) & 0x3FF
     cipher = encrypt(plaintext, t0, t1, seed)
 

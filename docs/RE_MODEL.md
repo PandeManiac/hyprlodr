@@ -230,3 +230,44 @@ export; the Blender script export preserves the known non-position attributes.
 The tool rejects truncated sections, non-finite positions/normals/UV0, and
 out-of-range indices. Extracted payloads and generated OBJ/Blend files are local
 game content and must not be committed.
+
+## Native replacement experiment (2026-11-03)
+
+A local proof archive was built under `.tmp/asset-proof/` by scaling every
+`hand2` position by 1.35 through the existing Blender edit/export path. It
+retains 238 vertices, 1,188 indices, the 72-byte vertex stride, and the native
+payload length. The encrypted patch was checked against the original archive:
+the archive size is unchanged, bytes outside the `hand2` record are identical,
+and decrypting that record with the installed executable's tables and the
+`hand2` key returns the edited payload. The installed archive was not changed.
+
+The one runtime attempt is **inconclusive about native model substitution**.
+The game produced a rendered title frame (`.tmp/asset-proof/runtime/game-frame.png`),
+but its file trace records the first `asset/asset` open at `t_ms: 296` via
+`_Fiopen` with `redirected: false` and `opened: "asset/asset"`. The attach record
+shows the mod loader completed at `delay_ms: 2500`; at that point the redirect
+was active (`file_redirects: 1`) and the executable build matched with 8/8
+anchors. Therefore the existing archive-open hook was installed early enough,
+but the `r.asset` mod published its redirect after the game's initial archive
+open. The game launch and title frame prove initialization/rendering only; they
+do not prove that `hand2` was read from the patched archive or rendered.
+
+Static source evidence agrees with that ordering: `native/win32/proxy.c` installs
+the early file hook with no loader in `DllMain`, while bootstrap resolves and
+initializes mods on its worker after the configured delay. Since the archive
+open happened before publication, this run neither confirms nor disproves
+`hand2` as the first-person arm source and supplies no evidence of loader
+rejection, model caching, or deformation. The concrete blocker is the startup
+race between the game's first archive open and mod redirect registration. A
+future runtime attempt needs to make the redirect available before that open
+and must capture a trace showing `redirected: true` plus evidence of the
+modified mesh in the rendered game view. No second launch was made in this
+experiment.
+
+All temporary game-directory log links and the temporary mod entry used for
+this attempt were removed afterward. The installed `asset/asset` and
+`hyperdemon.exe` SHA-256 values after cleanup are respectively
+`2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7` and
+`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`.
+Runtime artifacts and proprietary model/archive data remain in ignored `.tmp/`
+and are not part of the source change.
