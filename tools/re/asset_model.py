@@ -19,6 +19,60 @@ MESH_SECTION_OFFSET = GRAPH_OFFSET + 8
 SECTION_HEADER_SIZE = 14  # u32 prefix, u32 index count, u32 vertex count, u8 stride, 1 pad byte
 MAX_VERTICES = 10_000_000
 MAX_INDICES = 60_000_000
+VERTEX_ATTRIBUTES = [
+    {"name": "position", "offset": 0, "components": 3},
+    {"name": "normal", "offset": 12, "components": 3},
+    {"name": "uv0", "offset": 24, "components": 2},
+    {"name": "attribute3", "offset": 32, "components": 4},
+    {"name": "tangent", "offset": 48, "components": 3},
+    {"name": "bitangent", "offset": 60, "components": 3},
+]
+
+
+def _graph_tail(data: bytes, offset: int) -> dict:
+    """Decode the bounded v3 name/value prefix; retain all uninterpreted bytes.
+
+    Ghidra FUN_140205ec0 reads a u32 entry count, then a u8-length name,
+    8 raw value bytes and two u16 fields for each entry. It subsequently reads
+    a u32 reference count. The value fields' semantics are not established.
+    """
+    tail = data[offset:]
+    if len(tail) < 4:
+        return {"offset": offset, "size": len(tail), "raw_hex": tail.hex(), "parse_status": "truncated"}
+    count = struct.unpack_from("<I", tail)[0]
+    pos = 4
+    entries = []
+    if count > 100_000:
+        return {"offset": offset, "size": len(tail), "entry_count": count,
+                "raw_hex": tail.hex(), "parse_status": "implausible-count"}
+    try:
+        for _ in range(count):
+            if pos >= len(tail):
+                raise ValueError
+            n = tail[pos]
+            pos += 1
+            if pos + n + 12 > len(tail):
+                raise ValueError
+            name_bytes = tail[pos:pos+n]
+            pos += n
+            raw_value = tail[pos:pos+8]
+            field_a, field_b = struct.unpack_from("<HH", tail, pos + 8)
+            pos += 12
+            entries.append({"name": name_bytes.decode("utf-8", "replace"),
+                            "name_raw_hex": name_bytes.hex(), "value_raw_hex": raw_value.hex(),
+                            "field_u16_a": field_a, "field_u16_b": field_b})
+        if pos + 4 > len(tail):
+            raise ValueError
+        reference_count = struct.unpack_from("<I", tail, pos)[0]
+        count_offset = pos
+        pos += 4
+        return {"offset": offset, "size": len(tail), "entry_count": count,
+                "entries": entries, "reference_count": reference_count,
+                "reference_count_offset": offset + count_offset,
+                "unparsed_hex": tail[pos:].hex(), "parse_status": "prefix-parsed"}
+    except (ValueError, struct.error):
+        return {"offset": offset, "size": len(tail), "entry_count": count,
+                "entries": entries, "raw_hex": tail.hex(), "parse_status": "truncated-entry"}
 
 
 def inspect_payload(data: bytes) -> dict:
@@ -53,6 +107,8 @@ def inspect_payload(data: bytes) -> dict:
 
     bounds = [[math.inf, -math.inf] for _ in range(3)]
     normal_length_range = [math.inf, 0.0]
+    attribute_ranges = [[math.inf, -math.inf] for _ in range(18)]
+    attribute_finite = [True] * 18
     for index in range(vertex_count):
         offset = vertex_offset + index * stride
         values = struct.unpack_from("<6f", data, offset)
@@ -65,8 +121,14 @@ def inspect_payload(data: bytes) -> dict:
         length = math.sqrt(sum(value * value for value in normal))
         normal_length_range[0] = min(normal_length_range[0], length)
         normal_length_range[1] = max(normal_length_range[1], length)
-        uv = struct.unpack_from("<2f", data, offset + 24) if stride >= 32 else (0.0, 0.0)
-        if not all(math.isfinite(value) for value in uv):
+        for component in range(min(18, stride // 4)):
+            value = struct.unpack_from("<f", data, offset + component * 4)[0]
+            if not math.isfinite(value):
+                attribute_finite[component] = False
+                continue
+            attribute_ranges[component][0] = min(attribute_ranges[component][0], value)
+            attribute_ranges[component][1] = max(attribute_ranges[component][1], value)
+        if stride >= 32 and not all(math.isfinite(v) for v in struct.unpack_from("<2f", data, offset + 24)):
             raise ValueError(f"non-finite UV at vertex {index}")
     min_index, max_index = vertex_count, 0
     for (value,) in struct.iter_unpack("<I", data[index_offset:arrays_end]):
@@ -74,8 +136,21 @@ def inspect_payload(data: bytes) -> dict:
         max_index = max(max_index, value)
         if value >= vertex_count:
             raise ValueError(f"index {value} exceeds vertex count {vertex_count}")
-    if section_end != arrays_end:
-        raise ValueError(f"unexpected {section_end - arrays_end} bytes after mesh arrays")
+    if arrays_end != section_end:
+        raise ValueError(f"mesh arrays end at {arrays_end}, declared section ends at {section_end}")
+
+    attr_summary = []
+    for attr in VERTEX_ATTRIBUTES:
+        end = attr["offset"] + attr["components"] * 4
+        if end <= stride:
+            components = []
+            for component in range(attr["components"]):
+                i = attr["offset"] // 4 + component
+                components.append(attribute_ranges[i] if attribute_finite[i] else None)
+            attr_summary.append({**attr, "component_ranges": components,
+                                 "all_finite": all(attribute_finite[attr["offset"] // 4:
+                                     attr["offset"] // 4 + attr["components"]])})
+    graph = _graph_tail(data, section_end)
 
     return {
         "format": "hyprdemon-tag1-mesh-section-v3",
@@ -93,6 +168,8 @@ def inspect_payload(data: bytes) -> dict:
         "bounds": {axis: bounds[i] for i, axis in enumerate("xyz")},
         "normal_length_range": normal_length_range,
         "index_range": [min_index, max_index],
+        "vertex_attributes": attr_summary,
+        "graph_tail": graph,
         "trailing_payload_bytes": len(data) - section_end,
         "_data": data,
     }
@@ -126,6 +203,47 @@ def write_obj(model: dict, output: pathlib.Path) -> None:
             stream.write("f " + " ".join(corners) + "\n")
 
 
+def write_blender_script(payload: pathlib.Path, output: pathlib.Path,
+                         blend_output: pathlib.Path | None = None) -> None:
+    """Write a Blender Python script that builds a mesh with all known attributes."""
+    payload = payload.resolve()
+    blend_output = (blend_output or payload.with_suffix(".blend")).resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(f'''# Generated by tools/re/asset_model.py. Run with Blender --background --python.
+import bpy, struct
+from pathlib import Path
+b = Path({str(payload)!r}).read_bytes()
+section = 32
+_, section_size = struct.unpack_from("<II", b, 24)
+index_count, vertex_count = struct.unpack_from("<II", b, section + 4)
+stride = b[section + 12]
+v0 = section + 14
+i0 = v0 + vertex_count * stride
+verts = [struct.unpack_from("<3f", b, v0 + i*stride) for i in range(vertex_count)]
+faces = [struct.unpack_from("<3I", b, i0 + i*4) for i in range(0, index_count, 3)]
+mesh = bpy.data.meshes.new({payload.stem!r})
+mesh.from_pydata(verts, [], faces)
+mesh.update()
+for name, offset, count in [("normal",12,3),("uv0",24,2),("attribute3",32,4),("tangent",48,3),("bitangent",60,3)]:
+    if offset + count*4 > stride: continue
+    if name == "uv0":
+        layer = mesh.uv_layers.new(name=name)
+        for poly in mesh.polygons:
+            for li in poly.loop_indices:
+                vi = mesh.loops[li].vertex_index
+                layer.data[li].uv = struct.unpack_from("<2f", b, v0+vi*stride+offset)
+        continue
+    attr = mesh.attributes.new(name=name, type="FLOAT_VECTOR" if count == 3 else "FLOAT_COLOR", domain="POINT")
+    for i in range(vertex_count):
+        values = struct.unpack_from("<"+"f"*count, b, v0+i*stride+offset)
+        if count == 3: attr.data[i].vector = values
+        else: attr.data[i].color = values
+obj = bpy.data.objects.new({payload.stem!r}, mesh)
+bpy.context.collection.objects.link(obj)
+bpy.ops.wm.save_as_mainfile(filepath={str(blend_output)!r})
+''', encoding="utf-8")
+
+
 def public_summary(model: dict) -> dict:
     return {key: value for key, value in model.items() if not key.startswith("_")}
 
@@ -135,6 +253,10 @@ def main(argv=None) -> int:
     parser.add_argument("payload", type=pathlib.Path, help="decrypted tag-1 payload")
     parser.add_argument("--json", type=pathlib.Path, help="write inspection metadata")
     parser.add_argument("--obj", type=pathlib.Path, help="write Blender-compatible Wavefront OBJ")
+    parser.add_argument("--blender-script", type=pathlib.Path,
+                        help="write Blender Python script preserving all six vertex attribute groups")
+    parser.add_argument("--blend-output", type=pathlib.Path,
+                        help="output .blend path embedded in --blender-script (defaults beside payload)")
     args = parser.parse_args(argv)
     try:
         model = inspect_payload(args.payload.read_bytes())
@@ -144,6 +266,8 @@ def main(argv=None) -> int:
             args.json.write_text(json.dumps(summary, indent=2) + "\n")
         if args.obj:
             write_obj(model, args.obj)
+        if args.blender_script:
+            write_blender_script(args.payload, args.blender_script, args.blend_output)
         print(json.dumps(summary, indent=2))
         return 0
     except (OSError, ValueError, struct.error) as error:
