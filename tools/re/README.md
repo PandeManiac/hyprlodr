@@ -25,11 +25,16 @@ python3 tools/re/hyprl_assets.py info 'tbl-c6b9922fadd2:pain backup' --pack ... 
 
 The cache defaults to the ignored local file `hyprlodr-assets-index.json` and is
 accepted only when archive, executable, evidence, and optional name-map hashes still match.
-`verify` checks cache identity, record bounds, and resolver tree-node accounting. Extraction writes only to the requested
-destination and decrypts by logical name (or explicit `--key-class`); it never edits the
+`verify` checks cache identity, record bounds, and resolver tree-node accounting. Extraction
+writes only to the requested destination and decrypts by logical name (or explicit `--key-class`); it never edits the
 installed archive. A name duplicated across tables must use `table-id:name`; a unique
 name can be used directly. Current capture coverage and unconfirmed candidates are
 reported in `docs/RE_PACK.md`.
+
+`asset_model.py` inspects the version-3 mesh section found in tag-1 graph payloads and
+exports validated position/normal/UV0/index data as OBJ for Blender. See [`RE_MODEL.md`](../../docs/RE_MODEL.md)
+for the verified `hand2` example and a local extraction workflow. Keep decrypted data and
+exports under the ignored `.tmp/` directory; they are proprietary game content.
 
 Read-only tooling for understanding a HYPER DEMON build. Nothing here modifies
 the game, and nothing here is required to install mods: it exists so that any
