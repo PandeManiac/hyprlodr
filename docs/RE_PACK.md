@@ -239,6 +239,26 @@ possible if the substitution is byte-exact, so the delivery path is proven end-t
 
 ## Next concrete step
 
-Name the remaining slices (`tools/re/name_records.py` currently recovers 10 of 863 because the
-probe only harvests part of the key arrays), then identify the record the title screen draws
-its lettering from and serve a replacement through `pack_patch.py` + the `_Fiopen` redirect.
+The reproducible offline catalog is now `tools/re/hyprl_assets.py`. On the installed build,
+the captured `hyprlodr-assets.jsonl` contains 860 record observations but only **738 unique,
+in-bounds `(offset, size, tag)` triples**; 122 observations repeat an existing triple. The
+capture has 1,008 key observations across 58 arrays. Running `name_records.py` against it
+currently yields 13 unique name candidates. The catalog keeps the other 725 records under
+stable offset/size/tag IDs and labels the 13 name links `inferred`; it does not pair arrays by
+position or treat a 10-bit key class as a unique name.
+
+`hyprl_assets.py scan` binds its cache to SHA-256 hashes of the archive, executable, and capture,
+validates bounds with subtraction-safe checks, and records a full ciphertext hash per record.
+`list`, `search`, `info`, `extract`, and `verify` operate on the resulting local JSON index.
+Unknown records can be extracted only when an explicit logical name or key class is supplied.
+For recovered names, the index decrypts only a 4 KiB prefix to record header bytes and recognizes
+sfnt/TrueType only when its signature is at `+0x18`; the rest of the type tags still need parser
+work. The original archive is never modified.
+
+The largest remaining obstacle is the **full name-to-record association**, not record bounds or
+decryption: the current runtime scan is incomplete, and scoring 1,024 key classes only identifies
+a key class, which can collide across names. The next investigation should resolve the resolver's
+parallel key and record arrays through their owning table object/reference relationships, or
+capture all table entries at a single stable resolver boundary. That capture should be retained
+as evidence and reused offline. Content parsers and replacement interception follow once that
+mapping has evidence-backed coverage.

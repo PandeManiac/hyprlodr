@@ -406,10 +406,10 @@ string/format parsers, so none of those can be the lettering itself.
 The pack format, cipher and the remaining unknowns are written up separately in
 [`RE_PACK.md`](RE_PACK.md).
 
-Why this matters: the lettering is addressed *by name inside the pack*, so a replacement can
-be a same-tag payload served under the same name — which is exactly what the `_Fiopen`
-redirect layer is for. What remains unknown is the record's tag and its payload layout, and the
-pack (`asset/asset`, 306,794,369 B) is still undecoded, so neither can be read offline.
+Why this matters: the lettering is addressed *by name inside the pack*. A same-tag replacement
+can eventually be served under that name, but the record association and complete payload
+layout still need to be recovered. The archive cipher is decoded and selected records are
+extractable offline; the pack as a whole is not yet indexed completely.
 
 ## Confirmed in-game: the title's mask texture, and a replacement drawn by the original pass (2026-11-01)
 

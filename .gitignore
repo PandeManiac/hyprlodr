@@ -12,3 +12,5 @@ manager/**/obj/
 /assets/hand-extract/
 # Generated from a face inside the user's own installation; never vendored.
 /assets/hyprlodr-title-mask.raw
+/hyprlodr-assets-index.json
+/assets/extracted/
