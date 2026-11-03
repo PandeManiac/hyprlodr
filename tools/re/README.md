@@ -25,7 +25,7 @@ python3 tools/re/hyprl_assets.py info 'tbl-c6b9922fadd2:pain backup' --pack ... 
 
 The cache defaults to the ignored local file `hyprlodr-assets-index.json` and is
 accepted only when archive, executable, evidence, and optional name-map hashes still match.
-`verify` checks cache identity and record bounds. Extraction writes only to the requested
+`verify` checks cache identity, record bounds, and resolver tree-node accounting. Extraction writes only to the requested
 destination and decrypts by logical name (or explicit `--key-class`); it never edits the
 installed archive. A name duplicated across tables must use `table-id:name`; a unique
 name can be used directly. Current capture coverage and unconfirmed candidates are

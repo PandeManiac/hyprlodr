@@ -94,6 +94,27 @@ class AssetIndexTests(unittest.TestCase):
         self.assertEqual(assets.pick(index, f"{second_table}:shared")["_selected_name"], "shared")
         self.assertNotEqual(first["id"], second["id"])
 
+    def test_scan_preserves_and_checks_resolver_node_accounting(self):
+        events = [
+            {"event": "asset_mapping", "offset": 16, "size": 64, "tag": 4096,
+             "name": "mapped", "index": 0, "record_array": "0x1000", "table": "0x2000"},
+            {"event": "asset_tree_summary", "record_array": "0x1000", "table": "0x2000",
+             "tree_nodes": 3, "mappings": 1, "unresolved_names": 0,
+             "invalid_indices": 0, "invalid_records": 2},
+            {"event": "asset_tree_summary", "record_array": "0x3000", "table": "0x4000",
+             "tree_nodes": 2, "mappings": 0, "unresolved_names": 0,
+             "invalid_indices": 1, "invalid_records": 1},
+        ]
+        self.evidence.write_text("\n".join(json.dumps(e) for e in events))
+        with mock.patch.object(assets, "load_tables", return_value=(bytes(256), bytes(256), bytes(1024))):
+            index = assets.build_index(self.pack, self.exe, self.evidence, None)
+        tables = {table["table"]: table for table in index["resolver_tables"]}
+        self.assertEqual(len(tables), 2)
+        self.assertTrue(tables["0x2000"]["node_accounting_complete"])
+        self.assertTrue(tables["0x2000"]["mapping_count_matches"])
+        self.assertTrue(tables["0x4000"]["node_accounting_complete"])
+        self.assertEqual(tables["0x4000"]["mappings_observed"], 0)
+
     def test_unresolved_tree_key_hex_recovers_printable_name(self):
         with self.evidence.open("a") as stream:
             stream.write("\n" + json.dumps({

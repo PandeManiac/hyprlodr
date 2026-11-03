@@ -274,6 +274,12 @@ written to the local runtime evidence file and consumed by `tools/re/hyprl_asset
 Associations from these events are labeled `verified`; content-score-only names remain
 `inferred`.
 
+The offline index preserves all six tree summaries, and `verify` checks each node total against
+mapped nodes, unresolved names, invalid indices, and invalid record references. All six tables
+reconcile in the installed capture. The 217-node table accounts for 3 mapped entries and 214
+invalid record references; those references are not included among the 738 archive record
+candidates.
+
 `hyprl_assets.py scan` binds its cache to SHA-256 hashes of the archive, executable, evidence,
 and optional name map. It stores exact table/node/index provenance, stable record IDs, and full
 ciphertext hashes. Runtime addresses are retained for audit; a deterministic `tbl-...` ID based

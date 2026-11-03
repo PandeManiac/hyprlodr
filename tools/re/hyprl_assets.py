@@ -121,7 +121,10 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
             resolver_summaries[(event.get("record_array"), event.get("table"))] = event
 
     resolver_ids = {}
-    for table_key, events in resolver_tables.items():
+    for table_key in resolver_summaries.keys() | resolver_tables.keys():
+        events = resolver_tables.get(table_key, [])
+        if not events:
+            continue
         identity = sorted((int(e.get("index", -1)), e.get("name", ""), int(e["offset"]),
                            int(e["size"]), int(e["tag"])) for e in events)
         digest_input = json.dumps(identity, ensure_ascii=True, separators=(",", ":")).encode()
@@ -179,6 +182,23 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
                 "encrypted_sha256": hash_range(stream, offset, size),
             })
             ordered.append(row)
+    table_inventory = []
+    for table_key in resolver_summaries.keys() | resolver_tables.keys():
+        summary = resolver_summaries.get(table_key, {})
+        events = resolver_tables.get(table_key, [])
+        table = {**summary, "mappings_observed": len(events)}
+        if table_key in resolver_ids:
+            table["id"] = resolver_ids[table_key]
+        counts = [summary.get(field) for field in
+                  ("mappings", "unresolved_names", "invalid_indices", "invalid_records")]
+        nodes = summary.get("tree_nodes")
+        if nodes is not None and all(isinstance(value, int) for value in counts):
+            accounted = sum(counts)
+            table["accounted_nodes"] = accounted
+            table["node_accounting_complete"] = accounted == nodes
+            table["mapping_count_matches"] = summary.get("mappings") == len(events)
+        table_inventory.append(table)
+    table_inventory.sort(key=lambda table: table.get("id", table.get("table", "")))
     return {
         "schema": 1,
         "source": {"pack_size": pack_size, "pack_sha256": sha256(pack),
@@ -186,11 +206,7 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
         "evidence": {"path": str(evidence), "sha256": sha256(evidence),
                      "unique_records": len(ordered),
                      "names_sha256": sha256(names_path) if names_path else None},
-        "resolver_tables": [{**resolver_summaries.get(key, {
-                                "record_array": key[0], "table": key[1],
-                                "mappings": len(value)}),
-                              "id": resolver_ids[key]}
-                             for key, value in resolver_tables.items()],
+        "resolver_tables": table_inventory,
         "records": ordered,
     }
 
@@ -283,8 +299,19 @@ def main(argv=None):
         if args.command == "verify":
             bad = [r["id"] for r in index["records"] if r["offset"] < 0 or r["size"] <= 0
                    or r["size"] > index["source"]["pack_size"] - r["offset"]]
-            print(f"records={len(index['records'])} invalid={len(bad)} source_hashes=match")
-            return 1 if bad else 0
+            tables = index.get("resolver_tables", [])
+            bad_tables = [table for table in tables if
+                          table.get("node_accounting_complete") is False or
+                          table.get("mapping_count_matches") is False]
+            print(f"records={len(index['records'])} invalid={len(bad)} "
+                  f"resolver_tables={len(tables)} table_accounting_errors={len(bad_tables)} "
+                  f"source_hashes=match")
+            for table in bad_tables:
+                print(f"resolver table {table.get('id', table.get('table'))}: "
+                      f"nodes={table.get('tree_nodes')} accounted={table.get('accounted_nodes')} "
+                      f"summary_mappings={table.get('mappings')} "
+                      f"observed_mappings={table.get('mappings_observed')}")
+            return 1 if bad or bad_tables else 0
         if args.command == "list":
             rows = index["records"]
         elif args.command == "search":
