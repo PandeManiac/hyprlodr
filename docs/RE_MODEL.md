@@ -86,6 +86,110 @@ channel, tangent, and bitangent. The Blender file is generated locally; no game
 payload or extracted content is committed. Blender has no material assignment
 to export from these graph records because none is verified.
 
+## Lossless rebuild and same-count editing
+
+The payload parser now also acts as a conservative serializer. It validates the
+version, section bounds, counts, stride, vertex/index array extents, finite
+positions/normals/UV0, and index bounds. A no-edit rebuild returns the original
+payload bytes unchanged. An edited rebuild copies that payload and changes only
+the explicitly supplied float32 vertex components at their original offsets.
+The header, binary section prefix, vertex padding, indices, graph entry names
+and values, references, unknown bytes, and trailing data all remain byte-for-
+byte from the source. A rebuild requires the version-3 entry and reference-count
+prefix to parse within bounds; uninterpreted bytes after that prefix are
+retained. Output cannot overwrite its source payload.
+
+The editing interface accepts a JSON document with the source `vertex_count`
+and arrays under `attributes`; supported names are `position` (3), `normal`
+(3), `uv0` (2), `attribute3` (4), `tangent` (3), and `bitangent` (3). Each
+array must contain exactly one finite row per source vertex. The serializer
+rejects unknown attributes, changed vertex counts, wrong row widths, non-finite
+values, invalid float32 ranges, and any rebuilt payload that fails structural
+validation. Topology and index edits are intentionally unsupported. Blender
+export also rejects UV seams that would require duplicating a vertex, since
+vertex-count changes are outside this format-safe path.
+
+The graph-tail values remain uninterpreted. In the verified hand records, the
+upper little-endian u32 of the raw eight-byte named-entry value equals the
+record's index count. The rebuilt edit path keeps both mesh counts fixed and
+preserves these graph bytes unchanged; this avoids violating that observed
+relationship. No material or independent geometry-reference format has been
+confirmed.
+
+### Reproduce extraction, no-change round trip, and edit
+
+Set persistent scratch paths before running Python or Blender:
+
+```bash
+mkdir -p .tmp/extracted .tmp/analysis .tmp/logs .tmp/roundtrip
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+GAME="$HOME/.local/share/Steam/steamapps/common/hyperdemon"
+```
+
+Extract `hand2` and prove the no-change serializer is byte-identical:
+
+```bash
+python3 tools/re/hyprl_assets.py extract 'tbl-e91fb3b80004:hand2' \
+  --pack "$GAME/asset/asset" --exe "$GAME/hyperdemon.exe" \
+  --evidence "$GAME/hyprlodr-assets.jsonl" \
+  --index .tmp/analysis/assets-index.json --out .tmp/roundtrip/hand2.bin
+python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
+  --out .tmp/roundtrip/hand2-rebuilt.bin
+cmp .tmp/roundtrip/hand2.bin .tmp/roundtrip/hand2-rebuilt.bin
+```
+
+Create the attribute-preserving Blender mesh, edit it while keeping its vertex
+count and per-vertex UV layout, then export an edit document:
+
+```bash
+python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
+  --blender-script .tmp/analysis/create-hand2.py \
+  --blend-output .tmp/extracted/hand2.blend
+blender --background --python .tmp/analysis/create-hand2.py
+# Edit and save .tmp/extracted/hand2.blend in Blender as hand2-edited.blend.
+python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
+  --blender-export-script .tmp/analysis/export-hand2.py \
+  --blend-input .tmp/extracted/hand2-edited.blend \
+  --edit-json-output .tmp/analysis/hand2-edits.json
+blender --background .tmp/extracted/hand2-edited.blend \
+  --python .tmp/analysis/export-hand2.py
+python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
+  --edit-json .tmp/analysis/hand2-edits.json \
+  --out .tmp/roundtrip/hand2-edited.bin
+```
+
+Encrypt the rebuilt payload to a separate local file; then verify it through the
+existing cipher library. The installed pack is read only:
+
+```bash
+python3 tools/re/pack_crypt.py --exe "$GAME/hyperdemon.exe" \
+  --pack "$GAME/asset/asset" --name hand2 --encrypt \
+  --in .tmp/roundtrip/hand2-edited.bin \
+  --out .tmp/roundtrip/hand2-edited.enc
+python3 - <<'PY'
+from pathlib import Path
+from tools.re.pack_crypt import decrypt, load_tables, seed_for_name
+game = Path.home() / ".local/share/Steam/steamapps/common/hyperdemon"
+t0, t1, _ = load_tables(game / "hyperdemon.exe")
+expected = Path(".tmp/roundtrip/hand2-edited.bin").read_bytes()
+cipher = Path(".tmp/roundtrip/hand2-edited.enc").read_bytes()
+assert decrypt(cipher, t0, t1, seed_for_name("hand2")) == expected
+print("encrypted payload decodes byte-identically")
+PY
+```
+
+### Validation performed
+
+Freshly extracted `hand2`, `hand2left`, `handbones`, `handbonesleft`, and
+`handveins` all rebuilt byte-for-byte. For `hand2`, source and rebuild SHA-256
+were both `ddfe1797efd29c1200e1c775d998b73ef73b9b0e8710e92d7b632c3a29c93fa8`.
+The controlled Blender edit moved vertex 0 by `+0.001` on X: only the three
+float32 bytes at payload offsets 46–48 changed. The edited model retained 238
+vertices, 1,188 indices, and 72-byte stride. Encrypting that local payload with
+the installed executable's tables and `hand2` seed, then decrypting it, returned
+the edited bytes exactly. All generated payloads, Blender files, ciphertext,
+edit JSON, and logs remain under ignored `.tmp/`.
+
 ### Source-arm identity assessment
 
 The record is a strong candidate for the original first-person arm: its logical
