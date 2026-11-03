@@ -1,8 +1,8 @@
 # The `asset/asset` pack: format, cipher, and what is still unknown
 
 Status: the **read path is reversed, implemented and validated against real plaintext**
-(`tools/re/pack_crypt.py`). The index is read live from the running process, names are recovered
-from a parallel key array, and a slice decrypts to a verifiable TrueType font.
+(`tools/re/pack_crypt.py`). The runtime resolver’s name trees now supply direct name-to-record
+indices for 624 bounds-valid entries, and a slice decrypts to a verifiable TrueType font.
 
 ## Confirmed: the pack is encrypted, not compressed
 
@@ -141,9 +141,10 @@ What one instrumented run produced (400-record cap, hit immediately):
   the field positions from the decompilation, and the `std::string` at `+0x20` reads
   **empty** (`size` 0 at `+0x30`, capacity 15 at `+0x38`, i.e. the small-string default).
 
-**Names are not stored in these records.** The probe was then changed to report only slots whose
-`std::string` looks like an asset name; over a full run it scanned **722 MB across 282 regions
-and found zero**. Two consequences:
+**The earlier probe did not capture resolver names.** It searched candidate record slots for a
+plausible `std::string`; over a full run it scanned **722 MB across 282 regions and found zero**.
+That negative result applies to those record-slot offsets; logical names live in separate
+resolver tree nodes. Two consequences of that first capture were:
 
 1. The name → record association must live elsewhere (the caller passes the name and the table is
    searched by something derived from it, e.g. a precomputed key), or in a parallel array that
@@ -170,13 +171,13 @@ The pack is decoded. Two things were missing and both are now answered: the live
 `(offset, size)` records (from the probe's memory scan) and the fact that a slice's plaintext
 can be recognised objectively, so the CRC seed never has to be guessed.
 
-**Method.** The resolver binary-searches `std::string` keys, but the records it returns carry
-empty names, so the keys live in a parallel array. The probe now also finds runs of *strictly
-ascending* `0x20`-byte `std::string` elements (a `std::vector<std::string>`), and pairs them with
-a record array by count. One such pair is a **24-entry key array**
+**Historical hypothesis, superseded below.** The probe found runs of *strictly ascending*
+`0x20`-byte `std::string` elements and initially paired them with record arrays by count. One
+such run was a **24-entry key array**
 `[6eye, bronze, gold, hand1bones, …, hyper, hyper2, silver, soratheye, sorathmask,
-sorathtexture, sorathvector, unranked, unranked2]` matched to a 24-entry record array whose
-offsets chain exactly, giving index-aligned name → `(offset, size, tag)`.
+sorathtexture, sorathvector, unranked, unranked2]`. Matching this array to a record array by
+count was not reliable and does not establish index-aligned names; the resolver-tree capture
+below supersedes that pairing method.
 
 **The validation is objective, not a score.** For the eleven records of a newly seen
 `tag 4096` array, scanning all 1024 keystreams for an sfnt magic in the first 32 bytes gives
@@ -239,26 +240,45 @@ possible if the substitution is byte-exact, so the delivery path is proven end-t
 
 ## Next concrete step
 
-The reproducible offline catalog is now `tools/re/hyprl_assets.py`. On the installed build,
-the captured `hyprlodr-assets.jsonl` contains 860 record observations but only **738 unique,
-in-bounds `(offset, size, tag)` triples**; 122 observations repeat an existing triple. The
-capture has 1,008 key observations across 58 arrays. Running `name_records.py` against it
-currently yields 13 unique name candidates. The catalog keeps the other 725 records under
-stable offset/size/tag IDs and labels the 13 name links `inferred`; it does not pair arrays by
-position or treat a 10-bit key class as a unique name.
+### Resolver tree mapping (Ghidra plus one instrumented capture)
 
-`hyprl_assets.py scan` binds its cache to SHA-256 hashes of the archive, executable, and capture,
-validates bounds with subtraction-safe checks, and records a full ciphertext hash per record.
-`list`, `search`, `info`, `extract`, and `verify` operate on the resulting local JSON index.
-Unknown records can be extracted only when an explicit logical name or key class is supplied.
-For recovered names, the index decrypts only a 4 KiB prefix to record header bytes and recognizes
-sfnt/TrueType only when its signature is at `+0x18`; the rest of the type tags still need parser
-work. The original archive is never modified.
+The resolver’s per-kind table now has a direct mapping path. In `FUN_140211e70`, the selected
+table points to its `0x58`-stride record array at `+0x00` and to an MSVC red-black-tree sentinel
+at `+0x30`. Each name node stores an SSO-aware `std::string` at `+0x20` and its record-array
+index at `+0x40`. `FUN_140213b70` supplies the per-kind table; the node’s integer is the index
+used by the resolver to copy the exact record. This supersedes the earlier positional-array
+pairing and CRC-key-class inference for associations captured through this path.
 
-The largest remaining obstacle is the **full name-to-record association**, not record bounds or
-decryption: the current runtime scan is incomplete, and scoring 1,024 key classes only identifies
-a key class, which can collide across names. The next investigation should resolve the resolver's
-parallel key and record arrays through their owning table object/reference relationships, or
-capture all table entries at a single stable resolver boundary. That capture should be retained
-as evidence and reused offline. Content parsers and replacement interception follow once that
-mapping has evidence-backed coverage.
+The updated probe walks those trees and validates each indexed record’s archive bounds. The
+installed capture contains **624 direct name-to-record associations in six resolver tables**:
+
+| Tag | Resolver records | Tree nodes | Result |
+|---|---:|---:|---|
+| `0x100` audio | 310 | 310 | all nodes mapped |
+| `2` | 142 | 142 | all nodes mapped |
+| `1` | 134 | 134 | all nodes mapped |
+| `4096` TrueType | 11 | 11 | all nodes mapped |
+| `8` | 24 | 24 | all nodes mapped |
+| `4` | 3 | 217 | 3 valid records mapped; 214 indexed rows failed archive-bound validation |
+
+Three keys previously missed by the name validator contain spaces: `pain backup`, `6eye - Copy`,
+and `mercurydagger 2`. Their key bytes were captured directly from the live tree and decoded as
+ASCII. The 624 links cover every bounds-valid record in the first five arrays and the three
+bounds-valid entries in the last table. The 214 out-of-bounds rows are retained in the tree
+summary as invalid references, not assigned as assets.
+
+The conservative memory-layout scan still reports 738 distinct in-bounds candidates. Of those,
+624 are now linked to resolver nodes; the other **114 remain unconfirmed probe candidates** and
+are not silently treated as real records. The resolver tree summaries and mapping events are
+written to the local runtime evidence file and consumed by `tools/re/hyprl_assets.py`.
+Associations from these events are labeled `verified`; content-score-only names remain
+`inferred`.
+
+`hyprl_assets.py scan` binds its cache to SHA-256 hashes of the archive, executable, evidence,
+and optional name map. It stores exact table/node/index provenance, stable record IDs, and full
+ciphertext hashes. Runtime addresses are retained for audit; a deterministic `tbl-...` ID based
+on the table’s ordered mappings distinguishes repeated logical names across resolver tables.
+Use `search <name>` to discover the table ID, then `info <table-id>:<name>` or
+`extract <table-id>:<name>` when a name is present in more than one table. Extraction never
+writes to the installed archive. The eleven font mappings also decrypt to sfnt/TrueType headers
+at `+0x18`; other type-specific payload parsers remain future work.

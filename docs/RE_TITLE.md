@@ -52,8 +52,9 @@ The `shaders` anchor (`0x1403652f8`) is referenced twice, in functions at `0x140
 binary is `skull_giga.vert` (`0x1403689d0`), which has **no** RIP-relative reference — it is
 reached through data, not code.
 
-**Inferred:** shader sources come from the `shaders` directory inside the asset container,
-which is still undecoded — hence the shader text cannot be read statically.
+**Inferred:** shader sources come from the `shaders` directory inside the asset container.
+That record’s text payload has not yet been extracted and parsed, so its shader source is not
+available statically.
 
 ## Confirmed: renderer and the limits of interception
 
@@ -183,10 +184,10 @@ the loaded record is written back after being materialised.
 
 **Confirmed:** the record carries a type tag plus a `std::string` (at `+0x20`) and two trailing
 pointers (`+0x18`, `+0x48`, `+0x50`), and the loader builds a different object graph per type.
-**Inferred:** the string is the asset's own name/path inside the container, and the type tag
-distinguishes texture-like from mesh-like content — which is exactly the fork the title
-replacement needs. Proven by the container still being undecoded: the string cannot be read
-statically beyond its presence.
+**Inferred:** the copied string may be an internal resource name/path; its exact role is still
+uncertain. Static analysis establishes the field layout, while the runtime resolver tree now
+establishes the separate logical-name-to-record index. The archive is partially indexed and
+selected records are extractable; this record field’s semantic role still needs investigation.
 
 ## Confirmed: the game's fonts are pack records, and the title names are material graphs
 
@@ -241,19 +242,21 @@ is geometry drawn with the game's fonts (Georgia for text, `tag 4096`) and shade
 geometry*, and the natural instrument is a same-tag, same-length payload served under the same
 name.
 
-## Confirmed: the pack holds no image data — the title is geometry, shaded
+## Survey of previously recovered payloads: no image container found
 
-The record table recovered from the live process is **complete**: its 863 spans tile the whole
-306,794,369-byte pack with no overlap, so nothing is hiding outside the records.
+An earlier memory scan reported 863 candidate spans and claimed they tiled the full pack. That
+completeness claim is superseded: the resolver-tree capture verifies 624 indexed records, while
+114 of the prior deduplicated structural candidates remain unconfirmed. The negative searches
+below describe the earlier surveyed payload set, not every byte range in the archive.
 
 Two surveys of the decrypted payloads settle what the pack does *not* contain:
 
-- **No image container** anywhere: no `DDS `, `PNG`, `KTX `, `JPEG`, `RIFF` or `TGA` signature in
-  any record's first 512 bytes (and the eleven `tag 4096` slices are genuine TrueType, so the
-  scan reads payloads correctly).
+- **No image container** in that survey: no `DDS `, `PNG`, `KTX `, `JPEG`, `RIFF` or `TGA`
+  signature in the candidate records' first 512 bytes (and the eleven `tag 4096` slices are
+  genuine TrueType, so those particular slices decrypt correctly).
 - **No raw image geometry** either: searching every record for a width/height pair near the start
   whose extent accounts for the remaining bytes at 1–4 bytes per pixel (`tools/re/find_textures.py`)
-  yields **zero** candidates across all 863 records and across the 39 slices whose seed is pinned
+  yields **zero** candidates across that 863-candidate survey and across the 39 slices whose seed is pinned
   by name.
 
 Together with the earlier negative — `HYPER`/`DEMON` exist nowhere in the pack or the executable —

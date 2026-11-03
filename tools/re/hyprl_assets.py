@@ -67,23 +67,70 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
                 names_path: pathlib.Path | None):
     pack_size = pack.stat().st_size
     records = {}
+    verified_names = {}
+    unresolved_names = {}
+    resolver_tables = {}
+    resolver_summaries = {}
     for line, event in load_lines(evidence):
-        if event.get("event") != "asset_record":
-            continue
-        try:
-            offset, size, tag = (int(event[k]) for k in ("offset", "size", "tag"))
-        except (KeyError, TypeError, ValueError):
-            continue
-        # Python integers do not overflow, but use subtraction form to mirror
-        # safe fixed-width validation and reject zero-length/out-of-file rows.
-        if offset < 0 or size <= 0 or offset > pack_size or size > pack_size - offset:
-            continue
-        key = (offset, size, tag)
-        records.setdefault(key, {"offset": offset, "size": size, "tag": tag,
-                                  "evidence_lines": []})["evidence_lines"].append(line)
+        if event.get("event") == "asset_record":
+            try:
+                offset, size, tag = (int(event[k]) for k in ("offset", "size", "tag"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            # Python integers do not overflow, but use subtraction form to mirror
+            # safe fixed-width validation and reject zero-length/out-of-file rows.
+            if offset < 0 or size <= 0 or offset > pack_size or size > pack_size - offset:
+                continue
+            key = (offset, size, tag)
+            records.setdefault(key, {"offset": offset, "size": size, "tag": tag,
+                                      "evidence_lines": []})["evidence_lines"].append(line)
+        elif event.get("event") == "asset_mapping":
+            try:
+                offset, size, tag = (int(event[k]) for k in ("offset", "size", "tag"))
+                name = event["name"]
+            except (KeyError, TypeError, ValueError):
+                continue
+            if (isinstance(name, str) and name and offset >= 0 and size > 0 and
+                    offset <= pack_size and size <= pack_size - offset):
+                key = (offset, size, tag)
+                records.setdefault(key, {"offset": offset, "size": size, "tag": tag,
+                                         "evidence_lines": []})
+                verified_names.setdefault((offset, size, tag), []).append({**event, "line": line})
+                resolver_tables.setdefault((event.get("record_array"), event.get("table")), []).append(event)
+        elif event.get("event") == "asset_mapping_unresolved":
+            try:
+                key = (int(event["offset"]), int(event["size"]), int(event["tag"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            try:
+                raw_name = bytes.fromhex(event.get("name_hex", ""))
+                decoded_name = raw_name.decode("ascii")
+            except (ValueError, UnicodeDecodeError):
+                decoded_name = ""
+            if (decoded_name and len(decoded_name) == int(event.get("name_length", -1)) and
+                    all(0x20 <= ord(char) <= 0x7e for char in decoded_name)):
+                records.setdefault(key, {"offset": key[0], "size": key[1], "tag": key[2],
+                                         "evidence_lines": []})
+                resolved_event = {**event, "name": decoded_name, "line": line,
+                                  "source_event": "asset_mapping_unresolved"}
+                verified_names.setdefault(key, []).append(resolved_event)
+                resolver_tables.setdefault((event.get("record_array"), event.get("table")), []).append(resolved_event)
+            else:
+                unresolved_names.setdefault(key, []).append({**event, "line": line})
+        elif event.get("event") == "asset_tree_summary":
+            resolver_summaries[(event.get("record_array"), event.get("table"))] = event
+
+    resolver_ids = {}
+    for table_key, events in resolver_tables.items():
+        identity = sorted((int(e.get("index", -1)), e.get("name", ""), int(e["offset"]),
+                           int(e["size"]), int(e["tag"])) for e in events)
+        digest_input = json.dumps(identity, ensure_ascii=True, separators=(",", ":")).encode()
+        resolver_ids[table_key] = "tbl-" + hashlib.sha256(digest_input).hexdigest()[:12]
+        for event in events:
+            event["resolver_table_id"] = resolver_ids[table_key]
 
     name_map = read_names(names_path)
-    cipher_tables = load_tables(exe)[:2] if name_map else None
+    cipher_tables = load_tables(exe)[:2] if (name_map or verified_names) else None
     ordered = []
     with pack.open("rb") as stream:
         for (offset, size, tag), row in sorted(records.items()):
@@ -91,7 +138,13 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
             sample = stream.read(min(size, 4096))
             names = name_map.get((offset, size, tag), [])
             unique_names = sorted(set(names))
-            name = unique_names[0] if len(unique_names) == 1 else None
+            live = verified_names.get((offset, size, tag), [])
+            live_names = sorted({entry["name"] for entry in live})
+            candidates = live_names if live else unique_names
+            name = candidates[0] if len(candidates) == 1 else None
+            association = ("verified" if live and len(live_names) == 1 else
+                           "ambiguous" if (live and live_names) or len(unique_names) > 1 else
+                           "inferred" if name else "unknown")
             content_format = None
             payload_header = None
             if name and cipher_tables:
@@ -103,8 +156,20 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
             row.update({
                 "id": f"rec-{offset:09x}-{size:08x}-{tag:04x}",
                 "name": name,
-                "name_candidates": unique_names if len(unique_names) > 1 else [],
-                "association": "inferred" if name else ("ambiguous" if unique_names else "unknown"),
+                "name_candidates": candidates if len(candidates) > 1 else [],
+                "association": association,
+                "name_evidence_lines": [entry["line"] for entry in live],
+                "resolver_mappings": [
+                    {**{k: v for k, v in entry.items() if k != "line"},
+                     "resolver_table_id": resolver_ids.get((entry.get("record_array"), entry.get("table")))}
+                    for entry in live],
+                "resolver_table_ids": sorted({resolver_ids[(entry.get("record_array"), entry.get("table"))]
+                                               for entry in live
+                                               if (entry.get("record_array"), entry.get("table")) in resolver_ids}),
+                "unresolved_name_nodes": unresolved_names.get((offset, size, tag), []),
+                "record_evidence": ("resolver-linked" if live else
+                                    "resolver-array-unresolved-name" if unresolved_names.get((offset, size, tag))
+                                    else "probe-candidate"),
                 "seed": f"0x{seed_for_name(name) & 0x3ff:03x}" if name else None,
                 "key_class": f"0x{seed_for_name(name) & 0x3ff:03x}" if name else None,
                 "tag_name": TAGS.get(tag, "unsupported"),
@@ -121,6 +186,11 @@ def build_index(pack: pathlib.Path, exe: pathlib.Path, evidence: pathlib.Path,
         "evidence": {"path": str(evidence), "sha256": sha256(evidence),
                      "unique_records": len(ordered),
                      "names_sha256": sha256(names_path) if names_path else None},
+        "resolver_tables": [{**resolver_summaries.get(key, {
+                                "record_array": key[0], "table": key[1],
+                                "mappings": len(value)}),
+                              "id": resolver_ids[key]}
+                             for key, value in resolver_tables.items()],
         "records": ordered,
     }
 
@@ -142,11 +212,22 @@ def load_index(path, pack=None, exe=None, evidence=None, names_path=None):
 
 
 def pick(index, query):
-    exact = [r for r in index["records"] if r["id"] == query or r.get("name") == query]
+    if ":" in query:
+        table_id, name = query.split(":", 1)
+        exact = []
+        for record in index["records"]:
+            if any(mapping.get("resolver_table_id") == table_id and
+                   mapping.get("name") == name for mapping in record.get("resolver_mappings", [])):
+                selected = dict(record)
+                selected["_selected_name"] = name
+                exact.append(selected)
+    else:
+        exact = [r for r in index["records"] if r["id"] == query or r.get("name") == query]
     if not exact and query.isdecimal():
         exact = [r for r in index["records"] if r["offset"] == int(query)]
     if len(exact) != 1:
-        raise ValueError(f"expected one record for {query!r}, found {len(exact)}; use record ID or offset")
+        suggestion = "use a record ID, offset, or table-id:name" if exact else "use a record ID or offset"
+        raise ValueError(f"expected one record for {query!r}, found {len(exact)}; {suggestion}")
     return exact[0]
 
 
@@ -192,7 +273,11 @@ def main(argv=None):
             temp = args.index.with_name(args.index.name + ".tmp")
             temp.write_text(json.dumps(index, indent=2) + "\n")
             os.replace(temp, args.index)
-            print(f"indexed {len(index['records'])} unique records; cache {args.index}")
+            verified = sum(row["association"] == "verified" for row in index["records"])
+            candidate = len(index["records"]) - sum(
+                row["record_evidence"] == "resolver-linked" for row in index["records"])
+            print(f"indexed {len(index['records'])} unique records; verified_names={verified}; "
+                  f"unlinked_candidates={candidate}; cache {args.index}")
             return 0
         index = load_index(args.index, args.pack, args.exe, args.evidence, args.names)
         if args.command == "verify":
@@ -217,15 +302,17 @@ def main(argv=None):
                 parser.error("extract requires --out")
             if args.name and rows[0].get("name") and args.name != rows[0]["name"]:
                 raise ValueError("--name conflicts with the indexed name association")
+            selected_name = rows[0].get("_selected_name") or rows[0].get("name")
             seed = extract(rows[0], args.pack, args.exe, args.out,
-                           args.name or rows[0].get("name"), args.key_class)
+                           args.name or selected_name, args.key_class)
             print(f"wrote {args.out} ({rows[0]['size']} bytes), key-class=0x{seed:03x}")
         elif args.command == "info":
             print(json.dumps(rows[0], indent=2))
         else:
             for row in rows:
                 print(f"{row['id']}\t{row.get('name') or '<unknown>'}\ttag={row['tag']:#x}"
-                      f"\toffset={row['offset']}\tsize={row['size']}\t{row['association']}")
+                      f"\toffset={row['offset']}\tsize={row['size']}\t{row['association']}"
+                      f"\t{','.join(row.get('resolver_table_ids', []))}")
             print(f"records={len(rows)}")
         return 0
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:

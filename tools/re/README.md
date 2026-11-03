@@ -5,9 +5,11 @@
 `hyprl_assets.py` turns a capture from the native in-game asset probe into a cached,
 hash-associated record catalog. It preserves each distinct valid `(offset, size, tag)`
 triple, duplicate evidence lines, encrypted hashes, tag names, and stable `rec-...` IDs.
-Names remain unknown unless an explicit map from `name_records.py` is supplied;
-duplicate name candidates remain ambiguous. A unique map entry is labeled `inferred`,
-because content-based key recovery is not a static name-to-record proof.
+Names remain unknown unless an explicit map from `name_records.py` is supplied or the
+capture contains direct resolver `asset_mapping` events. Unique direct tree mappings are
+labeled `verified`; a unique content-based map entry remains `inferred` because key-class
+recovery alone is not a name-to-record proof. Repeated names across resolver tables are
+qualified by stable table IDs.
 
 ```bash
 GAME="$HOME/.local/share/Steam/steamapps/common/hyperdemon"
@@ -18,15 +20,16 @@ python3 tools/re/hyprl_assets.py list --pack "$GAME/asset/asset" \
 python3 tools/re/hyprl_assets.py info fract3 --pack ... --exe ... --evidence ...
 python3 tools/re/hyprl_assets.py extract fract3 --name fract3 --out /tmp/fract3.bin \
   --pack ... --exe ... --evidence ...
+python3 tools/re/hyprl_assets.py info 'tbl-c6b9922fadd2:pain backup' --pack ... --exe ... --evidence ...
 ```
 
 The cache defaults to the ignored local file `hyprlodr-assets-index.json` and is
-accepted only when archive, executable, evidence, and optional name-map hashes still match. `verify`
-checks cache identity and record bounds. Extraction writes only to the requested
-destination and decrypts by logical name (or explicit `--key-class`); it never edits
-the installed archive. Unknown keys are not guessed. Current coverage is limited to
-records found by the runtime probe; the catalog does not claim the capture contains
-the entire archive.
+accepted only when archive, executable, evidence, and optional name-map hashes still match.
+`verify` checks cache identity and record bounds. Extraction writes only to the requested
+destination and decrypts by logical name (or explicit `--key-class`); it never edits the
+installed archive. A name duplicated across tables must use `table-id:name`; a unique
+name can be used directly. Current capture coverage and unconfirmed candidates are
+reported in `docs/RE_PACK.md`.
 
 Read-only tooling for understanding a HYPER DEMON build. Nothing here modifies
 the game, and nothing here is required to install mods: it exists so that any

@@ -52,6 +52,14 @@
 #define HYPRLODR_ASSET_ATTEMPTS 40u
 #define HYPRLODR_ASSET_FIRST_DELAY_MS 4000u
 #define HYPRLODR_ASSET_ATTEMPT_MS 1000u
+#define HYPRLODR_RECORD_ARRAY_MAX 1024u
+#define HYPRLODR_RECORD_ARRAY_HASH_SIZE 2048u
+#define HYPRLODR_TREE_NODE_MAX 8192u
+
+typedef struct asset_array_ref {
+    unsigned long long base;
+    unsigned count;
+} asset_array_ref;
 
 static char g_log_path[1024] = "";
 static char g_status[32] = "idle";
@@ -61,6 +69,10 @@ static unsigned g_keys = 0;
 static unsigned long long g_key_bases[HYPRLODR_KEY_MAX_ARRAYS];
 static unsigned g_key_base_count = 0;
 static unsigned g_refs = 0;
+static asset_array_ref g_record_arrays[HYPRLODR_RECORD_ARRAY_MAX];
+static unsigned short g_record_array_hash[HYPRLODR_RECORD_ARRAY_HASH_SIZE];
+static unsigned g_record_array_count = 0;
+static unsigned g_mappings = 0;
 
 static void set_status(const char *text) {
     snprintf(g_status, sizeof g_status, "%s", text);
@@ -100,7 +112,7 @@ static int read_name(const unsigned char *record, char *out, size_t capacity) {
     }
     for (index = 0; index < (size_t)length; ++index) {
         unsigned char c = chars[index];
-        if (c < 0x21 || c > 0x7eu) return 0;
+        if (c < 0x20 || c > 0x7eu) return 0;
     }
     memcpy(out, chars, (size_t)length);
     out[length] = '\0';
@@ -124,6 +136,35 @@ static int record_parses(const unsigned char *record) {
         tag != 0x100u && tag != 4096u)
         return 0;
     return 1;
+}
+
+static int record_bounds_parse(const unsigned char *record) {
+    unsigned offset = load_u32(record + 0x00);
+    unsigned length = load_u32(record + 0x04);
+    return offset >= HYPRLODR_ASSET_HEADER && length >= HYPRLODR_ASSET_HEADER &&
+           (unsigned long long)offset + (unsigned long long)length <= HYPRLODR_ASSET_PACK_BYTES;
+}
+
+static void remember_record_array(const unsigned char *base, unsigned count) {
+    unsigned index, slot;
+    unsigned limit = count;
+    if (!base || count < 3u || g_record_array_count >= HYPRLODR_RECORD_ARRAY_MAX) return;
+    for (index = 0; index < g_record_array_count; ++index) {
+        if (g_record_arrays[index].base == (unsigned long long)(size_t)base) {
+            if (count > g_record_arrays[index].count) g_record_arrays[index].count = count;
+            return;
+        }
+    }
+    /* Keep the reported run within the readable region; the traversal validates
+     * each indexed record again before emitting a mapping. */
+    if (limit > HYPRLODR_ASSET_MAX_RECORDS) limit = HYPRLODR_ASSET_MAX_RECORDS;
+    g_record_arrays[g_record_array_count].base = (unsigned long long)(size_t)base;
+    g_record_arrays[g_record_array_count].count = limit;
+    slot = (unsigned)(((unsigned long long)(size_t)base >> 4) * 2654435761u) &
+           (HYPRLODR_RECORD_ARRAY_HASH_SIZE - 1u);
+    while (g_record_array_hash[slot]) slot = (slot + 1u) & (HYPRLODR_RECORD_ARRAY_HASH_SIZE - 1u);
+    g_record_array_hash[slot] = (unsigned short)(g_record_array_count + 1u);
+    ++g_record_array_count;
 }
 
 static void emit(FILE *log, const unsigned char *record) {
@@ -173,6 +214,7 @@ static unsigned scan_region(const unsigned char *base, size_t span, FILE *log) {
     while (index + run <= span) {
         const unsigned char *record = base + index;
         size_t cursor;
+        unsigned run_count = 0;
 
         if (!(record_parses(record) && record_parses(record + HYPRLODR_ASSET_STRIDE) &&
               record_parses(record + 2u * HYPRLODR_ASSET_STRIDE))) {
@@ -197,8 +239,10 @@ static unsigned scan_region(const unsigned char *base, size_t span, FILE *log) {
              * 722 MB scan found none), so slices are identified by content. */
             emit(log, slot);
             ++reported;
+            ++run_count;
             cursor += HYPRLODR_ASSET_STRIDE;
         }
+        remember_record_array(record, run_count);
         if (g_records >= HYPRLODR_ASSET_MAX_RECORDS) return reported;
         index = cursor;
     }
@@ -230,7 +274,7 @@ static int readable(const void *pointer, size_t length) {
 }
 
 /* Reads one 0x20-byte std::string element of the key array. Returns 0 unless it
- * holds a plausible asset key, i.e. printable ASCII with no spaces. */
+ * holds a plausible asset key, i.e. printable ASCII. */
 static int key_element(const unsigned char *element, char *out, size_t capacity) {
     unsigned long long length = load_u64(element + 0x10);
     unsigned long long room = load_u64(element + 0x18);
@@ -249,12 +293,169 @@ static int key_element(const unsigned char *element, char *out, size_t capacity)
     }
     for (index = 0; index < (size_t)length; ++index) {
         unsigned char c = chars[index];
-        if (c < 0x21 || c > 0x7eu) return 0;
+        if (c < 0x20 || c > 0x7eu) return 0;
     }
     if (capacity <= (size_t)length) return 0;
     memcpy(out, chars, (size_t)length);
     out[length] = '\0';
     return 1;
+}
+
+static int tree_name(const unsigned char *element, char *out, size_t capacity) {
+    unsigned long long length = load_u64(element + 0x10);
+    unsigned long long room = load_u64(element + 0x18);
+    const unsigned char *chars;
+    size_t index;
+
+    if (out && capacity) out[0] = '\0';
+    if (!out || length == 0 || length > HYPRLODR_ASSET_NAME_MAX ||
+        capacity <= (size_t)length || room < length || room > 0x10000ull) return 0;
+    if (room <= 15u) chars = element;
+    else {
+        chars = (const unsigned char *)(size_t)load_u64(element);
+        if (!chars || !readable(chars, (size_t)length)) return 0;
+    }
+    for (index = 0; index < (size_t)length; ++index) {
+        unsigned char c = chars[index];
+        if (c < 0x20 || c > 0x7eu) return 0;
+    }
+    memcpy(out, chars, (size_t)length);
+    out[length] = '\0';
+    return 1;
+}
+
+static const unsigned char *tree_string_data(const unsigned char *element,
+                                             unsigned long long *length_out,
+                                             unsigned long long *capacity_out) {
+    unsigned long long length = load_u64(element + 0x10);
+    unsigned long long room = load_u64(element + 0x18);
+    const unsigned char *chars;
+    if (length_out) *length_out = length;
+    if (capacity_out) *capacity_out = room;
+    if (length == 0 || length > HYPRLODR_ASSET_NAME_MAX || room < length || room > 0x10000ull)
+        return NULL;
+    if (room <= 15u) return element;
+    chars = (const unsigned char *)(size_t)load_u64(element);
+    return chars && readable(chars, (size_t)length) ? chars : NULL;
+}
+
+static int seen_node(const unsigned long long *seen, unsigned count,
+                     unsigned long long node) {
+    unsigned index;
+    for (index = 0; index < count; ++index) if (seen[index] == node) return 1;
+    return 0;
+}
+
+/* The resolver's per-kind table stores its record-array pointer at +0 and the
+ * MSVC tree sentinel at +0x30. Each tree node stores the logical name at +0x20
+ * and the record-array index at +0x40 (FUN_140211e70, Ghidra decompile). */
+static unsigned walk_name_tree(FILE *log, unsigned long long table,
+                               const asset_array_ref *records) {
+    unsigned long long sentinel = load_u64((const unsigned char *)(size_t)table + 0x30);
+    unsigned long long pending[HYPRLODR_TREE_NODE_MAX];
+    unsigned long long seen[HYPRLODR_TREE_NODE_MAX];
+    unsigned pending_count = 0, seen_count = 0, mapped = 0;
+    unsigned long long root;
+    unsigned unresolved = 0, invalid_index = 0, invalid_record = 0, max_index = 0;
+
+    if (!sentinel || !readable((const void *)(size_t)sentinel, 0x20u)) return 0;
+    root = load_u64((const unsigned char *)(size_t)sentinel + 0x08);
+    if (!root || root == sentinel || !readable((const void *)(size_t)root, 0x48u)) return 0;
+    if (((const unsigned char *)(size_t)root)[0x19] != 0) return 0;
+    pending[pending_count++] = root;
+    while (pending_count && seen_count < HYPRLODR_TREE_NODE_MAX) {
+        unsigned long long node = pending[--pending_count];
+        const unsigned char *p = (const unsigned char *)(size_t)node;
+        unsigned long long left, right;
+        unsigned index;
+        char name[HYPRLODR_ASSET_NAME_MAX + 1];
+        const unsigned char *record;
+        if (!node || node == sentinel || seen_node(seen, seen_count, node)) continue;
+        if (!readable(p, 0x48u) || p[0x19] != 0) continue;
+        seen[seen_count++] = node;
+        left = load_u64(p);
+        right = load_u64(p + 0x10);
+        if (left && left != sentinel && pending_count < HYPRLODR_TREE_NODE_MAX)
+            pending[pending_count++] = left;
+        if (right && right != sentinel && pending_count < HYPRLODR_TREE_NODE_MAX)
+            pending[pending_count++] = right;
+        index = load_u32(p + 0x40);
+        if (index > max_index) max_index = index;
+        if (index >= HYPRLODR_ASSET_MAX_RECORDS) { ++invalid_index; continue; }
+        record = (const unsigned char *)(size_t)(records->base +
+                 (unsigned long long)index * HYPRLODR_ASSET_STRIDE);
+        if (!readable(record, HYPRLODR_ASSET_STRIDE) || !record_bounds_parse(record)) {
+            ++invalid_record;
+            continue;
+        }
+        if (!tree_name(p + 0x20, name, sizeof name)) {
+            unsigned long long name_length = 0, name_capacity = 0;
+            const unsigned char *name_bytes = tree_string_data(p + 0x20, &name_length,
+                                                                &name_capacity);
+            unsigned byte;
+            fprintf(log,
+                    "{\"event\":\"asset_mapping_unresolved\",\"table\":\"0x%llx\","
+                    "\"tree\":\"0x%llx\",\"node\":\"0x%llx\",\"record_array\":\"0x%llx\","
+                    "\"index\":%u,\"record_addr\":\"0x%llx\",\"offset\":%u,\"size\":%u,"
+                    "\"tag\":%u,\"name_length\":%llu,\"name_capacity\":%llu,\"name_hex\":\"",
+                    table, sentinel, node, records->base, index, (unsigned long long)(size_t)record,
+                    load_u32(record), load_u32(record + 4), load_u32(record + 0x40),
+                    name_length, name_capacity);
+            if (name_bytes) for (byte = 0; byte < (unsigned)name_length; ++byte)
+                fprintf(log, "%02x", name_bytes[byte]);
+            fprintf(log, "\"}\n");
+            ++unresolved;
+            continue;
+        }
+        fprintf(log,
+                "{\"event\":\"asset_mapping\",\"table\":\"0x%llx\",\"tree\":\"0x%llx\","
+                "\"node\":\"0x%llx\",\"record_array\":\"0x%llx\",\"index\":%u,"
+                "\"record_addr\":\"0x%llx\",\"offset\":%u,\"size\":%u,\"tag\":%u,"
+                "\"tag_supported\":%s,\"name\":\"%s\"}\n",
+                table, sentinel, node, records->base, index, (unsigned long long)(size_t)record,
+                load_u32(record), load_u32(record + 4), load_u32(record + 0x40),
+                record_parses(record) ? "true" : "false", name);
+        ++mapped;
+        ++g_mappings;
+    }
+    fprintf(log,
+            "{\"event\":\"asset_tree_summary\",\"table\":\"0x%llx\",\"tree\":\"0x%llx\","
+            "\"record_array\":\"0x%llx\",\"probe_run_count\":%u,\"max_record_index\":%u,"
+            "\"tree_nodes\":%u,"
+            "\"mappings\":%u,\"unresolved_names\":%u,\"invalid_indices\":%u,"
+            "\"invalid_records\":%u}\n", table, sentinel, records->base, records->count,
+            max_index, seen_count, mapped, unresolved, invalid_index, invalid_record);
+    return mapped;
+}
+
+static unsigned record_array_index(unsigned long long value) {
+    unsigned slot = (unsigned)((value >> 4) * 2654435761u) &
+                    (HYPRLODR_RECORD_ARRAY_HASH_SIZE - 1u);
+    while (g_record_array_hash[slot]) {
+        unsigned index = (unsigned)g_record_array_hash[slot] - 1u;
+        if (g_record_arrays[index].base == value) return index;
+        slot = (slot + 1u) & (HYPRLODR_RECORD_ARRAY_HASH_SIZE - 1u);
+    }
+    return HYPRLODR_RECORD_ARRAY_MAX;
+}
+
+static void scan_record_table_refs_region(const unsigned char *base, size_t span, FILE *log) {
+    size_t cursor;
+    if (span < 0x38u) return;
+    for (cursor = 0; cursor + 8u <= span; cursor += 8u) {
+        unsigned array_index = record_array_index(load_u64(base + cursor));
+        unsigned long long table;
+        const asset_array_ref *array;
+        unsigned long long sentinel;
+        if (array_index == HYPRLODR_RECORD_ARRAY_MAX) continue;
+        table = (unsigned long long)(size_t)(base + cursor);
+        array = &g_record_arrays[array_index];
+        if (!readable((const void *)(size_t)table, 0x38u)) continue;
+        sentinel = load_u64((const unsigned char *)(size_t)table + 0x30);
+        if (!sentinel || !readable((const void *)(size_t)sentinel, 0x20u)) continue;
+        if (((const unsigned char *)(size_t)sentinel)[0x19] == 0) continue;
+        (void)walk_name_tree(log, table, array);
+    }
 }
 
 static void emit_key_run(FILE *log, const unsigned char *base, unsigned count) {
@@ -387,9 +588,11 @@ static void scan_refs_region(const unsigned char *base, size_t span, FILE *log) 
 
 static void scan_refs_space(FILE *log) {
     const unsigned long long limit = 0x00007ffffffeffffull;
+    const unsigned long long scan_limit = 4ull * 1024ull * 1024ull * 1024ull;
     unsigned long long address = 0x10000ull;
+    unsigned long long scanned = 0;
 
-    while (address < limit && g_refs < HYPRLODR_REF_MAX) {
+    while (address < limit && scanned < scan_limit) {
         MEMORY_BASIC_INFORMATION64A info;
         unsigned long long base;
         unsigned long long span;
@@ -405,7 +608,10 @@ static void scan_refs_space(FILE *log) {
             continue;
         }
         if (region_readable(&info)) {
-            scan_refs_region((const unsigned char *)(size_t)base, (size_t)span, log);
+            scanned += span;
+            scan_record_table_refs_region((const unsigned char *)(size_t)base, (size_t)span, log);
+            if (g_refs < HYPRLODR_REF_MAX)
+                scan_refs_region((const unsigned char *)(size_t)base, (size_t)span, log);
         }
         address = base + span;
     }
@@ -429,6 +635,9 @@ static DWORD WINAPI probe_thread(LPVOID unused) {
 
         Sleep(attempt == 1 ? HYPRLODR_ASSET_FIRST_DELAY_MS : HYPRLODR_ASSET_ATTEMPT_MS);
         g_records = 0;
+        g_record_array_count = 0;
+        memset(g_record_array_hash, 0, sizeof g_record_array_hash);
+        g_mappings = 0;
         records = scan_space(log, &regions, &bytes);
         fprintf(log, "{\"event\":\"asset_scan\",\"attempt\":%u,\"regions\":%u,\"bytes\":%llu,"
                      "\"records\":%u,\"key_arrays\":%u,\"keys\":%u}\n", attempt, regions,
@@ -437,8 +646,9 @@ static DWORD WINAPI probe_thread(LPVOID unused) {
     }
     if (g_key_base_count) {
         scan_refs_space(log);
-        fprintf(log, "{\"event\":\"ref_scan\",\"refs\":%u,\"key_bases\":%u}\n", g_refs,
-                g_key_base_count);
+        fprintf(log, "{\"event\":\"ref_scan\",\"refs\":%u,\"key_bases\":%u,"
+                     "\"record_arrays\":%u,\"mappings\":%u}\n", g_refs,
+                g_key_base_count, g_record_array_count, g_mappings);
     }
     fclose(log);
     set_status(records ? "found" : "not_found");

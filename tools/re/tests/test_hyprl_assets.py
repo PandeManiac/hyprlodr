@@ -53,6 +53,62 @@ class AssetIndexTests(unittest.TestCase):
         self.assertEqual(row["association"], "ambiguous")
         self.assertEqual(row["name_candidates"], ["one", "two"])
 
+    def test_live_tree_mapping_is_verified(self):
+        with self.evidence.open("a") as stream:
+            stream.write("\n" + json.dumps({
+                "event": "asset_mapping", "offset": 16, "size": 64, "tag": 4096,
+                "name": "live_name", "index": 0, "node": "0x1234",
+            }))
+        with mock.patch.object(assets, "load_tables", return_value=(bytes(256), bytes(256), bytes(1024))):
+            row = assets.build_index(self.pack, self.exe, self.evidence, None)["records"][0]
+        self.assertEqual(row["name"], "live_name")
+        self.assertEqual(row["association"], "verified")
+        self.assertEqual(len(row["name_evidence_lines"]), 1)
+        self.assertEqual(row["record_evidence"], "resolver-linked")
+        self.assertEqual(row["resolver_mappings"][0]["index"], 0)
+        table_id = row["resolver_table_ids"][0]
+        selected = assets.pick({"records": [row]}, f"{table_id}:live_name")
+        self.assertEqual(selected["id"], row["id"])
+        self.assertEqual(selected["_selected_name"], "live_name")
+
+    def test_qualified_duplicate_name_selects_exact_resolver_mapping(self):
+        events = [
+            {"event": "asset_mapping", "offset": 16, "size": 64, "tag": 4096,
+             "name": "shared", "index": 0, "record_array": "0x1000", "table": "0x2000"},
+            {"event": "asset_mapping", "offset": 100, "size": 32, "tag": 1,
+             "name": "other", "index": 0, "record_array": "0x3000", "table": "0x4000"},
+            {"event": "asset_mapping", "offset": 100, "size": 32, "tag": 1,
+             "name": "shared", "index": 1, "record_array": "0x3000", "table": "0x4000"},
+        ]
+        self.evidence.write_text("\n".join(json.dumps(e) for e in events))
+        tables = (bytes(256), bytes(256), bytes(1024))
+        with mock.patch.object(assets, "load_tables", return_value=tables):
+            index = assets.build_index(self.pack, self.exe, self.evidence, None)
+        ids = {row["name"]: row["id"] for row in index["records"]}
+        first = next(row for row in index["records"] if row["offset"] == 16)
+        second = next(row for row in index["records"] if row["offset"] == 100)
+        first_table = first["resolver_mappings"][0]["resolver_table_id"]
+        second_table = second["resolver_mappings"][1]["resolver_table_id"]
+        self.assertNotEqual(first_table, second_table)
+        self.assertEqual(assets.pick(index, f"{first_table}:shared")["_selected_name"], "shared")
+        self.assertEqual(assets.pick(index, f"{second_table}:shared")["_selected_name"], "shared")
+        self.assertNotEqual(first["id"], second["id"])
+
+    def test_unresolved_tree_key_hex_recovers_printable_name(self):
+        with self.evidence.open("a") as stream:
+            stream.write("\n" + json.dumps({
+                "event": "asset_mapping_unresolved", "offset": 16, "size": 64,
+                "tag": 4096, "name_length": 11, "name_capacity": 15,
+                "name_hex": "7061696e206261636b7570", "index": 0,
+                "record_array": "0x1000", "table": "0x2000",
+            }))
+        with mock.patch.object(assets, "load_tables", return_value=(bytes(256), bytes(256), bytes(1024))):
+            row = assets.build_index(self.pack, self.exe, self.evidence, None)["records"][0]
+        self.assertEqual(row["name"], "pain backup")
+        self.assertEqual(row["association"], "verified")
+        self.assertEqual(row["resolver_mappings"][0]["source_event"],
+                         "asset_mapping_unresolved")
+
     def test_extract_requires_explicit_key_for_unknown_record(self):
         row = {"offset": 16, "size": 32}
         with self.assertRaisesRegex(ValueError, "needs --name"):
