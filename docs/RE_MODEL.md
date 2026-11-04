@@ -271,12 +271,62 @@ use by the first-person arm.
 
 The captured frame at
 `.tmp/asset-proof/run2/analysis/game-frame-120.png` shows “Connecting to
-leaderboards,” not gameplay. The game then raised access violation
-`0xc0000005` at `hyperdemon.exe+0x75d7`, from the Steam minidump. This confirms
-the run stopped before the requested visual check; the available evidence does
-not attribute the crash to the replacement archive or to the loader. Therefore
-the run proves first-open redirection but neither proves nor disproves that
-`hand2` is the original first-person arm. No follow-up game launch was made.
+leaderboards,” not gameplay. The Steam minidump
+`.tmp/asset-proof/run2/analysis/crash_steamuser.dmp` (SHA-256
+`8ad63f3fc15b452ac30363d0c60e93fb1cac64e3d633bbf3f2d35766ded8018b`) records
+access violation `0xc0000005`: a read from address `0x80` at
+`hyperdemon.exe+0x75d7`. The faulting instruction is `CALL qword ptr [RAX+0x80]`
+with `RAX=0`, consistent with a null object/vtable dispatch. Unwinding the
+Windows x64 `.pdata` function ranges gives the game-thread chain
+`FUN_1402ff6c0` → `FUN_140002980` → `FUN_1401c31a0` → `FUN_1401c33c0` →
+`FUN_140073ca0` → `FUN_140006dd0`; the intermediate functions include the
+main update loop. This places the exception in update processing, but does not
+identify the object or subsystem that produced the null pointer. The crash
+record does not prove a redirect wait or archive read was active at the fault.
+
+The wait is a bounded spin with a 1 ms sleep and uses an acquire/release flag;
+the resolver and wait logger do not call an intercepted file API (`WriteFile`
+is used for logging), so the hook path is not recursively re-entered. The
+bootstrap worker reads `hyprlodr-config.json`, configures the loader, scans the
+live resolver tables, and resolves/initializes mods; the inspected native path
+does not open `asset/asset` itself. It installs the file hook before resolving
+mods, so later-loaded mod imports are not part of that initial hook pass. If
+`CreateThread` fails, the proxy now marks the gate ready immediately: no worker
+can publish a replacement, and the game falls back to its original archive
+instead of waiting for the 65-second cap. A stuck worker still falls back at
+the cap, as covered by the shortened-timeout fixture.
+
+To separate startup redirection from archive contents, two controlled runs
+used the same zero-delay configuration, current proxy, disabled rendering hook,
+and first-open logging. Run 3 redirected to a separate byte-for-byte archive
+copy (`.tmp/asset-proof/run3-original/asset.original-copy`, SHA-256 equal to the
+installed archive, with a distinct inode). Its first `_Fiopen` of `asset/asset`
+at 477 ms logged `redirected:true`, `ok:true`, and the control-copy path. Run 4
+redirected to the already validated modified archive; its first open at 417 ms
+also logged `redirected:true`, `ok:true`, and the patched path. Both processes
+remained alive for more than one minute without a new minidump. The saved frame
+at run 3 showed “Connected as [berds]”; the run 4 frame showed “Connecting to
+leaderboards.” Neither run reached gameplay or confirmed loading/rendering of
+`hand2`.
+
+The original-copy baseline demonstrates that early redirection to a separate
+archive copy does not by itself reproduce the prior startup crash. The modified
+archive also did not reproduce it in its controlled run. Since the original
+crash was not reproduced and the run conditions cannot establish which game
+state differed, the cause remains unclassified; it is unsupported to attribute
+it either to the early redirect or to modified model contents. Both runs prove
+successful first archive opens only. Neither proves nor disproves that `hand2`
+is the original first-person arm.
+
+The redirect-gate Wine tests now cover an open before redirect publication, a
+successful initialization with no archive redirect, initialization failure
+after redirect registration (which rolls registrations back and releases the
+open), and a deliberately shortened timeout (which falls back to the original
+path while bootstrap continues). These stand-in tests verify wait/publication
+ordering and fallback behavior, not game asset reads. The custom test process
+entry point now calls `ExitProcess` after `main` returns, matching CRT process
+termination so a lingering bootstrap thread does not keep Wine test clients
+alive. No additional game launch was made.
 
 Temporary game-directory log links and the test mod link were removed after
 the attempt; the original `OpenAL32.dll` and prior logs were restored. The

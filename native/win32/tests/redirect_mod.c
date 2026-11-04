@@ -6,6 +6,7 @@
  * and must receive these bytes through the patched CreateFileA import slot.
  */
 #include "hyprlodr/plugin.h"
+#include "hypr_win32.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -17,6 +18,9 @@
 #define PROBE_CONTENT "hyprlodr redirect content"
 
 static int mod_initialize(const hyprlodr_host_api *host) {
+#ifdef HYPRLODR_TEST_INIT_SLEEP_MS
+    Sleep(HYPRLODR_TEST_INIT_SLEEP_MS);
+#endif
     if (!HYPRLODR_HOST_API_HAS(host, file_redirect) || !host->file_redirect) {
         host->log(host->context, "error", MOD_ID, "host has no file_redirect");
         return -1;
@@ -38,6 +42,7 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     fputs(PROBE_CONTENT, file);
     fclose(file);
 
+#ifndef HYPRLODR_TEST_NO_REDIRECT
     if (host->file_redirect(host->context, PROBE_NAME, replacement) != 0) {
         host->log(host->context, "error", MOD_ID, "file_redirect refused");
         return -1;
@@ -46,6 +51,11 @@ static int mod_initialize(const hyprlodr_host_api *host) {
         host->log(host->context, "error", MOD_ID, "asset archive redirect refused");
         return -1;
     }
+#ifdef HYPRLODR_TEST_FAIL_AFTER_REDIRECT
+    host->log(host->context, "error", MOD_ID, "intentional initialization failure after redirects");
+    return -1;
+#endif
+#endif
     char message[1200];
     snprintf(message, sizeof message, "%s -> %s", PROBE_NAME, replacement);
     host->log(host->context, "info", MOD_ID, message);

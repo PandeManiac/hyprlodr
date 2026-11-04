@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#ifndef HYPRLODR_TEST_ASSET_OPEN_DELAY_MS
+#define HYPRLODR_TEST_ASSET_OPEN_DELAY_MS 1000u
+#endif
+
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -29,7 +33,7 @@ int main(int argc, char **argv) {
      * gate must hold it until redirect publication and return the replacement
      * bytes before the default 2500 ms delay expires. Let the worker finish
      * hook setup and record its attach state, but trigger before mod loading. */
-    Sleep(1000);
+    Sleep(HYPRLODR_TEST_ASSET_OPEN_DELAY_MS);
     printf("asset-open: requesting original path\n");
     fflush(NULL);
     HANDLE asset = CreateFileA("asset/asset", GENERIC_READ, FILE_SHARE_READ, NULL,

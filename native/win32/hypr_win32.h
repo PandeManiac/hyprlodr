@@ -107,6 +107,7 @@ typedef struct {
 } WIN32_FIND_DATAA;
 
 HMODULE WINAPI LoadLibraryA(LPCSTR name);
+void WINAPI ExitProcess(UINT exit_code);
 FARPROC WINAPI GetProcAddress(HMODULE module, LPCSTR name);
 BOOL WINAPI FreeLibrary(HMODULE module);
 HMODULE WINAPI GetModuleHandleA(LPCSTR name);

@@ -43,5 +43,9 @@ int hyprlodr_entry(void) {
             if (*cursor) *cursor++ = '\0';
         }
     }
-    return main(argc, args);
+    /* A real CRT calls ExitProcess after main returns. Returning directly from
+     * the PE entry point only ends this thread, which leaves stand-alone test
+     * clients alive when a proxy's bootstrap worker is still running. */
+    ExitProcess((UINT)main(argc, args));
+    return 0;
 }

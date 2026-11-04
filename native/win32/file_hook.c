@@ -51,7 +51,9 @@
 /* A configured bootstrap delay can be as long as 60 seconds. Leave extra time
  * for mod discovery and initialization, but never let one game file open wait
  * forever if the worker failed to start or hung. */
+#ifndef HYPRLODR_REDIRECT_WAIT_LIMIT_MS
 #define HYPRLODR_REDIRECT_WAIT_LIMIT_MS 65000u
+#endif
 
 typedef HANDLE(WINAPI *create_file_fn)(LPCSTR name, DWORD access, DWORD share, void *security,
                                        DWORD disposition, DWORD flags, HANDLE template_file);

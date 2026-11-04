@@ -82,6 +82,20 @@ mkdir -p "$OUT/tests"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" \
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
+# Gate fixtures exercise successful initialization without redirects, rollback
+# after an initialization error, and a worker delayed beyond a test-only wait cap.
+"$CC" "${CFLAGS[@]}" -DHYPRLODR_TEST_NO_REDIRECT -c \
+  "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod_no_redirect.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod_no_redirect.dll" \
+  "$OUT/obj/redirect_mod_no_redirect.obj" "$CRT_OBJ" "$K32"
+"$CC" "${CFLAGS[@]}" -DHYPRLODR_TEST_FAIL_AFTER_REDIRECT -c \
+  "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod_init_failure.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod_init_failure.dll" \
+  "$OUT/obj/redirect_mod_init_failure.obj" "$CRT_OBJ" "$K32"
+"$CC" "${CFLAGS[@]}" -DHYPRLODR_TEST_INIT_SLEEP_MS=500 -c \
+  "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod_delayed.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod_delayed.dll" \
+  "$OUT/obj/redirect_mod_delayed.obj" "$CRT_OBJ" "$K32"
 # ABI 5 fixture: reads the running image header. Used for the real-game proof;
 # it is not part of the Wine suite, whose host has no verified image.
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/image_mod.c" -o "$OUT/obj/image_mod.obj"

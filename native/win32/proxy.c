@@ -441,7 +441,12 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         /* Never run mod code or file I/O for mods under the loader lock. The
          * file shim can wait on the worker if the game reaches asset/asset
          * before the redirect registry is published. */
-        CreateThread(NULL, 0, bootstrap, NULL, 0, NULL);
+        if (!CreateThread(NULL, 0, bootstrap, NULL, 0, NULL)) {
+            /* Do not make the game's first archive open wait for the full gate
+             * timeout when bootstrap could not start at all. No redirect can
+             * be published, so the file shim safely falls back to the source. */
+            hyprlodr_file_hook_mark_redirects_ready();
+        }
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
         if (g_loader) {
             hyprlodr_loader_shutdown(g_loader);

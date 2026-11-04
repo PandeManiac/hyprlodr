@@ -53,11 +53,14 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   # ABI 4 file redirection: registers a probe redirect the client exercises.
   cp "$OUT/tests/redirect_mod.dll" "$WORK/proxy/mods/"
   rm -f "$WORK/proxy/redirect-probe.dat"
+  mkdir -p "$WORK/proxy/asset"
+  printf 'hyprlodr original asset content' > "$WORK/proxy/asset/asset"
 
   CFG=(--target=x86_64-pc-windows-msvc -std=c17 -O2 -ffreestanding -nostdlibinc
        -fno-stack-protector -mno-stack-arg-probe -Wall -Wextra -Werror
        -DHYPRLODR_MINIMAL_WIN32
-       -I"$ROOT/native/win32/crt" -I"$ROOT/native/win32")
+       -I"$ROOT/native/win32/crt" -I"$ROOT/native/win32"
+       -I"$ROOT/native/include" -I"$ROOT/native/src")
   clang "${CFG[@]}" -c "$ROOT/native/win32/tests/proxy_client.c" -o "$OUT/obj/proxy_client.obj"
   lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
     "/out:$WORK/proxy/proxy_client.exe" \
@@ -168,6 +171,90 @@ assert records[0]["opened"].endswith("replacement.txt"), records[0]
 # capture can be read as a timeline instead of an unordered list.
 assert "t_ms" in records[0] and "thread" in records[0], records[0]
 print(f"file log: {len(opens)} opens observed, redirect recorded")
+PY
+
+  run_gate_case() { # case-name mod-dll proxy-dll client-exe delay-config
+    local name="$1" mod="$2" proxy="$3" client="$4" delay="$5"
+    local base="$WORK/$name"
+    mkdir -p "$base/mods" "$base/asset"
+    cp "$proxy" "$base/OpenAL32.dll"
+    cp "$ORIGINAL_OPENAL" "$base/OpenAL32_real.dll"
+    cp "$OUT/tests/$mod" "$base/mods/r.redirect.dll"
+    cp "$client" "$base/proxy_client.exe"
+    printf 'hyprlodr original asset content' > "$base/asset/asset"
+    if [ "$delay" = "zero" ]; then
+      printf '{\n  "delay_ms": 0\n}\n' > "$base/hyprlodr-config.json"
+    fi
+    ( cd "$base" && timeout 90 wine ./proxy_client.exe ) | tee "$base/client.log" || status=1
+  }
+
+  echo "== wine proxy: successful init without an asset redirect =="
+  run_gate_case no-redirect redirect_mod_no_redirect.dll "$OUT/OpenAL32.dll" \
+    "$WORK/proxy/proxy_client.exe" default
+  python3 - "$WORK/no-redirect" <<'PY' || status=1
+import json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+attach = json.loads((base / "hyprlodr-attach.json").read_text())
+assert attach["stage"] == "mods_loaded" and attach["file_redirects"] == 0, attach
+client = (base / "client.log").read_text()
+assert "asset-open: hyprlodr original asset content" in client, client
+opens = [json.loads(x) for x in (base / "hyprlodr-files.jsonl").read_text().splitlines() if x.strip()]
+asset = next(x for x in opens if x.get("event") == "file_open" and x.get("requested") == "asset/asset")
+assert asset["redirected"] is False and asset["ok"] is True and asset["opened"] == "asset/asset", asset
+waits = [x for x in opens if x.get("event") == "redirect_wait" and x.get("requested") == "asset/asset"]
+assert any(x.get("stage") == "begin" for x in waits) and any(x.get("stage") == "ready" for x in waits), waits
+print("no redirect registered: early open waited for successful initialization, then used the original path")
+PY
+
+  echo "== wine proxy: initialization error releases the asset open =="
+  run_gate_case init-failure redirect_mod_init_failure.dll "$OUT/OpenAL32.dll" \
+    "$WORK/proxy/proxy_client.exe" default
+  python3 - "$WORK/init-failure" <<'PY' || status=1
+import json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+attach = json.loads((base / "hyprlodr-attach.json").read_text())
+assert attach["stage"] == "mods_failed" and attach["file_redirects"] == 0, attach
+events = [json.loads(x) for x in (base / "hyprlodr-events.jsonl").read_text().splitlines() if x.strip()]
+assert any(x.get("event") == "error" and x.get("mod") == "r.redirect" for x in events), events
+assert "asset-open: hyprlodr original asset content" in (base / "client.log").read_text()
+opens = [json.loads(x) for x in (base / "hyprlodr-files.jsonl").read_text().splitlines() if x.strip()]
+asset = next(x for x in opens if x.get("event") == "file_open" and x.get("requested") == "asset/asset")
+assert asset["redirected"] is False and asset["ok"] is True and asset["opened"] == "asset/asset", asset
+waits = [x for x in opens if x.get("event") == "redirect_wait" and x.get("requested") == "asset/asset"]
+assert any(x.get("stage") == "begin" for x in waits) and any(x.get("stage") == "ready" for x in waits), waits
+print("init error: redirect rollback completed and the waiting open used the original path")
+PY
+
+  echo "== wine proxy: bounded timeout uses the original asset =="
+  clang "${CFG[@]}" -DHYPRLODR_REDIRECT_WAIT_LIMIT_MS=100 -c \
+    "$ROOT/native/win32/file_hook.c" -o "$OUT/obj/file_hook_timeout.obj"
+  TIMEOUT_PROXY="$WORK/proxy-timeout/OpenAL32.dll"
+  mkdir -p "$WORK/proxy-timeout"
+  lld-link /nologo /dll /nodefaultlib /entry:dll_main \
+    "/out:$TIMEOUT_PROXY" "/def:$OUT/OpenAL32.def" \
+    "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" \
+    "$OUT/obj/file_hook_timeout.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" \
+    "$OUT/obj/crt_impl.obj" "$OUT/lib/kernel32.lib" "$OUT/lib/user32.lib" "$OUT/lib/gdi32.lib"
+  clang "${CFG[@]}" -DHYPRLODR_TEST_ASSET_OPEN_DELAY_MS=0 \
+    -c "$ROOT/native/win32/tests/proxy_client.c" -o "$OUT/obj/proxy_client_timeout.obj"
+  lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+    "/out:$OUT/tests/proxy_client_timeout.exe" "$OUT/obj/proxy_client_timeout.obj" \
+    "$OUT/obj/entry.obj" "$OUT/obj/crt_impl.obj" "$OUT/lib/kernel32.lib"
+  run_gate_case redirect-timeout redirect_mod_delayed.dll "$TIMEOUT_PROXY" \
+    "$OUT/tests/proxy_client_timeout.exe" default
+  python3 - "$WORK/redirect-timeout" <<'PY' || status=1
+import json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+attach = json.loads((base / "hyprlodr-attach.json").read_text())
+assert attach["stage"] == "mods_loaded" and attach["file_redirects"] == 2, attach
+assert "asset-open: hyprlodr original asset content" in (base / "client.log").read_text()
+opens = [json.loads(x) for x in (base / "hyprlodr-files.jsonl").read_text().splitlines() if x.strip()]
+asset = next(x for x in opens if x.get("event") == "file_open" and x.get("requested") == "asset/asset")
+assert asset["redirected"] is False and asset["ok"] is True and asset["opened"] == "asset/asset", asset
+waits = [x for x in opens if x.get("event") == "redirect_wait" and x.get("requested") == "asset/asset"]
+timed_out = [x for x in waits if x.get("stage") == "timeout"]
+assert timed_out and timed_out[0]["waited_ms"] >= 100, waits
+print(f"timeout: waited {timed_out[0]['waited_ms']} ms, fell back to the original path, then bootstrap completed")
 PY
 else
   echo "skipped proxy runtime test: pass the original OpenAL32.dll path as the second argument"
