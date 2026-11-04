@@ -153,23 +153,80 @@ plaintext and size to the type parser, then frees the temporary read buffer
 `FUN_14021a710` copies the mesh arrays into a separate parsed mesh object
 (Evidence `ev_652daa8d147c94a9ec2daef6ce8358a2143744c9edb7e5aaf1587d0598baedf2`).
 
-This makes an appended-record design technically plausible: add the replacement
-ciphertext to a user-owned archive copy, encrypted with the requested name's
-existing seed; at the verified load boundary temporarily substitute the selected
-record's offset and size so the existing allocation, decryptor, and normal parser
-consume it. The loader casts size to signed 32-bit for `malloc`, so a safe
-replacement must be smaller than 2 GiB, and its offset must fit the u32 record
-field. Multiple replacements require per-record selection and synchronization;
-the descriptor also contains cached decoded-object state, so replacements must
-be registered before that record is first parsed or cache invalidation must be
-understood. The hook must preserve the descriptor's cached-object fields and
-restore offset/size on every return path. No runtime implementation is included
-here: thread-safety, hook ABI, descriptor reuse, and cache ownership need a
-focused implementation and stand-in validation before in-game delivery. A full
-archive rebuild remains another option, but record offsets live in the runtime
-resolver tables rather than in a self-contained pack directory, so rewriting
-only `asset/asset` cannot update them. The current fixed-size patcher remains
-appropriate for in-place replacement only.
+#### Append-only variable-size delivery prototype
+
+`tools/re/pack_append.py` now builds an append-only archive artifact for a
+variable-size, encrypted tag-1 model. It requires an asset index bound to the
+current executable and archive hashes, a resolver-verified record ID and table
+ID, the exact original `(offset, size, tag)`, and the SHA-256 of the original
+ciphertext. It rejects ambiguous name/table matches and the tag-2 `hand2` record.
+The replacement is parsed as a v3 tag-1 mesh, encrypted with the logical name's
+seed, and appended at exact EOF. No alignment rule has been demonstrated: the
+reader uses a seek to the record offset and requests the record size, so the
+prototype does not insert padding. The generated archive is checked to have the
+original archive as an exact byte-for-byte prefix. A JSON manifest records both
+fingerprints, old and new record metadata, ciphertext/plaintext hashes, the key
+class, and decoded mesh counts.
+
+Reproduction for the retained local 239-vertex / 1,191-index `hand2` payload
+(paths below are ignored local artifacts; use this installed build only):
+
+```bash
+mkdir -p .tmp/archive-tests
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+python3 tools/re/pack_append.py \
+  --exe "$GAME/hyperdemon.exe" --pack "$GAME/asset/asset" \
+  --index .tmp/analysis/assets-index.json \
+  --payload .tmp/roundtrip/hand2-blender-added.bin \
+  --out .tmp/archive-tests/asset-hand2-appended \
+  --manifest .tmp/archive-tests/hand2-override.json \
+  --name hand2 --record-id rec-011a0ebc0-000055d4-0001 \
+  --table-id tbl-e91fb3b80004 --offset 295758784 --size 21972 --tag 1 \
+  --expected-pack-sha256 2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7 \
+  --expected-exe-sha256 7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611 \
+  --expected-record-cipher-sha256 2795c3304d81d7504a7af300628f141bc702dd727f36b62d557318bf76e9874a
+```
+
+For that artifact, the source archive is 306,794,369 bytes; the appended
+ciphertext begins at offset 306,794,369 and is 22,056 bytes. Offline validation
+confirmed the exact original prefix, decrypt/re-encrypt equality with the
+serialized plaintext, and parsed counts 239 vertices / 1,191 indices at stride
+72. These results demonstrate that the payload and appended archive are
+internally consistent; they do not show that the game follows the new offset.
+The existing same-size `pack_patch.py` remains unchanged and continues to serve
+in-place record replacement.
+
+No live record override is shipped. Ghidra confirms `FUN_140212920` reads the
+u32 offset at descriptor `+0`, u32 size at `+4`, allocates `(int)size`, seeks,
+reads/decrypts that exact size, dispatches the buffer, and frees the temporary
+read buffer. The type tag is at `+0x40`; the record has 0x58-byte stride and
+trailing cached parsed-object state. `FUN_14021a710` copies mesh arrays into a
+separate parsed mesh object, so the ciphertext buffer lifetime ends after
+parsing. The append reader path is therefore compatible with the observed
+offset/size mechanism, but the archive alone cannot direct the game to EOF:
+runtime resolver records must be changed.
+
+Directly changing the shared descriptor's two fields is not considered safe.
+There is no proven lock around selection/read, separate writes could expose a
+mixed `(offset,size)` pair, and the cached-object fields make late mutation
+ineffective or unsafe. HYPRLODR currently has reversible IAT patching and
+fingerprint-gated byte patches, but no established ABI-safe detour/trampoline
+for `FUN_140212920` or ownership/synchronization for its record pointers. A
+full archive rewrite also cannot relocate other records because offsets are in
+runtime resolver tables rather than a self-contained directory. Before native
+delivery, implement and validate a narrow load-boundary override that selects
+an immutable replacement descriptor (or equivalent coherent pair), runs
+before first parse/cache population, and cannot race other readers. The new
+stand-in validates manifest identity, exact observed original metadata, bounds,
+encrypted and plaintext hashes, decryption, and mesh counts; it does not
+simulate the game's concurrency or prove loader acceptance.
+
+`Group8673` remains an unknown 8-byte graph value (`00000000a4040000`); its
+upper u32 numerically matches the original index count 1,188, but no consumer
+was found that establishes a draw range or index-count role. It is preserved
+unchanged in the edited payload. Consequently, increased mesh-array counts
+are accepted by the offline parser, while graph-tail compatibility and actual
+runtime draw count remain unverified.
 
 The 72-byte record can carry the known position, normal, UV0, four-float,
 tangent, and bitangent groups, but no vertex weights have been verified; the
