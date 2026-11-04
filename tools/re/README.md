@@ -134,3 +134,32 @@ The proxy also copies the asset cipher's two 256-byte tables out of the running 
 `build_matches=false` means the running executable is not the analysed build.
 Today mods still load in that case, because nothing depends on an address;
 any future address-dependent capability must refuse to install itself instead.
+
+## Proton input diagnostics
+
+`proton_input.py` selects HYPER DEMON's app-specific Proton runtime from its
+compatdata metadata or from the wineserver attached to the running game. It
+never invokes host `wine`, and refuses to run when the wineserver for the target
+prefix belongs to a different Proton build. The Windows probe filters by the
+window title and the executable module enumerated from the window PID, verifies
+foreground focus, uses client-relative coordinates, and can require a visible
+post-input title change.
+
+Build the helper and its local Win32 fixture with `tools/build_windows.sh`, then
+run the isolated input test:
+
+```bash
+TASK_TMP="$PWD/.tmp/proton-input"
+mkdir -p "$TASK_TMP"
+TMPDIR="$TASK_TMP" TMP="$TASK_TMP" TEMP="$TASK_TMP" \
+  tools/build_windows.sh .tmp/build-win "$HOME/.local/share/Steam/steamapps/common/hyperdemon/OpenAL32.dll"
+TMPDIR="$TASK_TMP" TMP="$TASK_TMP" TEMP="$TASK_TMP" \
+  python3 tools/re/proton_input.py --self-test
+```
+
+The self-test uses a disposable Proton prefix and Xvfb display; its fixture
+passes only after receiving both a low-level mouse click and Return. All test
+prefix data, logs, and generated binaries belong under ignored `.tmp/`. To
+interact with a verified running game, use `python3 tools/re/proton_input.py
+play`, `center`, or `enter`. The tool reports the selected Proton version and
+does not send events to generic GLFW windows or other games.

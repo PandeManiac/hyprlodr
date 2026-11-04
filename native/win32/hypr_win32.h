@@ -37,6 +37,7 @@ typedef unsigned int UINT;
 #define CP_UTF8 65001u
 typedef int (*FARPROC)(void);
 typedef unsigned long long ULONG_PTR;
+typedef unsigned long long uintptr_t;
 typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
 
 #ifndef TRUE
@@ -241,6 +242,15 @@ typedef struct {
 } POINT;
 
 typedef struct {
+    HWND hwnd;
+    UINT message;
+    WPARAM wParam;
+    LPARAM lParam;
+    DWORD time;
+    POINT pt;
+} MSG;
+
+typedef struct {
     LONG cx;
     LONG cy;
 } SIZE;
@@ -307,6 +317,14 @@ HWND WINAPI CreateWindowExA(DWORD ex_style, LPCSTR class_name, LPCSTR window_nam
                             HINSTANCE instance, void *parameter);
 LRESULT WINAPI DefWindowProcA(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
 BOOL WINAPI ShowWindow(HWND window, int command);
+BOOL WINAPI UpdateWindow(HWND window);
+BOOL WINAPI SetWindowTextA(HWND window, LPCSTR text);
+int WINAPI GetMessageA(MSG *message, HWND window, UINT first, UINT last);
+BOOL WINAPI TranslateMessage(const MSG *message);
+LRESULT WINAPI DispatchMessageA(const MSG *message);
+void WINAPI PostQuitMessage(int exit_code);
+uintptr_t WINAPI SetTimer(HWND window, uintptr_t timer_id, UINT timeout_ms,
+                          void *timer_callback);
 BOOL WINAPI SetWindowPos(HWND window, HWND insert_after, int x, int y, int width, int height,
                          UINT flags);
 BOOL WINAPI UpdateLayeredWindow(HWND window, HDC destination, POINT *destination_point,

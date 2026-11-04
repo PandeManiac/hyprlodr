@@ -886,3 +886,31 @@ remain under ignored `.tmp/hand-capture/` and `.tmp/asset-proof/`. The temporary
 installation changes were restored; the installed archive and executable hashes
 remain unchanged, and all 23 paths in the second deployment journal match their
 pre-run state.
+
+## Proton gameplay input diagnosis (2026-11-04)
+
+The previous screenshot shows an **active animated title menu**: PLAY, OPTIONS,
+TRAINING, CLIPS, LEADERBOARDS and EXIT are visible while “Connecting to
+leaderboards” appears as a status overlay. That message alone does not establish
+that online initialization blocks gameplay. The earlier failed navigation is
+inconclusive because the helper was launched with host Wine, whose client
+protocol did not match the Proton wineserver (`931/965`); it does not prove that
+the game ignored correctly delivered input.
+
+HYPER DEMON's compatdata `config_info` points at Proton Experimental. The
+reusable input helper now detects the app's active Proton wineserver when the
+game is running and otherwise reads that compatdata runtime selection. It
+checks the wineserver associated with the target prefix and refuses a mismatch.
+It does not inspect or interact with another game's prefix. The Windows probe
+identifies a window by title plus the executable module enumerated from its
+process ID, verifies foreground focus before sending input, and computes menu
+coordinates from the client rectangle. It uses
+`SetCursorPos`/`mouse_event`/`keybd_event`, not synthetic window messages.
+
+The isolated `proton_input.py --self-test` ran through the same Proton
+Experimental build in disposable `.tmp/` compatdata. Its local Win32 fixture
+received both the click and Return, changed its title to `HYPRLODR INPUT OK`,
+and the probe verified that response. This confirms the Win32 input route and
+version-compatible Proton invocation without launching HYPER DEMON. It does not
+yet establish that the game's menu accepts the input. The trace and fixture logs
+are in `.tmp/proton-input/selftest-run/`.

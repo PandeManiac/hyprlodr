@@ -152,6 +152,18 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.asset-r
   "$OUT/obj/example_asset_redirect.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.asset-redirect (path read from its state directory)"
 
+echo "== Proton input probe =="
+mkdir -p "$OUT/tools"
+compile "$ROOT/tools/re/win_input_probe.c" "$OUT/obj/win_input_probe.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:windows \
+  "/out:$OUT/tools/win_input_probe.exe" \
+  "$OUT/obj/win_input_probe.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+compile "$ROOT/tools/re/input_fixture.c" "$OUT/obj/input_fixture.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:windows \
+  "/out:$OUT/tools/hyprlodr_input_fixture.exe" \
+  "$OUT/obj/input_fixture.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" "$U32"
+echo "  built probe and local Win32 input fixture (launch probe with tools/re/proton_input.py)"
+
 # Stage the example as a real package, so the documented authoring path is the
 # path that is actually exercised rather than described.
 if [ -f "$ROOT/examples/package/manifest.json" ]; then
