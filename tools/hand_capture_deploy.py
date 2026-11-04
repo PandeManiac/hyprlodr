@@ -28,6 +28,7 @@ STATE_ROOT = "hyprlodr-state"
 RUNTIME_FILES = {
     "hyprlodr-attach.json", "hyprlodr-events.jsonl", "hyprlodr-files.jsonl",
     "hyprlodr-gl.jsonl", "hyprlodr-assets.jsonl", "hyprlodr-tables.bin",
+    "steamuser.log",
 }
 RUNTIME_EXCLUDES = {"hyprlodr-config.json", "hyprlodr-install-manifest.json",
                     "hyprlodr-title-mask.raw"}

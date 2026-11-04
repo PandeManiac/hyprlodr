@@ -232,6 +232,24 @@ static unsigned g_capture_element_buffer;
 static unsigned g_capture_attribute_offsets[6];
 static unsigned g_capture_draw_ordinal;
 static unsigned g_capture_timestamp_ms;
+
+/* Lock-free x64 atomics avoid introducing extra Win32 imports into this
+ * freestanding mod and keep the callback's coordination primitives explicit. */
+static LONG atomic_long_load(const volatile LONG *value) {
+    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
+}
+
+static void atomic_long_store(volatile LONG *value, LONG next) {
+    __atomic_store_n(value, next, __ATOMIC_RELEASE);
+}
+
+static LONG atomic_long_compare_exchange(volatile LONG *value, LONG exchange,
+                                         LONG comparand) {
+    LONG expected = comparand;
+    (void)__atomic_compare_exchange_n(value, &expected, exchange, 0,
+                                      __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return expected;
+}
 static int g_capture_status;
 static unsigned g_capture_failure;
 
@@ -362,7 +380,7 @@ static DWORD WINAPI capture_writer(void *unused) {
     (void)unused;
     for (;;) {
         if (WaitForSingleObject(g_capture_event, INFINITE) != 0) return 0;
-        if (InterlockedCompareExchange(&g_capture_ready, 0, 0) == 1) {
+        if (atomic_long_load(&g_capture_ready) == 1) {
             unsigned char header[HAND_CAPTURE_HEADER_BYTES];
             for (unsigned i = 0; i < sizeof header; ++i) header[i] = 0;
             memcpy(header, "HYPRCAP1", 8);
@@ -390,7 +408,7 @@ static DWORD WINAPI capture_writer(void *unused) {
             HANDLE file = CreateFileA(g_capture_path, GENERIC_WRITE, FILE_SHARE_READ,
                                       NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
             if (file == INVALID_HANDLE_VALUE) {
-                InterlockedExchange(&g_capture_saved, -1);
+                atomic_long_store(&g_capture_saved, -1);
             } else {
                 DWORD written = 0;
                 int ok = WriteFile(file, header, sizeof header, &written, NULL) &&
@@ -401,11 +419,11 @@ static DWORD WINAPI capture_writer(void *unused) {
                                    &written, NULL) &&
                          written == HAND_CAPTURE_INDEX_BYTES;
                 CloseHandle(file);
-                InterlockedExchange(&g_capture_saved, ok ? 1 : -1);
+                atomic_long_store(&g_capture_saved, ok ? 1 : -1);
             }
             return 0;
         }
-        if (InterlockedCompareExchange(&g_capture_stop, 0, 0)) return 0;
+        if (atomic_long_load(&g_capture_stop)) return 0;
     }
 }
 
@@ -1289,7 +1307,7 @@ static void draw_native_palette(unsigned mode, int count, unsigned type,
 static void capture_native_hand(unsigned count, unsigned type, const void *indices) {
     static const int expected_sizes[6] = {3, 3, 2, 4, 3, 3};
     static const unsigned expected_offsets[6] = {0, 12, 24, 32, 48, 60};
-    if (InterlockedCompareExchange(&g_capture_claimed, 1, 0) != 0) return;
+    if (atomic_long_compare_exchange(&g_capture_claimed, 1, 0) != 0) return;
     g_capture_status = -1;
     resolve_capture_gl();
     if (count != HAND_INDEX_COUNT || type != GL_UNSIGNED_INT || !g_capture_event ||
@@ -1352,11 +1370,11 @@ static void capture_native_hand(unsigned count, unsigned type, const void *indic
     g_capture_draw_ordinal = (unsigned)g_hand_draws;
     g_capture_timestamp_ms = GetTickCount();
     g_capture_status = 0;
-    InterlockedExchange(&g_capture_ready, 1);
+    atomic_long_store(&g_capture_ready, 1);
     if (!SetEvent(g_capture_event)) {
         g_capture_status = -1;
         g_capture_failure = 7;
-        InterlockedExchange(&g_capture_saved, -1);
+        atomic_long_store(&g_capture_saved, -1);
         return;
     }
     g_capture_status = 1; /* queued for the deferred writer */
@@ -1937,25 +1955,25 @@ static int executable_address(const void *address) {
 static DWORD WINAPI dispatch_ready_worker(void *unused) {
     (void)unused;
     for (unsigned attempt = 0; attempt < HAND_DISPATCH_RETRY_COUNT; ++attempt) {
-        if (InterlockedCompareExchange(&g_dispatch_stop, 0, 0)) break;
+        if (atomic_long_load(&g_dispatch_stop)) break;
         void *candidate = NULL;
         if (g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
                                &candidate, sizeof candidate) == 0 &&
             hypr_hand_dispatch_executable_candidate(
-                (int)InterlockedCompareExchange(&g_dispatch_state, 0, 0),
-                InterlockedCompareExchange(&g_dispatch_stop, 0, 0) != 0,
+                (int)atomic_long_load(&g_dispatch_state),
+                atomic_long_load(&g_dispatch_stop) != 0,
                 candidate, (void *)&hand_draw_shim, executable_address(candidate))) {
-            LONG previous = InterlockedCompareExchange(&g_dispatch_state, 1, 0);
+            LONG previous = atomic_long_compare_exchange(&g_dispatch_state, 1, 0);
             if (previous != 0) return 0;
 
             /* A renderer may have initialized the slot between polling and
              * claiming it. Never overwrite a different dispatch target. */
             void *current = NULL;
-            if (InterlockedCompareExchange(&g_dispatch_stop, 0, 0) ||
+            if (atomic_long_load(&g_dispatch_stop) ||
                 g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
                                    &current, sizeof current) != 0 ||
                 current != candidate) {
-                InterlockedExchange(&g_dispatch_state, HYPR_HAND_DISPATCH_FAILED);
+                atomic_long_store(&g_dispatch_state, HYPR_HAND_DISPATCH_FAILED);
                 log_message("warn", "draw dispatch changed during readiness check; hook not installed");
                 return 0;
             }
@@ -1966,7 +1984,7 @@ static DWORD WINAPI dispatch_ready_worker(void *unused) {
             if (g_host->image_write(g_host->context, HAND_DISPATCH_RVA,
                                     &replacement, sizeof replacement) != 0) {
                 g_active = 0;
-                InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+                atomic_long_store(&g_dispatch_state, hypr_hand_dispatch_finish_install(
                     HYPR_HAND_DISPATCH_INSTALLING, 0, 0));
                 log_message("error", "draw dispatch became ready but patch failed");
                 return 0;
@@ -1975,12 +1993,12 @@ static DWORD WINAPI dispatch_ready_worker(void *unused) {
             if (g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
                                    &check, sizeof check) != 0 || check != replacement) {
                 g_active = 0;
-                InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+                atomic_long_store(&g_dispatch_state, hypr_hand_dispatch_finish_install(
                     HYPR_HAND_DISPATCH_INSTALLING, 1, 0));
                 log_message("error", "draw dispatch patch verification failed");
                 return 0;
             }
-            InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+            atomic_long_store(&g_dispatch_state, hypr_hand_dispatch_finish_install(
                 HYPR_HAND_DISPATCH_INSTALLING, 1, 1));
             char message[192];
             snprintf(message, sizeof message,
@@ -1991,9 +2009,9 @@ static DWORD WINAPI dispatch_ready_worker(void *unused) {
         }
         Sleep(HAND_DISPATCH_RETRY_MS);
     }
-    if (!InterlockedCompareExchange(&g_dispatch_stop, 0, 0)) {
-        LONG state = InterlockedCompareExchange(&g_dispatch_state, 0, 0);
-        InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_timeout(
+    if (!atomic_long_load(&g_dispatch_stop)) {
+        LONG state = atomic_long_load(&g_dispatch_state);
+        atomic_long_store(&g_dispatch_state, hypr_hand_dispatch_timeout(
             (int)state, 0));
         log_message("warn", "draw dispatch did not become executable within 30 seconds; hook inactive");
     }
@@ -2006,8 +2024,8 @@ static int mod_initialize(const hyprlodr_host_api *host) {
         log_message("error", "dispatch readiness worker is already active");
         return -1;
     }
-    InterlockedExchange(&g_dispatch_stop, 0);
-    InterlockedExchange(&g_dispatch_state, HYPR_HAND_DISPATCH_WAITING);
+    atomic_long_store(&g_dispatch_stop, 0);
+    atomic_long_store(&g_dispatch_state, HYPR_HAND_DISPATCH_WAITING);
     g_active = 0;
 
     if (!HYPRLODR_HOST_API_HAS(host, image_write) || !host->image_write ||
@@ -2021,10 +2039,10 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     }
 
     g_mode = read_mode(host);
-    InterlockedExchange(&g_capture_claimed, 0);
-    InterlockedExchange(&g_capture_ready, 0);
-    InterlockedExchange(&g_capture_saved, 0);
-    InterlockedExchange(&g_capture_stop, 0);
+    atomic_long_store(&g_capture_claimed, 0);
+    atomic_long_store(&g_capture_ready, 0);
+    atomic_long_store(&g_capture_saved, 0);
+    atomic_long_store(&g_capture_stop, 0);
     g_capture_status = 0;
     g_capture_failure = 0;
     g_capture_draw_ordinal = 0;
@@ -2069,10 +2087,10 @@ static int mod_initialize(const hyprlodr_host_api *host) {
 }
 
 static void mod_shutdown(const hyprlodr_host_api *host) {
-    InterlockedExchange(&g_dispatch_stop, 1);
-    InterlockedCompareExchange(&g_dispatch_state,
-                               hypr_hand_dispatch_stop((int)InterlockedCompareExchange(
-                                   &g_dispatch_state, 0, 0)), 0);
+    atomic_long_store(&g_dispatch_stop, 1);
+    atomic_long_compare_exchange(&g_dispatch_state,
+                               hypr_hand_dispatch_stop((int)atomic_long_load(
+                                   &g_dispatch_state)), 0);
     if (g_dispatch_thread) {
         (void)WaitForSingleObject(g_dispatch_thread, INFINITE);
         CloseHandle(g_dispatch_thread);
@@ -2080,7 +2098,7 @@ static void mod_shutdown(const hyprlodr_host_api *host) {
     }
     g_active = 0;
     if (g_mode == 7 && g_capture_event) {
-        InterlockedExchange(&g_capture_stop, 1);
+        atomic_long_store(&g_capture_stop, 1);
         (void)SetEvent(g_capture_event);
         if (g_capture_thread) {
             (void)WaitForSingleObject(g_capture_thread, INFINITE);
@@ -2098,9 +2116,9 @@ static void mod_shutdown(const hyprlodr_host_api *host) {
     if (g_mode == 7) {
         snprintf(message, sizeof message,
                  "capture mode: dispatch_state=%ld draws=%lu capture_status=%d failure=%u writer_status=%ld; hook restored %lu byte(s)",
-                 (long)InterlockedCompareExchange(&g_dispatch_state, 0, 0),
+                 (long)atomic_long_load(&g_dispatch_state),
                  g_hand_draws, g_capture_status, g_capture_failure,
-                 (long)InterlockedCompareExchange(&g_capture_saved, 0, 0),
+                 (long)atomic_long_load(&g_capture_saved),
                  (unsigned long)restored);
     } else {
         snprintf(message, sizeof message,

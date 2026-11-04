@@ -66,6 +66,26 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
        -DHYPRLODR_MINIMAL_WIN32
        -I"$ROOT/native/win32/crt" -I"$ROOT/native/win32"
        -I"$ROOT/native/include" -I"$ROOT/native/src")
+  echo "== real hand-hook mod: delayed dispatch, capture writer, and shutdown =="
+  HAND_WORK="$OUT/hand-hook-fixture"
+  mkdir -p "$HAND_WORK/state"
+  CAPTURE_WIN="$(winepath -w "$HAND_WORK/hand2.capture")"
+  printf 'capture\n%s\n' "$CAPTURE_WIN" > "$HAND_WORK/state/hand-mode.txt"
+  clang "${CFG[@]}" -c "$ROOT/native/win32/tests/hand_hook_client.c" \
+    -o "$OUT/obj/hand_hook_client.obj"
+  lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+    "/out:$HAND_WORK/hand_hook_client.exe" \
+    "$OUT/obj/hand_hook_client.obj" "$OUT/obj/entry.obj" "$OUT/obj/crt_impl.obj" \
+    "$OUT/lib/kernel32.lib"
+  timeout 20 wine "$HAND_WORK/hand_hook_client.exe" \
+    "$(winepath -w "$OUT/examples/example.hand-hook.dll")" \
+    "$(winepath -w "$HAND_WORK/state")" || status=1
+  python3 - "$HAND_WORK" <<'PY' || status=1
+import pathlib, sys
+log = pathlib.Path(sys.argv[1]) / "hand2.capture"
+assert not log.exists(), "fixture must not create a geometry snapshot without a hand draw"
+print("hand-hook fixture: initialized and restored without a draw; no geometry file created")
+PY
   clang "${CFG[@]}" -c "$ROOT/native/win32/tests/proxy_client.c" -o "$OUT/obj/proxy_client.obj"
   lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
     "/out:$WORK/proxy/proxy_client.exe" \
