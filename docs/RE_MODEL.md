@@ -206,20 +206,62 @@ parsing. The append reader path is therefore compatible with the observed
 offset/size mechanism, but the archive alone cannot direct the game to EOF:
 runtime resolver records must be changed.
 
-Directly changing the shared descriptor's two fields is not considered safe.
-There is no proven lock around selection/read, separate writes could expose a
-mixed `(offset,size)` pair, and the cached-object fields make late mutation
-ineffective or unsafe. HYPRLODR currently has reversible IAT patching and
-fingerprint-gated byte patches, but no established ABI-safe detour/trampoline
-for `FUN_140212920` or ownership/synchronization for its record pointers. A
-full archive rewrite also cannot relocate other records because offsets are in
-runtime resolver tables rather than a self-contained directory. Before native
-delivery, implement and validate a narrow load-boundary override that selects
-an immutable replacement descriptor (or equivalent coherent pair), runs
-before first parse/cache population, and cannot race other readers. The new
-stand-in validates manifest identity, exact observed original metadata, bounds,
-encrypted and plaintext hashes, decryption, and mesh counts; it does not
-simulate the game's concurrency or prove loader acceptance.
+#### Loader routing boundary investigation
+
+The exact-build Ghidra view of `FUN_140211e70` (RVA `0x211e70`) shows the
+resolver copying a 0x58-byte record into a stack-local descriptor with
+`FUN_140212040`, then calling `FUN_140212920` at RVA `0x211f78`. This is the
+only direct callsite found for the record loader. Its descriptor fields used
+here are offset `+0`, size `+4`, type tag `+0x40`, and parsed-object pointer
+`+0x48`. The tag-1 branch checks/initializes the parsed-object pointer, reads
+and decrypts the requested extent, passes plaintext to `FUN_140205ec0`, and
+the caller then copies the local descriptor into its name-keyed loaded-record
+cache. `FUN_14021a710` copies mesh arrays into separately owned parsed storage;
+the temporary encrypted/decrypted allocation is freed after parsing.
+
+This establishes a safer substitution *operation* than editing a resolver
+table: change only the stack descriptor's offset and size immediately around
+the original loader call, then restore those two words before returning to
+`FUN_140211e70`. The loader's parsed-object pointer at `+0x48` must remain
+untouched by restoration so the resolver's normal cache copy can retain the
+object it just constructed. The original resolver record and the cached
+offset/size fields are then left at their original values. The pair is coherent
+for the duration of the call because both fields are substituted before it and
+restored only after it returns.
+
+That operation is implemented as the allocation-free helper
+`native/src/record_route.c` (`hyprlodr_record_route_invoke`). It requires an
+already validated immutable route descriptor, checks exact logical name,
+original offset/size, and tag `1`, and passes tag-2 `hand2` and unrelated
+requests through unchanged. It validates the appended extent against archive
+size and the loader's signed allocation limit. Native tests cover restoration
+of the original metadata while retaining the parsed-object pointer,
+same-name tag-2 rejection, stale metadata, invalid extents, reentrant calls,
+and independent concurrent request descriptors. The same source is compiled
+by the Windows cross-build. A small Windows x64 fixture linked against this
+compiled helper also ran under Wine and verified the 22,056-byte replacement
+extent plus rejection of the tag-2 `hand2` request. These are tests of the
+request-level component, not of a game callsite detour.
+
+This helper is not connected to a runtime hook. The current public host API can
+write fingerprint-guarded bytes, but its write uses `memcpy`, has no
+instruction-cache flush, and cannot create/manage a near relay for the game's
+five-byte relative call. A correct detour also needs a verified installation
+window, atomic or otherwise synchronized code replacement, and a teardown
+contract that prevents an in-flight call from entering an unloaded mod. The
+first-archive-open redirect gate offers a likely pre-read installation window,
+but this alone does not establish the thread or teardown guarantees. The
+analyzed map insertion and shared `istream` seek/read do not prove whether
+higher-level callers serialize requests. Therefore no live callsite patch or
+game run is justified yet. The isolated helper does not claim to establish
+loader thread safety or native game acceptance.
+
+The append archive still cannot route itself: record offsets live in runtime
+resolver tables, not a self-contained directory. The existing manifest
+validator proves exact archive/executable/record identities, appended bounds,
+ciphertext and plaintext hashes, decryption, and mesh counts offline. Connecting
+that manifest to a runtime hook remains future work and must fail closed before
+hook installation if any identity or range check fails.
 
 `Group8673` remains an unknown 8-byte graph value (`00000000a4040000`); its
 upper u32 numerically matches the original index count 1,188, but no consumer

@@ -22,6 +22,12 @@ if(UNIX AND NOT APPLE)
   target_link_libraries(hyprlodr_feather PUBLIC m)
 endif()
 
+# Pure per-request metadata substitution logic used by the experimental native
+# asset route. The loader detour remains deliberately separate and opt-in.
+add_library(hyprlodr_record_route STATIC native/src/record_route.c)
+target_include_directories(hyprlodr_record_route PUBLIC native/include)
+target_compile_options(hyprlodr_record_route PRIVATE ${HYPRLODR_WARNINGS})
+
 add_executable(hyprlodr-host native/src/host.c)
 target_link_libraries(hyprlodr-host PRIVATE hyprlodr_loader)
 target_compile_options(hyprlodr-host PRIVATE ${HYPRLODR_WARNINGS})
@@ -161,6 +167,15 @@ if(BUILD_TESTING)
   target_link_libraries(feather_spring_test PRIVATE hyprlodr_feather)
   target_compile_options(feather_spring_test PRIVATE ${HYPRLODR_WARNINGS})
   add_test(NAME feather_spring_test COMMAND feather_spring_test)
+
+  add_executable(record_route_test native/tests/record_route_test.c)
+  target_link_libraries(record_route_test PRIVATE hyprlodr_record_route)
+  if(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(record_route_test PRIVATE Threads::Threads)
+  endif()
+  target_compile_options(record_route_test PRIVATE ${HYPRLODR_WARNINGS})
+  add_test(NAME record_route_test COMMAND record_route_test)
 
   # Asset container / cipher probe: proves the implementation round-trips a
   # synthetic archive. The real archive check is a manual, evidence-producing

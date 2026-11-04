@@ -56,6 +56,7 @@ compile() { # compile <source> <object> [extra flags...]
 
 compile "$ROOT/native/src/loader.c" "$OUT/obj/loader.obj"
 compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
+compile "$ROOT/native/src/record_route.c" "$OUT/obj/record_route.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
 compile "$ROOT/native/win32/file_hook.c" "$OUT/obj/file_hook.obj"
@@ -95,6 +96,10 @@ link_mod "$ROOT/samples/final.c" "00.final"
 
 echo "== wine-test redirect mod =="
 mkdir -p "$OUT/tests"
+compile "$ROOT/native/win32/tests/record_route_client.c" "$OUT/obj/record_route_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/record_route_client.exe" \
+  "$OUT/obj/record_route_client.obj" "$OUT/obj/record_route.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" \
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
