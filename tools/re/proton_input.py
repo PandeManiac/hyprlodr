@@ -93,7 +93,10 @@ def find_game_process(records: list[dict], app_prefix: Path) -> dict | None:
             matches.append(record)
         elif compat_data and Path(compat_data).resolve() == expected_data:
             matches.append(record)
-    return max(matches, key=lambda item: len(item["cmdline"])) if matches else None
+    if len(matches) > 1:
+        pids = ", ".join(str(item["pid"]) for item in sorted(matches, key=lambda item: item["pid"]))
+        raise ValueError(f"multiple HYPER DEMON processes match compatdata {expected_data}: {pids}")
+    return matches[0] if matches else None
 
 
 def root_from_config_info(app_prefix: Path) -> Path | None:
@@ -114,13 +117,27 @@ def root_from_config_info(app_prefix: Path) -> Path | None:
 def resolve_runtime(steam: Path, app_id: str = APP_ID,
                     proton_override: Path | None = None,
                     compat_override: Path | None = None,
-                    proc_root: Path = Path("/proc")) -> dict:
+                    proc_root: Path = Path("/proc"),
+                    display_override: str | None = None,
+                    xauthority_override: Path | str | None = None) -> dict:
     app_prefix = compat_override.expanduser().resolve() if compat_override else \
         (steam / f"steamapps/compatdata/{app_id}").resolve()
     if not compat_override and not (app_prefix / "pfx").is_dir():
         raise ValueError(f"Steam compatdata prefix is missing: {app_prefix / 'pfx'}")
     records = process_snapshot(proc_root)
     game = find_game_process(records, app_prefix)
+    if game:
+        # /proc can change while it is being enumerated. Re-read the selected PID
+        # before trusting its environment so a vanished/reused entry is not used.
+        command, game_env, _ = read_proc(proc_root, str(game["pid"]))
+        if not command or not any(windows_basename(arg) == GAME_EXE for arg in command):
+            raise ValueError(f"matched HYPER DEMON process PID {game['pid']} is stale")
+        actual_prefix = game_env.get("WINEPREFIX")
+        actual_compat = game_env.get("STEAM_COMPAT_DATA_PATH")
+        if not ((actual_prefix and Path(actual_prefix).resolve() == (app_prefix / "pfx").resolve()) or
+                (actual_compat and Path(actual_compat).resolve() == app_prefix)):
+            raise ValueError(f"matched HYPER DEMON process PID {game['pid']} changed compatdata")
+        game = {**game, "cmdline": command, "env": game_env}
     selected_root = proton_override.expanduser().resolve() if proton_override else None
     selection = "explicit Proton path" if selected_root else None
     prefix = (app_prefix / "pfx").resolve()
@@ -140,6 +157,9 @@ def resolve_runtime(steam: Path, app_id: str = APP_ID,
                                   if item and (Path(item) / "proton").is_file()), None)
         if selected_root:
             selection = "active HYPER DEMON Proton process"
+        else:
+            raise ValueError(f"cannot resolve the active Proton runtime for HYPER DEMON PID "
+                             f"{game['pid']}; no matching wineserver or STEAM_COMPAT_TOOL_PATHS")
     if selected_root is None:
         selected_root = root_from_config_info(app_prefix)
         if selected_root:
@@ -151,6 +171,48 @@ def resolve_runtime(steam: Path, app_id: str = APP_ID,
             selection = "Steam Proton Experimental fallback (no active app mapping)"
     if selected_root is None or not (selected_root / "proton").is_file():
         raise ValueError("matching Proton runtime not found; pass --proton explicitly")
+
+    game_display = game["env"].get("DISPLAY") if game else None
+    if display_override is not None:
+        selected_display = display_override.strip()
+        if not selected_display:
+            raise ValueError("--display cannot be empty")
+    else:
+        selected_display = game_display
+    if game and not selected_display:
+        raise ValueError(f"HYPER DEMON PID {game['pid']} has no DISPLAY; pass --display explicitly")
+
+    game_home = game["env"].get("HOME") if game else None
+    game_xauthority = game["env"].get("XAUTHORITY") if game else None
+    authority_from_game_env = bool(game_xauthority)
+    default_authority = Path(game_home) / ".Xauthority" if game_home else None
+    if not game_xauthority and default_authority and default_authority.is_file():
+        game_xauthority = str(default_authority)
+    if isinstance(xauthority_override, Path):
+        selected_xauthority = str(xauthority_override.expanduser().resolve())
+        xauthority_selection = "explicit Xauthority path"
+    elif isinstance(xauthority_override, str):
+        if xauthority_override.lower() == "none":
+            selected_xauthority = "/dev/null"
+            xauthority_selection = "explicit no-cookie override"
+        else:
+            selected_xauthority = str(Path(xauthority_override).expanduser().resolve())
+            xauthority_selection = "explicit Xauthority path"
+    elif display_override is not None and display_override.strip() != game_display:
+        if game_xauthority:
+            raise ValueError("--display selects a different X server; pass matching --xauthority "
+                             "(or --xauthority none for an unauthenticated display)")
+        selected_xauthority = "/dev/null"
+        xauthority_selection = "cleared for explicit display override"
+    elif game_xauthority:
+        selected_xauthority = str(Path(game_xauthority).expanduser().resolve())
+        xauthority_selection = ("HYPER DEMON process environment" if authority_from_game_env
+                                else "HYPER DEMON HOME/.Xauthority")
+    else:
+        # Do not inherit an unrelated shell cookie. A process without
+        # XAUTHORITY uses no cookie override; authless Xvfb displays remain valid.
+        selected_xauthority = "/dev/null"
+        xauthority_selection = "no process Xauthority; shell value ignored"
 
     for record in records:
         executable = record["executable"]
@@ -172,6 +234,14 @@ def resolve_runtime(steam: Path, app_id: str = APP_ID,
             "proton": str((selected_root / "proton").resolve()),
             "selection": selection, "game_pid": game["pid"] if game else None,
             "game_cmdline": game["cmdline"] if game else None,
+            "display": selected_display, "game_display": game_display,
+            "display_selection": ("explicit override" if display_override is not None else
+                                  "HYPER DEMON process environment" if game else
+                                  "unresolved (no live game process)"),
+            "xauthority": selected_xauthority,
+            "game_xauthority": game_xauthority,
+            "xauthority_selection": xauthority_selection,
+            "home": game_home,
             "active_game": bool(game),
             "runtime_version": version_file.read_text().strip() if version_file.is_file() else "unknown"}
 
@@ -186,12 +256,19 @@ def build_command(runtime: dict, probe: Path, arguments: list[str],
     temp_root.mkdir(parents=True, exist_ok=True)
     Path(runtime["compat_data"]).mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    if not runtime.get("display"):
+        raise ValueError("no target DISPLAY resolved; run HYPER DEMON or pass --display")
     env.update({"STEAM_COMPAT_DATA_PATH": runtime["compat_data"],
                 "STEAM_COMPAT_CLIENT_INSTALL_PATH": runtime["steam_root"],
                 "STEAM_COMPAT_APP_ID": runtime["app_id"],
                 "STEAM_COMPAT_TOOL_PATHS": runtime["proton_root"],
                 "WINEPREFIX": runtime["wineprefix"],
+                "DISPLAY": runtime["display"],
+                "XAUTHORITY": runtime.get("xauthority", "/dev/null"),
                 "TMPDIR": str(temp_root), "TMP": str(temp_root), "TEMP": str(temp_root)})
+    if runtime.get("home"):
+        env["HOME"] = runtime["home"]
+    env.pop("WAYLAND_DISPLAY", None)
     probe_args = list(arguments)
     if target_title is not None:
         probe_args.append("--title=" + target_title)
@@ -202,6 +279,42 @@ def build_command(runtime: dict, probe: Path, arguments: list[str],
     if report_path is not None:
         probe_args.append("--report=Z:" + str(report_path.resolve()).replace("/", "\\"))
     return [runtime["proton"], "run", str(probe.resolve()), *probe_args], env
+
+
+def verify_runtime_target(runtime: dict, proc_root: Path = Path("/proc")) -> None:
+    """Recheck the selected game PID immediately before sending input."""
+    pid = runtime.get("game_pid")
+    if not pid:
+        raise ValueError("no live HYPER DEMON process was selected")
+    command, environment, _ = read_proc(proc_root, str(pid))
+    if not command or not any(windows_basename(arg) == GAME_EXE for arg in command):
+        raise ValueError(f"selected HYPER DEMON process PID {pid} is stale")
+    prefix = environment.get("WINEPREFIX")
+    compat = environment.get("STEAM_COMPAT_DATA_PATH")
+    if not ((prefix and Path(prefix).resolve() == Path(runtime["wineprefix"]).resolve()) or
+            (compat and Path(compat).resolve() == Path(runtime["compat_data"]).resolve())):
+        raise ValueError(f"selected HYPER DEMON PID {pid} no longer matches the resolved Proton prefix")
+    if environment.get("DISPLAY") != runtime.get("game_display"):
+        raise ValueError(f"selected HYPER DEMON PID {pid} changed DISPLAY after runtime resolution")
+
+
+def validate_display_context(environment: dict[str, str]) -> None:
+    """Fail before input if the selected X server cannot be reached."""
+    authority = environment.get("XAUTHORITY")
+    if authority and authority != "/dev/null" and not Path(authority).is_file():
+        raise ValueError(f"selected Xauthority file does not exist: {authority}")
+    xdpyinfo = shutil.which("xdpyinfo")
+    if xdpyinfo:
+        try:
+            result = subprocess.run([xdpyinfo], env=environment, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.PIPE, text=True, timeout=5)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError(f"X11 display {environment.get('DISPLAY')} did not respond") from error
+        if result.returncode:
+            detail = result.stderr.strip().splitlines()
+            suffix = f": {detail[-1]}" if detail else ""
+            raise ValueError(f"cannot access X11 display {environment.get('DISPLAY')} "
+                             f"with the selected Xauthority{suffix}")
 
 
 def run_self_test(runtime: dict, probe: Path, fixture: Path) -> int:
@@ -220,7 +333,8 @@ def run_self_test(runtime: dict, probe: Path, fixture: Path) -> int:
     compat_data.mkdir(parents=True, exist_ok=True)
     prefix = (compat_data / "pfx").resolve()
     test_runtime = {**runtime, "compat_data": str(compat_data.resolve()),
-                    "wineprefix": str(prefix)}
+                    "wineprefix": str(prefix), "display": None,
+                    "xauthority": "/dev/null", "home": str(output / "home")}
     for record in process_snapshot():
         if record["executable"] and record["executable"].name.lower() == "wineserver" and \
                 record["env"].get("WINEPREFIX") and \
@@ -255,7 +369,7 @@ def run_self_test(runtime: dict, probe: Path, fixture: Path) -> int:
     probe_env.update({"DISPLAY": display, "TMPDIR": str(output),
                       "TMP": str(output), "TEMP": str(output)})
     probe_env.pop("WAYLAND_DISPLAY", None)
-    probe_env.pop("XAUTHORITY", None)
+    probe_env["XAUTHORITY"] = "/dev/null"
     if subprocess.run([shutil.which("xdpyinfo")], env=probe_env,
                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
         xvfb.terminate()
@@ -273,7 +387,7 @@ def run_self_test(runtime: dict, probe: Path, fixture: Path) -> int:
                     "STEAM_COMPAT_TOOL_PATHS": test_runtime["proton_root"],
                     "WINEPREFIX": str(prefix)})
         env.pop("WAYLAND_DISPLAY", None)
-        env.pop("XAUTHORITY", None)
+        env["XAUTHORITY"] = "/dev/null"
         env["HOME"] = str(output / "home")
         env["XDG_CONFIG_HOME"] = str(output / "xdg-config")
         env["XDG_CACHE_HOME"] = str(output / "xdg-cache")
@@ -303,14 +417,16 @@ def run_self_test(runtime: dict, probe: Path, fixture: Path) -> int:
                 time.sleep(0.1)
             if not fixture_seen:
                 raise ValueError("Win32 fixture never appeared in the disposable Proton prefix")
+            # The helper launch inherits the same display/authorization context
+            # that was used to start the fixture, via the resolved runtime object.
+            test_runtime["display"] = display
             input_command, input_env = build_command(
                 test_runtime, probe, ["click-enter"], output / "temp",
                 "HYPRLODR input fixture", "hyprlodr_input_fixture.exe", "INPUT OK",
                 output / "probe-events.log")
-            input_env.update({"DISPLAY": display, "WINEPREFIX": str(prefix),
+            input_env.update({"WINEPREFIX": str(prefix),
                               "STEAM_COMPAT_DATA_PATH": str(compat_data)})
             input_env.pop("WAYLAND_DISPLAY", None)
-            input_env.pop("XAUTHORITY", None)
             with (output / "probe.log").open("w") as probe_log:
                 completed = subprocess.run(input_command, cwd=ROOT, env=input_env,
                                            stdout=probe_log, stderr=subprocess.STDOUT,
@@ -352,6 +468,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compat-data", type=Path,
                         help="compatdata root; pass a disposable directory for test runs")
     parser.add_argument("--proton", type=Path, help="override the selected Proton installation")
+    parser.add_argument("--display", help="explicit X11 display override; defaults to the matched game's DISPLAY")
+    parser.add_argument("--xauthority", help="matching Xauthority file, or 'none' for an authless display")
     parser.add_argument("--probe", type=Path,
                         default=ROOT / ".tmp/build-win/tools/win_input_probe.exe")
     parser.add_argument("--target-title", help="required title substring; defaults to HYPER DEMON")
@@ -369,7 +487,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         steam = steam_root(args.steam_root)
-        runtime = resolve_runtime(steam, args.app_id, args.proton, args.compat_data)
+        runtime = resolve_runtime(steam, args.app_id, args.proton, args.compat_data,
+                                  display_override=args.display,
+                                  xauthority_override=args.xauthority)
         if not args.inspect and not args.dry_run and not args.probe.is_file():
             raise ValueError(f"input probe executable is missing: {args.probe}")
     except (OSError, ValueError) as error:
@@ -384,12 +504,26 @@ def main(argv: list[str] | None = None) -> int:
     report_path = args.report or ROOT / ".tmp/proton-input/live-report.log"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.unlink(missing_ok=True)
+    if not runtime["active_game"]:
+        print("input preflight failed: no live HYPER DEMON process matched the requested compatdata",
+              file=sys.stderr)
+        return 2
     command, environment = build_command(runtime, args.probe, [args.action],
                                          target_title=args.target_title,
                                          target_module=args.target_module,
                                          expect_title=args.expect_title,
                                          report_path=report_path)
-    print(json.dumps({"runtime": runtime, "command": command,
+    try:
+        verify_runtime_target(runtime)
+        validate_display_context(environment)
+    except (OSError, ValueError) as error:
+        print(f"input preflight failed: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps({"runtime": runtime,
+                      "input_target": {"title_contains": args.target_title or "hyperdemon",
+                                       "module": args.target_module or GAME_EXE,
+                                       "action": args.action},
+                      "command": command,
                       "tmpdir": environment["TMPDIR"]}, indent=2))
     if args.dry_run:
         return 0

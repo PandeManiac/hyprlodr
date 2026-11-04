@@ -898,10 +898,12 @@ protocol did not match the Proton wineserver (`931/965`); it does not prove that
 the game ignored correctly delivered input.
 
 HYPER DEMON's compatdata `config_info` points at Proton Experimental. The
-reusable input helper now detects the app's active Proton wineserver when the
-game is running and otherwise reads that compatdata runtime selection. It
-checks the wineserver associated with the target prefix and refuses a mismatch.
-It does not inspect or interact with another game's prefix. The Windows probe
+reusable input helper detects the app's active Proton wineserver and
+`STEAM_COMPAT_TOOL_PATHS` from the matched game process. It checks the
+wineserver associated with the target prefix and refuses a mismatch. Runtime
+fallbacks remain available for `--inspect` and the isolated fixture, but live
+input requires one uniquely matched game process and a runtime tied to that
+process/prefix. It does not inspect or interact with another game's prefix. The Windows probe
 identifies a window by title plus the executable module enumerated from its
 process ID, verifies foreground focus before sending input, and computes menu
 coordinates from the client rectangle. It uses
@@ -914,3 +916,30 @@ and the probe verified that response. This confirms the Win32 input route and
 version-compatible Proton invocation without launching HYPER DEMON. It does not
 yet establish that the game's menu accepts the input. The trace and fixture logs
 are in `.tmp/proton-input/selftest-run/`.
+
+### Display-environment regression fix (2026-11-04)
+
+The helper previously selected the right Proton prefix but left `DISPLAY` and
+`XAUTHORITY` inherited from its caller. That was incorrect for the recorded
+working arrangement where Steam/HYPER DEMON ran on Xvfb `:99` and Gunfire
+Reborn remained on `:0`. Runtime resolution now carries the matched game's
+`DISPLAY`, `XAUTHORITY`, and `HOME` (including `HOME/.Xauthority` when the
+process uses Xlib's default cookie path) into the actual Proton child process.
+An explicit `--display` is supported; switching away from the game's display
+requires an explicit matching `--xauthority` path or `--xauthority none`.
+Unrelated shell Xauthority values are discarded.
+
+The helper rejects multiple matching game PIDs, a stale or changed PID, a
+missing game display, an unresolved active Proton runtime, and wineserver/runtime
+mismatches. It revalidates the selected PID and X11 connection immediately
+before launching the Win32 probe. Diagnostic output names the game PID, display,
+Xauthority source, Proton version/path, prefix, and input target.
+
+Regression tests cover shell `:0` versus game `:99`, another Proton process on
+`:0`, display/authority overrides, missing authority, game-home default
+authority, absent/stale/ambiguous processes, and runtime mismatches. One test
+launches a fake Proton wrapper and inspects the environment from the child
+itself. The real isolated fixture also passed with Proton Experimental on its
+own Xvfb display and confirmed mouse plus Return delivery. This verifies helper
+environment propagation and Win32 input delivery to the fixture; no new
+HYPER DEMON gameplay attempt was made in this change.

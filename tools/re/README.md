@@ -138,9 +138,14 @@ any future address-dependent capability must refuse to install itself instead.
 ## Proton input diagnostics
 
 `proton_input.py` selects HYPER DEMON's app-specific Proton runtime from its
-compatdata metadata or from the wineserver attached to the running game. It
-never invokes host `wine`, and refuses to run when the wineserver for the target
-prefix belongs to a different Proton build. The Windows probe filters by the
+live process and matching wineserver. It carries that process's `DISPLAY`,
+`XAUTHORITY`, and `HOME` into the helper launch; it never inherits the invoking
+shell's display or X cookie. If `XAUTHORITY` is unset, it checks the matched
+process's `HOME/.Xauthority`. The helper refuses ambiguous game processes, a
+stale PID, a missing target display, or an active runtime that cannot be tied to
+the matched process/prefix. It never invokes host `wine`, and refuses to run
+when the wineserver for the target prefix belongs to a different Proton build.
+The Windows probe filters by the
 window title and the executable module enumerated from the window PID, verifies
 foreground focus, uses client-relative coordinates, and can require a visible
 post-input title change.
@@ -161,5 +166,10 @@ The self-test uses a disposable Proton prefix and Xvfb display; its fixture
 passes only after receiving both a low-level mouse click and Return. All test
 prefix data, logs, and generated binaries belong under ignored `.tmp/`. To
 interact with a verified running game, use `python3 tools/re/proton_input.py
-play`, `center`, or `enter`. The tool reports the selected Proton version and
-does not send events to generic GLFW windows or other games.
+play`, `center`, or `enter`. Before sending input, the tool reports the selected
+PID, display, Xauthority source, Proton runtime/version, Wine prefix, and input
+target. Use `--display :99` to select another X server. If it requires a cookie,
+also pass `--xauthority /path/to/cookie`; use `--xauthority none` only for an
+unauthenticated display. A different display never inherits the game's cookie
+implicitly. Normal input actions require one live, uniquely matched HYPER DEMON
+process, and the tool checks that PID again immediately before launch.
