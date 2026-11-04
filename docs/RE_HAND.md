@@ -763,7 +763,7 @@ material still does not reproduce HYPER DEMON's animated gold iridescence, and c
 mode can show native gold along the hand edge; material separation and final fit remain
 the next work.
 
-## Passive hand geometry capture (0.9.4)
+## Passive hand geometry capture (0.9.5)
 
 `example.hand-hook` 0.9.5 adds an opt-in `capture` mode. It uses the already verified draw
 dispatch slot and the same `GL_TRIANGLES` / 1,188-index / unsigned-int signature, but
