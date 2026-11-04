@@ -452,36 +452,34 @@ identity, attach, signature validation, hook installation, and coverage start;
 late-attach capture results explicitly state that earlier asset activity may
 have been missed. Rendering remains unobserved unless separately instrumented.
 
-## Passive GPU hand capture and comparison
+## First persistent passive GPU hand capture
 
-`examples/hand_hook.c` 0.9.5 adds an opt-in pass-through capture at the verified
-first-person hand draw. The implementation records actual vertex and index bytes
-from OpenGL buffers after validating the six attribute bindings and buffer bounds;
-the original draw is forwarded unchanged. The `HYPRCAP1` fixed-header format and
-`tools/re/hand_capture.py` comparison workflow are documented in `RE_HAND.md`.
+The 2026-11-04 run produced a valid raw `HYPRCAP1` v1 capture of the 238-vertex,
+1,188-index draw signature with 72-byte vertices. Detailed header validation,
+payload hashes, attribute checks, source comparison and restoration evidence are
+recorded in `docs/RE_HAND.md`; the raw capture and comparison report remain in
+ignored `.tmp/` storage.
 
-Synthetic tests prove the parser distinguishes exact source bytes, global affine
-position transforms, unique vertex reordering, ambiguous attribute keys, and malformed
-captures. Runtime comparison is still unresolved: the latest capture attempt installed
-the draw hook, but the installed proxy did not redirect the first archive open to the
-modified archive, and the game exited before gameplay. No GPU buffer capture exists
-from that attempt. The `hand2` source identity therefore remains supported by matching
-dimensions and attribute layout, but has not been confirmed by captured geometry.
+The captured index array exactly equals tag-1 `hand2`'s original and edited index
+arrays. The vertex buffer exactly equals the 35%-enlarged edited payload byte for
+byte, including every supported and uninterpreted attribute. The original payload
+has exact index and non-position attribute correspondence; after the analyzer's
+unique remap, its positions map to the capture with a diagonal 1.35 affine scale,
+translation `(0.00254956, 0.01428750, -0.00005941)`, RMSE `4.09e-9` and maximum
+residual `1.28e-8`. This is strong evidence that edited `hand2` geometry reached
+the instrumented hand draw. Since the snapshot records the final OpenGL vertex
+buffer, rather than a loader return buffer, a precisely identical CPU position
+rewrite of original geometry remains a theoretical alternative. A future test
+should apply a distinctive non-affine per-vertex displacement to distinguish
+source replacement from a global runtime transform.
 
-The 2026-11-04 modified-archive run verified the clean proxy build identity, exact
-tag-1 `hand2` archive redirection at the first `_Fiopen`, complete mod initialization,
-and a successful write of the verified hand dispatch slot after eight readiness
-polls. The game reached its animated title menu, remained at “Connecting to
-leaderboards”, and did not enter gameplay; no GPU snapshot was created. This does not
-show whether the modified mesh was subsequently loaded or rendered. The same run's
-temporary installation state was restored and verified against the deployment journal.
-
-The subsequent capture workflow uses a bounded readiness worker rather than delaying
-mod initialization or treating a null dispatch slot as a terminal error. It only
-patches the fingerprint-verified slot after `VirtualQuery` confirms the observed
-target resides in executable committed memory, and it rechecks the slot before writing.
-The proxy build's revision, cleanliness and explicit redirect-wait capability are
-recorded in a sidecar manifest and in the runtime attach record. See `RE_HAND.md` for
-the preflight, reversible deployment and restoration workflow. A successful proxy
-load, redirect, hook installation, gameplay draw and captured geometry remain separate
-claims and must be evidenced individually.
+The input helper confirmed the foreground HYPER DEMON window and sent the
+historical Win32 PLAY sequence. The saved frame 480 is from before that action
+and shows the title menu; the later screenshot is black. No runtime evidence
+confirms transition to gameplay, so the capture cannot be certified as having
+occurred during gameplay or as proof of a playable first-person scene. A
+minidump created about two seconds after the input/capture records an access
+violation at `hyperdemon.exe+0x7c67`, reading `0x90` through a null vtable in
+Ghidra function `FUN_140007640`. It identifies the immediate dispatch fault but
+not its subsystem or cause; no causal link to the input, model or passive hook
+is established.

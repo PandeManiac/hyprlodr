@@ -173,3 +173,16 @@ also pass `--xauthority /path/to/cookie`; use `--xauthority none` only for an
 unauthenticated display. A different display never inherits the game's cookie
 implicitly. Normal input actions require one live, uniquely matched HYPER DEMON
 process, and the tool checks that PID again immediately before launch.
+
+When a test owns an Xvfb display, keep the Xvfb and its window manager alive
+until Steam, the game, input and capture work are all finished. Record the PIDs
+of the processes started by that test, wait for `xdpyinfo` and `glxinfo -B` to
+succeed, and verify the display still responds immediately before launch and
+input. Do not reuse `:99` from a stale PID file or start the game after the
+display owner has exited. On cleanup, stop only the Xvfb/window-manager
+processes started by the test; do not kill a general Steam or Wine server.
+
+For live process discovery, `/proc/<pid>/comm` must identify the Wine task as
+`hyperdemon.exe`. Proton and Steam wrappers can include the Windows game path in
+their arguments, so wrapper-only matches are rejected rather than used as
+input targets.

@@ -54,6 +54,13 @@ def read_proc(proc_root: Path, pid: str) -> tuple[list[str], dict[str, str], Pat
     return command, environment, executable
 
 
+def read_proc_comm(proc_root: Path, pid: str) -> str | None:
+    try:
+        return (proc_root / pid / "comm").read_text().strip()
+    except OSError:
+        return None
+
+
 def windows_basename(argument: str) -> str:
     return argument.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
@@ -66,7 +73,8 @@ def process_snapshot(proc_root: Path = Path("/proc")) -> list[dict]:
         return records
     for pid in pids:
         command, environment, executable = read_proc(proc_root, pid)
-        records.append({"pid": int(pid), "cmdline": command, "env": environment,
+        records.append({"pid": int(pid), "comm": read_proc_comm(proc_root, pid),
+                        "cmdline": command, "env": environment,
                         "executable": executable})
     return records
 
@@ -93,6 +101,19 @@ def find_game_process(records: list[dict], app_prefix: Path) -> dict | None:
             matches.append(record)
         elif compat_data and Path(compat_data).resolve() == expected_data:
             matches.append(record)
+    # Proton's Python launcher and steam.exe bootstrap both retain the game
+    # path in argv. Prefer the Linux process whose kernel comm is the actual
+    # Windows image name; wrapper argv alone is not proof of a game process.
+    image_matches = [item for item in matches
+                     if str(item.get("comm", "")).lower() == GAME_EXE]
+    if image_matches:
+        matches = image_matches
+    elif any("comm" in item for item in matches):
+        # process_snapshot always includes comm (None when the process vanished
+        # or /proc denied the read). In that real-process path, a command line
+        # containing the Windows image is insufficient: Proton and Steam
+        # wrappers can carry the same argv. Require the actual Wine image task.
+        matches = []
     if len(matches) > 1:
         pids = ", ".join(str(item["pid"]) for item in sorted(matches, key=lambda item: item["pid"]))
         raise ValueError(f"multiple HYPER DEMON processes match compatdata {expected_data}: {pids}")
@@ -137,7 +158,8 @@ def resolve_runtime(steam: Path, app_id: str = APP_ID,
         if not ((actual_prefix and Path(actual_prefix).resolve() == (app_prefix / "pfx").resolve()) or
                 (actual_compat and Path(actual_compat).resolve() == app_prefix)):
             raise ValueError(f"matched HYPER DEMON process PID {game['pid']} changed compatdata")
-        game = {**game, "cmdline": command, "env": game_env}
+        game = {**game, "cmdline": command, "env": game_env,
+                "comm": read_proc_comm(proc_root, str(game["pid"]))}
     selected_root = proton_override.expanduser().resolve() if proton_override else None
     selection = "explicit Proton path" if selected_root else None
     prefix = (app_prefix / "pfx").resolve()
@@ -287,7 +309,8 @@ def verify_runtime_target(runtime: dict, proc_root: Path = Path("/proc")) -> Non
     if not pid:
         raise ValueError("no live HYPER DEMON process was selected")
     command, environment, _ = read_proc(proc_root, str(pid))
-    if not command or not any(windows_basename(arg) == GAME_EXE for arg in command):
+    if (not command or not any(windows_basename(arg) == GAME_EXE for arg in command) or
+            (read_proc_comm(proc_root, str(pid)) or "").lower() != GAME_EXE):
         raise ValueError(f"selected HYPER DEMON process PID {pid} is stale")
     prefix = environment.get("WINEPREFIX")
     compat = environment.get("STEAM_COMPAT_DATA_PATH")

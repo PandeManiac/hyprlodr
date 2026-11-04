@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from tools.re.proton_input import (build_command, find_game_process,
-                                   proton_root_from_wineserver, resolve_runtime,
+                                   process_snapshot, proton_root_from_wineserver, resolve_runtime,
                                    root_from_config_info, verify_runtime_target,
                                    windows_basename)
 
@@ -23,6 +23,7 @@ def create_proton(root: Path, version: str = "fixture-proton") -> Path:
 def make_proc(root: Path, pid: str, cmdline: list[str], env: dict[str, str], exe: Path) -> None:
     process = root / pid
     process.mkdir(parents=True)
+    (process / "comm").write_text(windows_basename(cmdline[0]))
     (process / "cmdline").write_bytes(b"\0".join(item.encode() for item in cmdline) + b"\0")
     (process / "environ").write_bytes(b"\0".join(
         f"{key}={value}".encode() for key, value in env.items()) + b"\0")
@@ -53,6 +54,45 @@ def test_ambiguous_hyper_processes_are_rejected(tmp_path):
               "env": {"WINEPREFIX": str(compat / "pfx")}}
     with pytest.raises(ValueError, match="multiple HYPER DEMON processes"):
         find_game_process([{**record, "pid": 21}, {**record, "pid": 22}], compat)
+
+
+def test_actual_image_process_beats_proton_and_steam_wrappers(tmp_path):
+    compat = tmp_path / "compatdata/1743850"
+    compat.mkdir(parents=True)
+    prefix = str(compat / "pfx")
+    root = create_proton(tmp_path / "Proton")
+    proc = tmp_path / "proc"
+    make_proc(proc, "1", ["proton", "run", "/game/hyperdemon.exe"],
+              {"WINEPREFIX": prefix}, root / "files/bin/wine")
+    make_proc(proc, "2", ["steam.exe", "/game/hyperdemon.exe"],
+              {"WINEPREFIX": prefix}, root / "files/bin/wine")
+    make_proc(proc, "3", [r"Z:\game\hyperdemon.exe"],
+              {"WINEPREFIX": prefix}, root / "files/bin/wine")
+    records = process_snapshot(proc)
+    assert find_game_process(records, compat)["pid"] == 3
+
+
+def test_wrapper_argv_without_live_game_image_is_not_selected(tmp_path):
+    compat = tmp_path / "compatdata/1743850"
+    compat.mkdir(parents=True)
+    prefix = str(compat / "pfx")
+    records = [
+        {"pid": 1, "comm": "python3", "cmdline": ["proton", "run", "/game/hyperdemon.exe"],
+         "env": {"WINEPREFIX": prefix}},
+        {"pid": 2, "comm": "steam.exe", "cmdline": ["steam.exe", "/game/hyperdemon.exe"],
+         "env": {"WINEPREFIX": prefix}},
+    ]
+    assert find_game_process(records, compat) is None
+
+
+def test_process_snapshot_reads_kernel_image_name(tmp_path):
+    compat = tmp_path / "compatdata/1743850"
+    compat.mkdir(parents=True)
+    root = create_proton(tmp_path / "Proton")
+    proc = tmp_path / "proc"
+    make_proc(proc, "101", [r"Z:\game\hyperdemon.exe"],
+              {"WINEPREFIX": str(compat / "pfx")}, root / "files/bin/wine")
+    assert process_snapshot(proc)[0]["comm"] == "hyperdemon.exe"
 
 
 def test_proton_path_is_derived_from_wineserver(tmp_path):

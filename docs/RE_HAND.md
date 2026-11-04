@@ -943,3 +943,87 @@ itself. The real isolated fixture also passed with Proton Experimental on its
 own Xvfb display and confirmed mouse plus Return delivery. This verifies helper
 environment propagation and Win32 input delivery to the fixture; no new
 HYPER DEMON gameplay attempt was made in this change.
+
+### First persistent native hand-buffer capture (2026-11-04)
+
+The next controlled run used the matched game process's `:99` display and
+Proton Experimental prefix. `input-play.report` identifies the visible GLFW
+window as `hyperdemon.exe`, verifies it was foreground, and records that the
+historical Win32 `play` sequence was sent. The capture file was written 359 ms
+after that report. The saved frame 480 shows the title menu, but it was taken
+before the input action; the post-input screenshot is black. No screenshot or
+game-state event records a gameplay transition. Therefore the input action is
+confirmed, while entering gameplay and the capture occurring during gameplay
+are **not confirmed**.
+
+The persistent raw file is
+`.tmp/hand-capture/runtime/hand2.capture` (21,992 bytes, SHA-256
+`5063fc8e13b3e4ba5f454f8a9416877be2476217be701c350e7a070eea314d77`). The
+existing `tools/re/hand_capture.py` parser validates its 104-byte `HYPRCAP1`
+version-1 header and exact length: 238 vertices × 72 bytes (17,136 bytes),
+1,188 32-bit indices (4,752 bytes), plus the header. It reports
+`GL_TRIANGLES`, draw count 1,188, index offset 0, live buffer IDs 41 and 42,
+and attribute offsets `[0,12,24,32,48,60]`. All indices are in range. The
+vertex-array SHA-256 is
+`de8fcd51455db5e907a6e4682568f8d2e62ddce0b4e0b33e61e0c90707f8a708`; the
+index-array SHA-256 is
+`1af9f93e699537f502ffc48e81754d5f77b6f8f38ecc0da4a4214cd480832536`.
+
+The corrected offline comparison is
+`.tmp/analysis/hand2-live-comparison.json`. The local decrypted tag-1 source
+record is at offset `295758784`, size `21972`; its original payload SHA-256 is
+`ddfe1797efd29c1200e1c775d998b73ef73b9b0e8710e92d7b632c3a29c93fa8`, and
+the edited payload SHA-256 is
+`9b0e9cb0e446c56c481547c90994e707fd22f899e0a14e536eb039075328d795`. The
+runtime resolver-table capture identifies that offset/size as tag 1 named
+`hand2`; a separate tag-2 `hand2` is distinct.
+
+The captured index bytes equal both source arrays exactly. Against the edited
+source, the complete vertex array is byte-identical, including positions,
+normals, UVs, the uninterpreted 16-byte attribute at offset 32, tangents and
+bitangents. Against the original, all non-position attributes are exact after
+the analyzer's unique remap keyed by UV0 and offset-32 bytes; topology also
+matches. The fitted original-to-capture affine transform has diagonal scale
+`1.34999999` (per-axis `1.3499999998`, `1.3499999928`, `1.3500000091`) and
+translation approximately `(0.00254956, 0.01428750, -0.00005941)`. Position
+RMSE is `4.09e-9`, maximum residual `1.28e-8`. This is an exact byte-level
+match for the 1.35× edited mesh in the draw buffer, rather than a scale-
+normalized similarity. It strongly supports that the edited geometry reached
+the recognized hand draw. Because the capture is from the final OpenGL buffer
+rather than decoder output, the remaining narrow alternative is an identical
+CPU-side 1.35× position rewrite applied to original source geometry; no such
+rewrite is observed in the current logs. A future distinguishability test
+should use a non-uniform per-vertex displacement that cannot be represented by
+one global object transform, then compare the raw draw buffer with both
+payloads.
+
+The crash dump was produced roughly two seconds after the input report and
+capture. Its exception is `0xC0000005` at
+`hyperdemon.exe+0x7c67`; exception parameters identify a read at address
+`0x90`. Ghidra resolves the instruction in `FUN_140007640` (entry RVA
+`0x7640`): the code loads an object from a global object's `+0x80` field,
+reads its vtable, then calls slot `+0x90`. The dump context has `RAX=0`,
+consistent with the null vtable used by that indirect call. The function lacks
+useful symbols; the immediate null dispatch is confirmed, but its owning
+subsystem and full caller chain are unresolved. There is no evidence tying it
+to the asset redirect, passive capture, or Win32 click. The events establish
+order, not causation.
+
+The experiment restore journal reports `restored: true`; all 23 journaled
+paths were independently checked against saved pre-run SHA-256 or absence,
+including the proxy, mods, mode/config files and runtime logs. The installed
+executable and original archive also match their preflight hashes. The crash
+dump was not a journaled path, so its original pre-run presence is unknown; its
+evidence copy is retained under `.tmp/hand-capture/input-env-regression/`, and
+the installation copy was left untouched rather than deleting a file whose
+prior ownership state is not recorded.
+
+The process selector now treats `/proc/<pid>/comm` as authoritative whenever
+real process records provide it: exact `hyperdemon.exe` tasks win over wrapper
+argv, and wrapper-only candidates are rejected. This prevents selecting a
+Proton Python or `steam.exe` process that merely carries the game path. The
+recorded `:99` Xvfb PID is no longer alive. Future managed runs must keep their
+owned Xvfb and window manager alive through Steam startup, input and capture;
+verify the recorded PID plus `xdpyinfo` and GLX responses before use; and only
+tear down processes that the run started. A display number or stale PID file
+alone does not establish that the display is still available.
