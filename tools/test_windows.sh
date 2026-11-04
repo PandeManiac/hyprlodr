@@ -27,6 +27,11 @@ mkdir -p "$WORK/mods" "$WORK/proxy/mods"
 
 status=0
 
+echo "== native hand dispatch readiness state tests =="
+cc -std=c17 -Wall -Wextra -Werror "$ROOT/native/tests/hand_dispatch_test.c" \
+  -o "$OUT/hand-dispatch-test"
+"$OUT/hand-dispatch-test" || status=1
+
 echo "== wine host: five sample mods =="
 cp "$OUT"/mods/*.dll "$WORK/mods/"
 timeout 60 wine "$OUT/hyprlodr-host.exe" \
@@ -73,7 +78,12 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   python3 - "$WORK/proxy" 2500 <<'PY' || status=1
 import json, pathlib, sys
 base = pathlib.Path(sys.argv[1])
+identity = json.loads((base.parent.parent / "hyprlodr-proxy-build.json").read_text())
 attach = json.loads((base / "hyprlodr-attach.json").read_text())
+assert attach["proxy_build_revision"] == identity["source_revision"], attach
+assert attach["proxy_capability_bits"] == identity["capability_bits"] == 3, attach
+assert attach["proxy_capabilities"] == ",".join(identity["capabilities"]), attach
+print(f"proxy identity: revision={attach['proxy_build_revision']} capabilities={attach['proxy_capabilities']}")
 assert attach["stage"] in ("mods_loaded", "mods_failed"), attach
 print(f"proxy attach: stage={attach['stage']} pid={attach['pid']} status_text={attach['status_text']}")
 # The test host is proxy_client.exe, not hyperdemon.exe. The fingerprint must

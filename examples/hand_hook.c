@@ -40,6 +40,7 @@
  */
 #include "hyprlodr/plugin.h"
 #include "hypr_win32.h"
+#include "hand_dispatch_state.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -49,7 +50,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.9.4"
+#define MOD_VERSION "0.9.5"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -71,6 +72,8 @@ int _fltused = 0;
 #define HAND_VBO_BYTES (HAND_VERTEX_COUNT * 72)
 #define HAND_CAPTURE_HEADER_BYTES 104u
 #define HAND_CAPTURE_INDEX_BYTES (HAND_INDEX_COUNT * 4u)
+#define HAND_DISPATCH_RETRY_MS 10u
+#define HAND_DISPATCH_RETRY_COUNT 3000u
 #define FEATHER_HEADER_BYTES 32
 #define FEATHER_VERTEX_BYTES 64
 #define FEATHER_MAX_VERTICES 65536
@@ -218,6 +221,9 @@ static volatile LONG g_capture_claimed;
 static volatile LONG g_capture_ready;
 static volatile LONG g_capture_saved;
 static volatile LONG g_capture_stop;
+static HANDLE g_dispatch_thread;
+static volatile LONG g_dispatch_stop;
+static volatile LONG g_dispatch_state; /* 0 waiting, 1 installing, 2 installed, -1 failed */
 static unsigned char g_capture_vertices[HAND_VBO_BYTES];
 static unsigned char g_capture_indices[HAND_CAPTURE_INDEX_BYTES];
 static unsigned long long g_capture_index_offset;
@@ -1920,8 +1926,89 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
     g_original_draw(mode, count, type, indices);
 }
 
+static int executable_address(const void *address) {
+    MEMORY_BASIC_INFORMATION64A info;
+    if (!address || VirtualQuery(address, &info, sizeof info) != sizeof info) return 0;
+    if (info.State != MEM_COMMIT || (info.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return 0;
+    return (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                            PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+
+static DWORD WINAPI dispatch_ready_worker(void *unused) {
+    (void)unused;
+    for (unsigned attempt = 0; attempt < HAND_DISPATCH_RETRY_COUNT; ++attempt) {
+        if (InterlockedCompareExchange(&g_dispatch_stop, 0, 0)) break;
+        void *candidate = NULL;
+        if (g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
+                               &candidate, sizeof candidate) == 0 &&
+            hypr_hand_dispatch_executable_candidate(
+                (int)InterlockedCompareExchange(&g_dispatch_state, 0, 0),
+                InterlockedCompareExchange(&g_dispatch_stop, 0, 0) != 0,
+                candidate, (void *)&hand_draw_shim, executable_address(candidate))) {
+            LONG previous = InterlockedCompareExchange(&g_dispatch_state, 1, 0);
+            if (previous != 0) return 0;
+
+            /* A renderer may have initialized the slot between polling and
+             * claiming it. Never overwrite a different dispatch target. */
+            void *current = NULL;
+            if (InterlockedCompareExchange(&g_dispatch_stop, 0, 0) ||
+                g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
+                                   &current, sizeof current) != 0 ||
+                current != candidate) {
+                InterlockedExchange(&g_dispatch_state, HYPR_HAND_DISPATCH_FAILED);
+                log_message("warn", "draw dispatch changed during readiness check; hook not installed");
+                return 0;
+            }
+
+            g_original_draw = (draw_elements_fn)candidate;
+            g_active = 1;
+            void *replacement = (void *)&hand_draw_shim;
+            if (g_host->image_write(g_host->context, HAND_DISPATCH_RVA,
+                                    &replacement, sizeof replacement) != 0) {
+                g_active = 0;
+                InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+                    HYPR_HAND_DISPATCH_INSTALLING, 0, 0));
+                log_message("error", "draw dispatch became ready but patch failed");
+                return 0;
+            }
+            void *check = NULL;
+            if (g_host->image_read(g_host->context, HAND_DISPATCH_RVA,
+                                   &check, sizeof check) != 0 || check != replacement) {
+                g_active = 0;
+                InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+                    HYPR_HAND_DISPATCH_INSTALLING, 1, 0));
+                log_message("error", "draw dispatch patch verification failed");
+                return 0;
+            }
+            InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_finish_install(
+                HYPR_HAND_DISPATCH_INSTALLING, 1, 1));
+            char message[192];
+            snprintf(message, sizeof message,
+                     "dispatch hook installed after readiness (rva=0x3d9ac8 original=0x%lx mode=%s attempts=%u)",
+                     (unsigned long)(size_t)candidate, mode_name(g_mode), attempt + 1u);
+            log_message("info", message);
+            return 0;
+        }
+        Sleep(HAND_DISPATCH_RETRY_MS);
+    }
+    if (!InterlockedCompareExchange(&g_dispatch_stop, 0, 0)) {
+        LONG state = InterlockedCompareExchange(&g_dispatch_state, 0, 0);
+        InterlockedExchange(&g_dispatch_state, hypr_hand_dispatch_timeout(
+            (int)state, 0));
+        log_message("warn", "draw dispatch did not become executable within 30 seconds; hook inactive");
+    }
+    return 0;
+}
+
 static int mod_initialize(const hyprlodr_host_api *host) {
     g_host = host;
+    if (g_dispatch_thread) {
+        log_message("error", "dispatch readiness worker is already active");
+        return -1;
+    }
+    InterlockedExchange(&g_dispatch_stop, 0);
+    InterlockedExchange(&g_dispatch_state, HYPR_HAND_DISPATCH_WAITING);
+    g_active = 0;
 
     if (!HYPRLODR_HOST_API_HAS(host, image_write) || !host->image_write ||
         !host->image_read) {
@@ -1933,22 +2020,18 @@ static int mod_initialize(const hyprlodr_host_api *host) {
         return 0;
     }
 
-    void *original = NULL;
-    if (host->image_read(host->context, HAND_DISPATCH_RVA, &original,
-                         sizeof original) != 0) {
-        log_message("error", "cannot read the draw dispatch slot");
-        return -1;
-    }
-    if (!original) {
-        log_message("error", "draw dispatch slot is empty");
-        return -1;
-    }
-    g_original_draw = (draw_elements_fn)original;
     g_mode = read_mode(host);
+    InterlockedExchange(&g_capture_claimed, 0);
+    InterlockedExchange(&g_capture_ready, 0);
+    InterlockedExchange(&g_capture_saved, 0);
+    InterlockedExchange(&g_capture_stop, 0);
+    g_capture_status = 0;
+    g_capture_failure = 0;
+    g_capture_draw_ordinal = 0;
     build_cube();
     if (g_mode == 7 && !start_capture_writer()) {
-        g_mode = 0;
-        log_message("warn", "capture mode disabled: deferred writer could not start");
+        log_message("error", "capture mode cannot start without its deferred writer");
+        return -1;
     }
     if (g_mode == 5 || g_mode == 6) {
         int mesh_ok = load_feather_mesh();
@@ -1975,34 +2058,37 @@ static int mod_initialize(const hyprlodr_host_api *host) {
         }
     }
 
-    void *replacement = (void *)&hand_draw_shim;
-    if (host->image_write(host->context, HAND_DISPATCH_RVA, &replacement,
-                          sizeof replacement) != 0) {
-        log_message("error", "cannot patch the draw dispatch slot");
+    g_dispatch_thread = CreateThread(NULL, 0, dispatch_ready_worker, NULL, 0, NULL);
+    if (!g_dispatch_thread) {
+        g_mode = 0;
+        log_message("error", "could not start bounded draw dispatch readiness worker");
         return -1;
     }
-
-    void *check = NULL;
-    if (host->image_read(host->context, HAND_DISPATCH_RVA, &check, sizeof check) != 0 ||
-        check != replacement) {
-        log_message("error", "dispatch patch did not take");
-        return -1;
-    }
-
-    g_active = 1;
-    char message[192];
-    snprintf(message, sizeof message,
-             "dispatch hook installed at rva 0x3d9ac8 (original=0x%lx mode=%s)",
-             (unsigned long)(size_t)original, mode_name(g_mode));
-    log_message("info", message);
+    log_message("info", "capture mode configured; waiting up to 30 seconds for executable draw dispatch");
     return 0;
 }
 
 static void mod_shutdown(const hyprlodr_host_api *host) {
+    InterlockedExchange(&g_dispatch_stop, 1);
+    InterlockedCompareExchange(&g_dispatch_state,
+                               hypr_hand_dispatch_stop((int)InterlockedCompareExchange(
+                                   &g_dispatch_state, 0, 0)), 0);
+    if (g_dispatch_thread) {
+        (void)WaitForSingleObject(g_dispatch_thread, INFINITE);
+        CloseHandle(g_dispatch_thread);
+        g_dispatch_thread = NULL;
+    }
     g_active = 0;
     if (g_mode == 7 && g_capture_event) {
         InterlockedExchange(&g_capture_stop, 1);
         (void)SetEvent(g_capture_event);
+        if (g_capture_thread) {
+            (void)WaitForSingleObject(g_capture_thread, INFINITE);
+            CloseHandle(g_capture_thread);
+            g_capture_thread = NULL;
+        }
+        CloseHandle(g_capture_event);
+        g_capture_event = NULL;
     }
     size_t restored = 0;
     if (HYPRLODR_HOST_API_HAS(host, image_restore) && host->image_restore)
@@ -2011,7 +2097,8 @@ static void mod_shutdown(const hyprlodr_host_api *host) {
     char message[224];
     if (g_mode == 7) {
         snprintf(message, sizeof message,
-                 "capture mode: draws=%lu capture_status=%d failure=%u writer_status=%ld; hook restored %lu byte(s)",
+                 "capture mode: dispatch_state=%ld draws=%lu capture_status=%d failure=%u writer_status=%ld; hook restored %lu byte(s)",
+                 (long)InterlockedCompareExchange(&g_dispatch_state, 0, 0),
                  g_hand_draws, g_capture_status, g_capture_failure,
                  (long)InterlockedCompareExchange(&g_capture_saved, 0, 0),
                  (unsigned long)restored);

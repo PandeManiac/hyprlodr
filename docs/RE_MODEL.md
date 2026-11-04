@@ -467,3 +467,13 @@ the draw hook, but the installed proxy did not redirect the first archive open t
 modified archive, and the game exited before gameplay. No GPU buffer capture exists
 from that attempt. The `hand2` source identity therefore remains supported by matching
 dimensions and attribute layout, but has not been confirmed by captured geometry.
+
+The subsequent capture workflow uses a bounded readiness worker rather than delaying
+mod initialization or treating a null dispatch slot as a terminal error. It only
+patches the fingerprint-verified slot after `VirtualQuery` confirms the observed
+target resides in executable committed memory, and it rechecks the slot before writing.
+The proxy build's revision, cleanliness and explicit redirect-wait capability are
+recorded in a sidecar manifest and in the runtime attach record. See `RE_HAND.md` for
+the preflight, reversible deployment and restoration workflow. A successful proxy
+load, redirect, hook installation, gameplay draw and captured geometry remain separate
+claims and must be evidenced individually.

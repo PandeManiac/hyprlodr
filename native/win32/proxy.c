@@ -17,6 +17,7 @@
 #include "hypr_win32.h"
 #include "loader.h"
 #include "file_hook.h"
+#include "proxy_build.h"
 #include "gl_hook.h"
 #include "game_anchors.h"
 
@@ -263,7 +264,12 @@ static void write_attach_record(const char *stage, int status) {
             (unsigned)HYPRLODR_ABI_VERSION, status);
     json_escape(file, hyprlodr_loader_strerror(status));
 
-    fprintf(file, "\",\"delay_ms\":%lu,\"module_parsed\":", (unsigned long)g_delay_ms);
+    fprintf(file, "\",\"proxy_build_revision\":\"%s\",\"proxy_build_clean\":%s,"
+                  "\"proxy_capability_bits\":%u,\"proxy_capabilities\":\"%s\"",
+            HYPRLODR_BUILD_REVISION, HYPRLODR_BUILD_CLEAN ? "true" : "false",
+            (unsigned)HYPRLODR_PROXY_CAPABILITIES, HYPRLODR_PROXY_CAPABILITY_NAMES);
+
+    fprintf(file, ",\"delay_ms\":%lu,\"module_parsed\":", (unsigned long)g_delay_ms);
     fputs(g_module.parsed ? "true" : "false", file);
     fputs(",\"module_base\":\"", file);
     put_hex(file, (uint64_t)(uintptr_t)g_module.base, 16u);

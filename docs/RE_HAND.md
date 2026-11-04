@@ -824,3 +824,32 @@ pre-run hashes or symlink targets. The original archive hash remains
 `2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7`; the executable,
 proxy, and bootstrap configuration also match their recorded pre-run hashes. Run logs,
 frame images and restore records remain in ignored `.tmp/hand-capture/`.
+
+## Readiness retry and reproducible native deployment
+
+The 0.9.5 capture build no longer assumes that the engine's dispatch slot is ready
+during mod initialization. It starts a bounded worker (10 ms polling, 30 second
+limit) which reads only the fingerprint-verified RVA, requires a committed
+executable target via `VirtualQuery`, and re-reads the slot immediately before
+the write. Installation, verification, timeout and shutdown have explicit states;
+shutdown stops and joins the worker before restoring image patches. The render
+callback still forwards the original call unchanged in `capture` mode. Archive
+redirect publication remains the loader's separate initialization step.
+
+`tools/build_windows.sh` writes `hyprlodr-proxy-build.json` alongside the proxy,
+including the source revision, clean-tree bit, artifact SHA-256 and versioned
+capabilities. The proxy reports the same identity in its runtime attach record.
+`tools/hand_capture_deploy.py preflight` checks that identity against the current
+revision, the known game executable hash, both required mods, the redirected
+archive's unchanged regions, and the decrypted edited tag-1 `hand2` payload.
+`deploy` journals and backs up every file it stages below `.tmp/hand-capture/`;
+`restore` puts experiment-owned files back and preserves runtime logs/captures in
+that persistent directory. It never writes the installed archive or executable.
+
+The readiness state helper has native focused coverage for a null/delayed slot,
+non-executable targets, a successful install, write/verification failures, and
+shutdown. The deployment comparison tests cover archive size and differences
+outside the designated record. Runtime verification must separately confirm the
+proxy identity, `redirected: true` on the first archive open, dispatch install,
+gameplay hand draws, and the resulting `hand2.capture`; none of these stages
+should be inferred from a title screen or an empty capture file.

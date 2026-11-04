@@ -25,7 +25,23 @@ CFLAGS=(
   -I"$ROOT/native/src"
 )
 
-mkdir -p "$OUT/obj" "$OUT/lib" "$OUT/mods"
+mkdir -p "$OUT/obj" "$OUT/lib" "$OUT/mods" "$OUT/generated"
+SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
+  SOURCE_CLEAN=0
+else
+  SOURCE_CLEAN=1
+fi
+cat > "$OUT/generated/proxy_build.h" <<EOF
+#ifndef HYPRLODR_PROXY_BUILD_H
+#define HYPRLODR_PROXY_BUILD_H
+#define HYPRLODR_BUILD_REVISION "$SOURCE_REVISION"
+#define HYPRLODR_BUILD_CLEAN $SOURCE_CLEAN
+#define HYPRLODR_PROXY_CAPABILITIES 0x00000003u
+#define HYPRLODR_PROXY_CAPABILITY_NAMES "redirect-wait-v1,build-identity-v1"
+#endif
+EOF
+CFLAGS+=("-I$OUT/generated")
 
 echo "== import library =="
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/kernel32.def" -l "$OUT/lib/kernel32.lib"
@@ -131,6 +147,11 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.hand-ho
   "$OUT/obj/example_hand_hook.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.hand-hook (in $OUT/examples, GL dispatch-table hook)"
 
+"$CC" "${CFLAGS[@]}" -c "$ROOT/examples/asset_redirect.c" -o "$OUT/obj/example_asset_redirect.obj"
+lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.asset-redirect.dll" \
+  "$OUT/obj/example_asset_redirect.obj" "$CRT_OBJ" "$K32"
+echo "  MOD example.asset-redirect (path read from its state directory)"
+
 # Stage the example as a real package, so the documented authoring path is the
 # path that is actually exercised rather than described.
 if [ -f "$ROOT/examples/package/manifest.json" ]; then
@@ -162,6 +183,21 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" "$OUT/obj/file_hook.obj" \
     "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32" "$U32" "$G32"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
+  PROXY_SHA256="$(sha256sum "$OUT/OpenAL32.dll" | cut -d ' ' -f 1)"
+  HAND_MOD_SHA256="$(sha256sum "$OUT/examples/example.hand-hook.dll" | cut -d ' ' -f 1)"
+  REDIRECT_MOD_SHA256="$(sha256sum "$OUT/examples/example.asset-redirect.dll" | cut -d ' ' -f 1)"
+  cat > "$OUT/hyprlodr-proxy-build.json" <<EOF
+{
+  "schema": 1,
+  "source_revision": "$SOURCE_REVISION",
+  "source_clean": $([ "$SOURCE_CLEAN" = 1 ] && echo true || echo false),
+  "proxy_sha256": "$PROXY_SHA256",
+  "hand_capture_mod_sha256": "$HAND_MOD_SHA256",
+  "asset_redirect_mod_sha256": "$REDIRECT_MOD_SHA256",
+  "capabilities": ["redirect-wait-v1", "build-identity-v1"],
+  "capability_bits": 3
+}
+EOF
 else
   echo "skipped proxy DLL: pass the game's OpenAL32.dll path as the second argument"
 fi
