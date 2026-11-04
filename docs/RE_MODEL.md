@@ -337,3 +337,117 @@ after cleanup are respectively
 `8e0a069370f76de7084c39f23360311715f18677236d0e767c9af3f7992dbe64`.
 Runtime artifacts and proprietary model/archive data remain in ignored `.tmp/`
 and are not part of the source change.
+
+## Named asset consumption trace
+
+Ghidra analysis of the installed executable (SHA-256
+`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`) confirms
+the following synchronous stages:
+
+| Stage | Function and fields | Ghidra Evidence |
+|---|---|---|
+| Resolve `(kind, name)` | `FUN_140211e70`, RVA `0x211e70`; x64 arguments are manager, kind, MSVC `std::string*`, flags | `ev_74fedd06c73d04fef7948a33b620f678d9ad632564db3b010588d185c3801e61` |
+| Select record and dispatch | `FUN_140212920`, RVA `0x212920`; record offset `+0`, encrypted size `+4`, type tag `+0x40`; seeks to the record offset | `ev_0ba001c861420fe99f102b252dee8d4b394d7afe4a30714983cbc8ee25604d4e` |
+| Read and decrypt | `FUN_140213370`, RVA `0x213370`; reads into the supplied buffer then XOR-decrypts in place using the name-derived seed | `ev_927fde7c6e4d4ec5a20d94f0cb025789f7ea92cfe655a29876e74b2b0643aa52` |
+| Parse tag 1 | `FUN_140205ec0`, RVA `0x205ec0`; checks graph version 3 and returns 1 on the v3 branch; loader passes the buffer at `+0x18` | `ev_8755e96a9525543eb66d79eb9ed029e52332bacf2003d0a5ef2479f2f6876af0` |
+| Decode mesh arrays | `FUN_14021a710`, RVA `0x21a710`; counts at object `+0x0c/+0x10`, stride `+8`, array pointers `+0x20/+0x28`, completion marker 3 at `+0x4c` | `ev_652daa8d147c94a9ec2daef6ce8358a2143744c9edb7e5aaf1587d0598baedf2` |
+
+The previous live resolver-table capture has two records named `hand2`: a
+tag-2 record at offset `277743449`, size `87415`, and the tag-1 model at offset
+`295758784`, size `21972` (`.tmp/asset-proof/run4-modified/runtime/hyprlodr-assets.jsonl`).
+The resolver's `kind` argument selects the lookup table, so a name-only event
+cannot identify the model. The tracer records both `kind` and the resolved
+record. Its validator treats a tag-2 result as a separate same-name resource
+and attributes model consumption only to the exact tag-1 offset, size, and type.
+An offline comparison against the installed original archive and
+`.tmp/asset-proof/asset.patched` confirms the decrypted payload hashes are
+`ddfe1797efd29c1200e1c775d998b73ef73b9b0e8710e92d7b632c3a29c93fa8` and
+`9b0e9cb0e446c56c481547c90994e707fd22f899e0a14e536eb039075328d795`
+respectively. Both have 238 vertices, 1,188 indices, and 72-byte strides; the
+modified vertex bytes differ while the index-array hash remains
+`1af9f93e699537f502ffc48e81754d5f77b6f8f38ecc0da4a4214cd480832536`.
+
+`tools/re/asset_trace_frida.js` uses Frida's reversible interceptors. It checks
+the expected image base and five function-entry byte signatures before
+installing hooks. The script performs no direct writes to game data. Detaching
+removes its instrumentation. It emits separate events for name lookup, resolver
+return, record selection, decrypted-payload hash, tag-1 parser result, and mesh
+counts plus copied vertex/index hashes. Hashing is implemented in JavaScript
+and checked against the standard SHA-256 `abc` test vector. The trace does not
+infer a render from a successful decode. Nested non-target resolver calls push
+an explicit null context so their reads cannot be attributed to an outer
+`hand2` request.
+
+The loader passes `pvVar3 + 0x18` to the graph parser but keeps the allocation's
+full record size as its length argument. The nominal parser span is therefore
+24 bytes larger than the readable payload view. The trace hashes at most
+`record_size - 0x18` parser-input bytes and never reads beyond the allocation.
+The decrypt function does not check the stream's `gcount`; the trace records
+that limitation and treats an exact payload SHA-256 match as evidence that the
+expected bytes were read and decrypted.
+
+### Capture and compare
+
+All capture output, reports, Python packages, and temporary files belong under
+the ignored persistent `.tmp/` directory. If Python Frida is not installed,
+keep it local to the repository:
+
+```bash
+mkdir -p .tmp/pydeps .tmp/pycache .tmp/logs
+export TMPDIR="$PWD/.tmp" TMP="$PWD/.tmp" TEMP="$PWD/.tmp"
+export PYTHONPYCACHEPREFIX="$PWD/.tmp/pycache"
+export PYTHONPATH="$PWD/.tmp/pydeps"
+python3 -m pip install --target .tmp/pydeps frida
+```
+
+For a running process, `capture --pid` and `--wait-process` are late-attach
+diagnostics. The report explicitly marks `process_start_coverage: false`; an
+empty trace from those modes cannot establish that no earlier request occurred.
+When Frida spawn gating is available, the launch mode installs every hook before
+resuming the game process:
+
+```bash
+python3 tools/re/asset_trace.py capture \
+  --launch-proton-child --wait-seconds 45 --duration 90 \
+  --out .tmp/logs/hand2-modified-trace.jsonl
+```
+
+This host has `kernel.yama.ptrace_scope=1`. A local Frida child-process fixture
+attached successfully, showing that ordinary child tracing is allowed. Frida
+device-wide spawn gating, however, returns `PermissionDeniedError: operation
+not permitted`. The capture tool records this failure before it launches the
+game. The direct-child attach check is preserved in
+`.tmp/logs/frida-child-attach-fixture.json`. The prior manual Proton child
+attempt also did not expose a game process; its launcher log was empty. No
+instrumented HYPER DEMON run has yet been made,
+so there is currently no runtime evidence that `hand2` was requested, read,
+decrypted, parsed, or rendered. The earlier redirected archive-open event is
+not per-record evidence. The current denial is preserved in
+`.tmp/logs/actual-spawn-gating-check.jsonl` and its `.launcher.json` companion;
+the offline original-versus-modified hash comparison is in
+`.tmp/analysis/hand2-trace-no-runtime-report.json`.
+
+On a host where spawn gating is allowed, the mode records process selection,
+attach, signature checks, completed hook installation, and the beginning of
+coverage separately. It resumes the game only after `trace_ready` confirms the
+five hooks are installed. Unrelated spawned processes are resumed immediately.
+If the host denies gating, do not substitute an empty late-attach capture as
+proof that an asset was not loaded. Compare the capture with both archive
+variants only after instrumentation is active:
+
+```bash
+python3 tools/re/asset_trace.py validate \
+  --events .tmp/logs/hand2-modified-trace.jsonl \
+  --modified-pack .tmp/asset-proof/asset.patched \
+  --report .tmp/logs/hand2-modified-report.json
+```
+
+An exact `payload_decrypted` hash identifies which payload reached the
+decryption output. Matching array hashes at `mesh_decode`, with marker 3 and
+the expected counts and stride, proves that the parser copied the edited
+geometry into the game's mesh object. This still does not prove a graphics draw
+used that object. A lookup or record event without later stages is reported at
+that stage only. A no-request result is interpreted according to process
+identity, attach, signature validation, hook installation, and coverage start;
+late-attach capture results explicitly state that earlier asset activity may
+have been missed. Rendering remains unobserved unless separately instrumented.
