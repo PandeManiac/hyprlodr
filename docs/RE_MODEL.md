@@ -241,33 +241,49 @@ the archive size is unchanged, bytes outside the `hand2` record are identical,
 and decrypting that record with the installed executable's tables and the
 `hand2` key returns the edited payload. The installed archive was not changed.
 
-The one runtime attempt is **inconclusive about native model substitution**.
-The game produced a rendered title frame (`.tmp/asset-proof/runtime/game-frame.png`),
-but its file trace records the first `asset/asset` open at `t_ms: 296` via
-`_Fiopen` with `redirected: false` and `opened: "asset/asset"`. The attach record
-shows the mod loader completed at `delay_ms: 2500`; at that point the redirect
-was active (`file_redirects: 1`) and the executable build matched with 8/8
-anchors. Therefore the existing archive-open hook was installed early enough,
-but the `r.asset` mod published its redirect after the game's initial archive
-open. The game launch and title frame prove initialization/rendering only; they
-do not prove that `hand2` was read from the patched archive or rendered.
+The first runtime attempt exposed a startup race: the first `asset/asset` open
+at `t_ms: 296` via `_Fiopen` had `redirected: false`, while mod initialization
+completed only after the default 2500 ms delay. Setting `delay_ms: 0` alone is
+not a reliable ordering mechanism because worker scheduling still races the
+game thread.
 
-Static source evidence agrees with that ordering: `native/win32/proxy.c` installs
-the early file hook with no loader in `DllMain`, while bootstrap resolves and
-initializes mods on its worker after the configured delay. Since the archive
-open happened before publication, this run neither confirms nor disproves
-`hand2` as the first-person arm source and supplies no evidence of loader
-rejection, model caching, or deformation. The concrete blocker is the startup
-race between the game's first archive open and mod redirect registration. A
-future runtime attempt needs to make the redirect available before that open
-and must capture a trace showing `redirected: true` plus evidence of the
-modified mesh in the rendered game view. No second launch was made in this
-experiment.
+`native/win32/file_hook.c` now waits only when an intercepted path ends in
+`asset/asset` (case-insensitive, slash-normalized). It waits for the bootstrap
+worker to publish the redirect registry or finish/fail initialization, with a
+65-second bound. It does not run mod code in `DllMain`; hook installation is
+early and mod discovery/initialization stays on the worker. The stand-in host
+regression test opens `asset/asset` before the mod registers its redirect. With
+the default delay it waited about 1.5 seconds, then selected the replacement
+and read its known bytes; with `delay_ms: 0`, the same open also selected the
+replacement. This checks ordering, path selection, and readable replacement
+content in the stand-in process.
 
-All temporary game-directory log links and the temporary mod entry used for
-this attempt were removed afterward. The installed `asset/asset` and
-`hyperdemon.exe` SHA-256 values after cleanup are respectively
+One controlled game attempt used the existing 35%-enlarged archive copy at
+`.tmp/asset-proof/asset.patched`. Its first archive event was at `t_ms: 342`
+via `_Fiopen`, with `redirected: true`, `ok: true`, and the opened path pointing
+to that patched archive. Here `ok` means `_Fiopen` returned a stream; this log
+does not instrument individual reads or prove that the changed `hand2` bytes
+were decoded or rendered. The runtime resolver capture includes the `hand2`
+tag-1 record at offset `295758784`, size `21972`, and the asset probe completed
+its 624 mapping capture. Those facts establish that the redirected archive was
+opened and resolver metadata was collected, but do not establish the model's
+use by the first-person arm.
+
+The captured frame at
+`.tmp/asset-proof/run2/analysis/game-frame-120.png` shows “Connecting to
+leaderboards,” not gameplay. The game then raised access violation
+`0xc0000005` at `hyperdemon.exe+0x75d7`, from the Steam minidump. This confirms
+the run stopped before the requested visual check; the available evidence does
+not attribute the crash to the replacement archive or to the loader. Therefore
+the run proves first-open redirection but neither proves nor disproves that
+`hand2` is the original first-person arm. No follow-up game launch was made.
+
+Temporary game-directory log links and the test mod link were removed after
+the attempt; the original `OpenAL32.dll` and prior logs were restored. The
+installed `asset/asset`, `hyperdemon.exe`, and `OpenAL32.dll` SHA-256 values
+after cleanup are respectively
 `2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7` and
-`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`.
+`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611` and
+`8e0a069370f76de7084c39f23360311715f18677236d0e767c9af3f7992dbe64`.
 Runtime artifacts and proprietary model/archive data remain in ignored `.tmp/`
 and are not part of the source change.

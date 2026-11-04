@@ -25,6 +25,11 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path);
  * loaded module and is safe to call afterwards. Idempotent. */
 int hyprlodr_file_hook_install_early(hyprlodr_loader *loader, const char *log_path);
 
+/* Called by the bootstrap worker after mod initialization has either published
+ * the redirect registry or failed. Early asset/asset opens wait for this state
+ * (with a bounded timeout) before resolving their path. */
+void hyprlodr_file_hook_mark_redirects_ready(void);
+
 /* "installed", "installed_no_log", "no_image", "create_file_a_not_imported", ...
  * Always non-NULL so it can be copied straight into the attach record. */
 const char *hyprlodr_file_hook_status(void);

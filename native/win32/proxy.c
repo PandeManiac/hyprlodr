@@ -339,12 +339,14 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     g_loader = hyprlodr_loader_create();
     if (!g_loader) {
         write_attach_record("no_memory", HYPRLODR_ERR_LIMIT);
+        hyprlodr_file_hook_mark_redirects_ready();
         return 0;
     }
     if (hyprlodr_loader_set_log(g_loader, log_path) != HYPRLODR_OK) {
         write_attach_record("log_open_failed", HYPRLODR_ERR_IO);
         hyprlodr_loader_destroy(g_loader);
         g_loader = NULL;
+        hyprlodr_file_hook_mark_redirects_ready();
         return 0;
     }
     hyprlodr_loader_add_dir(g_loader, mods_dir);
@@ -401,6 +403,11 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);
 
+    /* Wake an early asset open even when mod resolution or initialization
+     * failed. The file shim then proceeds with the original path instead of
+     * holding the game thread indefinitely. */
+    hyprlodr_file_hook_mark_redirects_ready();
+
     /* The loader's own cap is internal; asking for more ids than it can hold is
      * harmless and keeps this call free of a private constant. */
 
@@ -431,7 +438,9 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         char early_gl_log[1024];
         snprintf(early_gl_log, sizeof early_gl_log, "%s\\hyprlodr-gl.jsonl", g_game_dir);
         (void)hyprlodr_gl_hook_install_early(early_gl_log);
-        /* Never run mod code or file I/O for mods under the loader lock. */
+        /* Never run mod code or file I/O for mods under the loader lock. The
+         * file shim can wait on the worker if the game reaches asset/asset
+         * before the redirect registry is published. */
         CreateThread(NULL, 0, bootstrap, NULL, 0, NULL);
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
         if (g_loader) {

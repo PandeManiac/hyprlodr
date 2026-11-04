@@ -13,6 +13,7 @@
 #define MOD_ID "r.redirect"
 #define MOD_VERSION "1.0.0"
 #define PROBE_NAME "redirect-probe.dat"
+#define ASSET_NAME "asset/asset"
 #define PROBE_CONTENT "hyprlodr redirect content"
 
 static int mod_initialize(const hyprlodr_host_api *host) {
@@ -39,6 +40,10 @@ static int mod_initialize(const hyprlodr_host_api *host) {
 
     if (host->file_redirect(host->context, PROBE_NAME, replacement) != 0) {
         host->log(host->context, "error", MOD_ID, "file_redirect refused");
+        return -1;
+    }
+    if (host->file_redirect(host->context, ASSET_NAME, replacement) != 0) {
+        host->log(host->context, "error", MOD_ID, "asset archive redirect refused");
         return -1;
     }
     char message[1200];

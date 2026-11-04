@@ -13,17 +13,43 @@
 int main(int argc, char **argv) {
     (void)argc;
     (void)argv;
+    printf("proxy_client: entered\n");
+    fflush(NULL);
     HMODULE proxy = LoadLibraryA("OpenAL32.dll");
     if (!proxy) {
         printf("proxy_client: LoadLibraryA(OpenAL32.dll) failed\n");
         return 3;
     }
-    FARPROC al_get_error = GetProcAddress(proxy, "alGetError");
-    FARPROC alc_open_device = GetProcAddress(proxy, "alcOpenDevice");
-    FARPROC al_gen_sources = GetProcAddress(proxy, "alGenSources");
-    printf("proxy_client: proxy=%d alGetError=%d alcOpenDevice=%d alGenSources=%d\n",
-           proxy ? 1 : 0, al_get_error ? 1 : 0, alc_open_device ? 1 : 0,
-           al_gen_sources ? 1 : 0);
+    printf("proxy_client: loaded\n");
+    fflush(NULL);
+    printf("proxy_client: proxy loaded\n");
+    fflush(NULL);
+
+    /* This first asset open deliberately races the worker. The proxy's narrow
+     * gate must hold it until redirect publication and return the replacement
+     * bytes before the default 2500 ms delay expires. Let the worker finish
+     * hook setup and record its attach state, but trigger before mod loading. */
+    Sleep(1000);
+    printf("asset-open: requesting original path\n");
+    fflush(NULL);
+    HANDLE asset = CreateFileA("asset/asset", GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    int asset_ok = 0;
+    if (asset == INVALID_HANDLE_VALUE) {
+        printf("asset-open: failed\n");
+    } else {
+        char asset_content[128];
+        DWORD asset_read = 0;
+        if (!ReadFile(asset, asset_content, (DWORD)sizeof asset_content - 1u, &asset_read, NULL)) {
+            printf("asset-open: read failed\n");
+        } else {
+            asset_content[asset_read] = '\0';
+            printf("asset-open: %s\n", asset_content);
+            asset_ok = 1;
+        }
+        CloseHandle(asset);
+    }
+
     /* Give the loader bootstrap thread time to initialize mods (the built-in
      * delay is 2500 ms, and a config file may set it to 0). */
     Sleep(4000);
@@ -45,5 +71,5 @@ int main(int argc, char **argv) {
     }
 
     Sleep(2500);
-    return (al_get_error && alc_open_device && al_gen_sources) ? 0 : 2;
+    return asset_ok ? 0 : 2;
 }

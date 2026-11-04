@@ -100,12 +100,27 @@ assert attach["file_hook"] == "installed", attach
 assert "CreateFileA=patched" in attach["file_hook_detail"], attach
 assert "fopen=absent" in attach["file_hook_detail"], attach
 print(f"file hook detail: {attach['file_hook_detail']}")
-assert attach["file_redirects"] == 1, attach
+assert attach["file_redirects"] == 2, attach
 published = [e for e in events if e["event"] == "file_redirects_published"]
-assert len(published) == 1, published
+assert len(published) == 1 and "2 file redirect(s) active" in published[0]["message"], published
 print("proxy bootstrap: mods initialized inside the host process")
-print("file hook: installed, one redirect published")
+print("file hook: installed, two redirects published")
 print("crash filter: silent on a clean exit")
+PY
+  python3 - "$WORK/proxy" <<'PY' || status=1
+import json, pathlib, sys
+base = pathlib.Path(sys.argv[1])
+client = (base / "client.log").read_text()
+assert "asset-open: hyprlodr redirect content" in client, client
+opens = [json.loads(line) for line in (base / "hyprlodr-files.jsonl").read_text().splitlines() if line.strip()]
+asset_records = [e for e in opens if e.get("event") == "file_open" and e.get("requested") == "asset/asset"]
+assert asset_records and asset_records[0]["redirected"] is True, asset_records
+assert asset_records[0]["ok"] is True and asset_records[0]["opened"].endswith("replacement.txt"), asset_records[0]
+waits = [e for e in opens if e.get("event") == "redirect_wait" and e.get("requested") == "asset/asset"]
+assert any(e.get("stage") == "begin" for e in waits), waits
+ready = [e for e in waits if e.get("stage") == "ready"]
+assert ready and ready[0]["waited_ms"] > 0, waits
+print(f"early asset open: waited {ready[0]['waited_ms']} ms, redirected, and returned readable replacement bytes")
 PY
   echo "== wine proxy: hyprlodr-config.json overrides the delay =="
   printf '{\n  "delay_ms": 0\n}\n' > "$WORK/proxy/hyprlodr-config.json"
@@ -124,15 +139,26 @@ samples = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
 assert [mod for mod in init if mod != "r.redirect"] == samples, init
 assert "r.redirect" in init, init
 print("config: delay_ms=0 honoured, all five mods still initialized")
+assert attach["file_redirects"] == 2, attach
 
-# The client opened "redirect-probe.dat", which does not exist on disk. The
-# bytes it read can only come from the mod's replacement file through the
-# patched CreateFileA import slot.
+# The first CreateFileA call opens "asset/asset" before the client waits for
+# bootstrap. The proxy must hold it until the mod publishes its redirect.
 client = (base / "client.log").read_text()
+assert "asset-open: hyprlodr redirect content" in client, client
 assert "redirect-probe: hyprlodr redirect content" in client, client
 print("file hook: redirected open in the stand-in host returned the mod's bytes")
 
 opens = [json.loads(line) for line in (base / "hyprlodr-files.jsonl").read_text().splitlines() if line.strip()]
+asset_records = [e for e in opens if e.get("event") == "file_open" and e.get("requested") == "asset/asset"]
+assert asset_records, opens[:5]
+assert asset_records[0]["redirected"] is True, asset_records[0]
+assert asset_records[0]["ok"] is True, asset_records[0]
+assert asset_records[0]["opened"].endswith("replacement.txt"), asset_records[0]
+waits = [e for e in opens if e.get("event") == "redirect_wait" and e.get("requested") == "asset/asset"]
+if waits:
+    assert any(e.get("stage") == "begin" for e in waits), waits
+    assert any(e.get("stage") in ("ready", "timeout") for e in waits), waits
+print("asset open: redirected and returned readable replacement bytes")
 records = [e for e in opens if e.get("requested") == "redirect-probe.dat"]
 assert records, opens[:5]
 assert records[0]["redirected"] is True, records[0]
