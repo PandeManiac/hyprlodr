@@ -1,9 +1,9 @@
-# HYPER DEMON model payloads (initial findings)
+# HYPER DEMON model payloads and topology-aware rebuilding
 
-Status: version-3 tag-1 geometry is decoded with its graph-level name/value
-prefix preserved. OBJ and a Blender script exporter are available. The identity
-of `hand2` as the original first-person arm source is **strongly supported but
-not byte-verified**.
+Status: version-3 tag-1 geometry is decoded and can be rebuilt losslessly or
+with validated topology edits. A passive OpenGL capture matches the edited
+tag-1 `hand2` vertex and index buffers byte-for-byte at the recognized hand
+draw; see the capture evidence in `RE_HAND.md`.
 
 ## Confirmed tag-1 mesh section
 
@@ -38,15 +38,11 @@ The counts also match that live draw exactly (238 vertices and 1,188 indices).
 
 The live draw evidence independently reports the same 238 vertices, 72-byte
 stride, and 1,188 indices. Its attribute offsets are 0/12/24/32/48/60, matching
-the six 32-bit-float groups in this archive record. Existing runtime analysis
-identifies the four-float group at byte 32 as UV/mask data (its x values vary
-0.0051–0.0668, y is constant 0.0922, z/w are zero), not skinning weights. This
-supports a direct source relationship, but the persistent VBO/IBO byte dumps
-mentioned in earlier notes are no longer present in the repository's `.tmp/`
-tree or the available persistent hand-extract directories. No vertex-by-vertex
-position, normal, UV, or topology comparison can therefore be reproduced from
-the available captures. The live GPU geometry is posed; equality may also
-require accounting for runtime coordinate transforms or deformation.
+the six 32-bit-float groups in this archive record. The retained raw capture
+and exact edited-payload comparison are described in `RE_HAND.md`: the captured
+draw bytes match the deliberately enlarged `hand2` payload exactly. The
+four-float group at byte 32 varies like UV/mask data in the capture and is not
+verified as skinning weights.
 
 ### Vertex attributes and graph tail
 
@@ -74,47 +70,116 @@ entry `handlow` (`00000000be0b0000`, fields `0xffff, 0`), and `handbones` has
 references and eight trailing zero bytes. In all three raw values, the upper
 little-endian u32 equals the record's index count (1,188 / 3,006 / 5,004).
 This repeatable correlation is recorded as raw data, not a decoded semantic.
-The name may identify a graph child/group, but the owning loader consumer has
-not been traced far enough to establish that. These entries do not establish a
-material assignment; no material reference is present in the parsed reference
-list.
+The name may identify a graph child/group, but the eight-byte value's semantic
+consumer remains unresolved. These entries do not establish a material
+assignment; no material reference is present in the parsed reference list.
 
 `asset_model.py` reports per-component ranges for all six attribute groups and
 preserves unknown graph-tail bytes. Its `--blender-script` output builds the
-indexed mesh, UV0 layer, and point attributes for normal, the four-float
-channel, tangent, and bitangent. The Blender file is generated locally; no game
-payload or extracted content is committed. Blender has no material assignment
-to export from these graph records because none is verified.
+indexed mesh, UV0 layer, the point attributes for normal, the four-float
+channel, tangent, and bitangent, plus a `hyprlodr_source_vertex` template index.
+The Blender file is generated locally; no game payload or extracted content is
+committed. Blender has no material assignment to export from these graph
+records because none is verified.
 
 ## Lossless rebuild and same-count editing
 
-The payload parser now also acts as a conservative serializer. It validates the
+The payload parser also acts as a conservative serializer. It validates the
 version, section bounds, counts, stride, vertex/index array extents, finite
-positions/normals/UV0, and index bounds. A no-edit rebuild returns the original
-payload bytes unchanged. An edited rebuild copies that payload and changes only
-the explicitly supplied float32 vertex components at their original offsets.
-The header, binary section prefix, vertex padding, indices, graph entry names
-and values, references, unknown bytes, and trailing data all remain byte-for-
-byte from the source. A rebuild requires the version-3 entry and reference-count
-prefix to parse within bounds; uninterpreted bytes after that prefix are
-retained. Output cannot overwrite its source payload.
+known vertex fields, non-degenerate triangle indices, and index bounds. A
+no-edit rebuild returns the original payload bytes unchanged. A rebuild
+requires the version-3 entry and reference-count prefix to parse within bounds;
+uninterpreted bytes after that prefix are retained. Output cannot overwrite its
+source payload.
 
-The editing interface accepts a JSON document with the source `vertex_count`
-and arrays under `attributes`; supported names are `position` (3), `normal`
-(3), `uv0` (2), `attribute3` (4), `tangent` (3), and `bitangent` (3). Each
-array must contain exactly one finite row per source vertex. The serializer
-rejects unknown attributes, changed vertex counts, wrong row widths, non-finite
-values, invalid float32 ranges, and any rebuilt payload that fails structural
-validation. Topology and index edits are intentionally unsupported. Blender
-export also rejects UV seams that would require duplicating a vertex, since
-vertex-count changes are outside this format-safe path.
+The editing interface accepts legacy same-count JSON edits under `attributes`
+and a topology-aware form with `vertex_count`, `source_vertices`, `indices`, and
+all six `attributes` arrays. Supported attributes are `position` (3), `normal`
+(3), `uv0` (2), `attribute3` (4), `tangent` (3), and `bitangent` (3). A
+topology edit selects a source vertex record for every output vertex, copies
+that complete 72-byte record (including any unsupported bytes), then replaces
+the known float groups. This makes duplication and vertex reordering explicit;
+brand-new vertices need a valid source template. Indices are u32 triangle
+indices, must be in bounds, have a count divisible by three, and may not repeat
+a vertex within one triangle. All supported float values must be finite and
+representable as float32. The serializer rebuilds the mesh section count and
+length fields and relocates the original graph tail and following bytes
+unchanged. Declared section padding is retained after the new arrays. No-edit
+rebuilds remain byte-identical.
 
-The graph-tail values remain uninterpreted. In the verified hand records, the
-upper little-endian u32 of the raw eight-byte named-entry value equals the
-record's index count. The rebuilt edit path keeps both mesh counts fixed and
-preserves these graph bytes unchanged; this avoids violating that observed
-relationship. No material or independent geometry-reference format has been
-confirmed.
+The Blender exporter now writes triangle indices as well as vertex attributes.
+It splits output vertices when one Blender vertex has multiple `uv0` corner
+values, preserving UV seams by duplicating that vertex and its selected source
+template. It rejects non-triangle polygons; triangulate intentionally before
+export. Each newly created Blender point must have a valid integer
+`hyprlodr_source_vertex` value selecting the source record whose unsupported
+bytes should be copied. New positions/attributes are serialized, while unknown
+record bytes come from that chosen template.
+
+The graph-tail eight-byte values remain uninterpreted. Across `hand2`,
+`hand2left`, and `handbones`, the upper little-endian u32 equals the source
+index count, but that correlation has not established a draw-range or count
+meaning. Ghidra evidence for the shipped executable (SHA-256
+`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`) shows
+`FUN_140205ec0` copies the raw 8-byte value into graph-node storage at `+0x40`
+and `+0x44` and the nearby `FUN_140206870`/`FUN_140206900` handlers construct
+and insert name-keyed tree nodes; `FUN_140207280` performs another name-keyed
+lookup/insertion. The inspected functions do not establish a consumer that
+interprets this value as a mesh index count. Evidence IDs: parser
+`ev_8755e96a9525543eb66d79eb9ed029e52332bacf2003d0a5ef2479f2f6876af0`, node
+creation `ev_1979e41bb539ffd8a56c1de8bd39a9b3625dac046ed0a96dab4dc7949e1f382b`,
+tree insertion `ev_656123a075e47ea3b037ea2adb7e72df2a97b6e11b31a5e3dba4d767a7cddc07`,
+and lookup `ev_f68695fcb0102cc96b9560a9a32e96bb930f0ca6c3ecbf2ea1f2734dd9f675d8`.
+Accordingly topology edits preserve those eight bytes exactly rather than
+rewriting a field whose meaning is not verified. This remains a possible runtime
+compatibility risk to resolve before shipping edited assets. No material or
+independent geometry-reference format has been confirmed.
+
+### Topology changes and variable-size delivery
+
+The serializer recalculates the tag-1 v3 mesh section size and its index and
+vertex counts; these are the only dependent binary fields with confirmed
+semantics. It retains the section's four-byte prefix, stride, pad byte, section
+padding, all original bytes after the section, and graph values. The current
+tool has operational limits of 2,000,000 vertices and 12,000,000 indices to
+bound its in-memory rebuild buffers; these are tool limits, not asserted game
+format maxima. The loader casts record size to signed 32-bit for `malloc`, so a
+serialized payload also must remain below 2 GiB. The current
+loader's record metadata has a u32 archive offset at `+0`, u32 record size at
+`+4`, and type at `+0x40` (`RE_PACK.md`). `FUN_140212920` allocates the record
+size, seeks to that offset, reads and decrypts the same size, dispatches the
+plaintext and size to the type parser, then frees the temporary read buffer
+(Evidence `ev_0ba001c861420fe99f102b252dee8d4b394d7afe4a30714983cbc8ee25604d4e`).
+`FUN_14021a710` copies the mesh arrays into a separate parsed mesh object
+(Evidence `ev_652daa8d147c94a9ec2daef6ce8358a2143744c9edb7e5aaf1587d0598baedf2`).
+
+This makes an appended-record design technically plausible: add the replacement
+ciphertext to a user-owned archive copy, encrypted with the requested name's
+existing seed; at the verified load boundary temporarily substitute the selected
+record's offset and size so the existing allocation, decryptor, and normal parser
+consume it. The loader casts size to signed 32-bit for `malloc`, so a safe
+replacement must be smaller than 2 GiB, and its offset must fit the u32 record
+field. Multiple replacements require per-record selection and synchronization;
+the descriptor also contains cached decoded-object state, so replacements must
+be registered before that record is first parsed or cache invalidation must be
+understood. The hook must preserve the descriptor's cached-object fields and
+restore offset/size on every return path. No runtime implementation is included
+here: thread-safety, hook ABI, descriptor reuse, and cache ownership need a
+focused implementation and stand-in validation before in-game delivery. A full
+archive rebuild remains another option, but record offsets live in the runtime
+resolver tables rather than in a self-contained pack directory, so rewriting
+only `asset/asset` cannot update them. The current fixed-size patcher remains
+appropriate for in-place replacement only.
+
+The 72-byte record can carry the known position, normal, UV0, four-float,
+tangent, and bitangent groups, but no vertex weights have been verified; the
+four-float group is not identified as skinning weights. A custom feathered arm
+can be encoded as geometry only if its attribute requirements map to these
+fields. Keeping native posing/animation is a separate compatibility question:
+the model's relationship to `handbones`, per-vertex rig data, procedural pose
+updates, material grouping, and runtime normal/tangent recomputation remain
+unresolved. Native-format serializability alone does not establish animation or
+rendering compatibility.
 
 ### Reproduce extraction, no-change round trip, and edit
 
@@ -138,8 +203,11 @@ python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
 cmp .tmp/roundtrip/hand2.bin .tmp/roundtrip/hand2-rebuilt.bin
 ```
 
-Create the attribute-preserving Blender mesh, edit it while keeping its vertex
-count and per-vertex UV layout, then export an edit document:
+Create the attribute-preserving Blender mesh, edit its points/faces, and export
+an edit document. For every added Blender point, set the integer point attribute
+`hyprlodr_source_vertex` to a valid source vertex index; this selects the template
+for the new native record's opaque bytes. The exporter writes indexed triangles
+and splits vertices where loop UVs require a seam:
 
 ```bash
 python3 tools/re/asset_model.py .tmp/roundtrip/hand2.bin \
@@ -181,25 +249,28 @@ PY
 ### Validation performed
 
 Freshly extracted `hand2`, `hand2left`, `handbones`, `handbonesleft`, and
-`handveins` all rebuilt byte-for-byte. For `hand2`, source and rebuild SHA-256
-were both `ddfe1797efd29c1200e1c775d998b73ef73b9b0e8710e92d7b632c3a29c93fa8`.
-The controlled Blender edit moved vertex 0 by `+0.001` on X: only the three
-float32 bytes at payload offsets 46–48 changed. The edited model retained 238
-vertices, 1,188 indices, and 72-byte stride. Encrypting that local payload with
-the installed executable's tables and `hand2` seed, then decrypting it, returned
-the edited bytes exactly. All generated payloads, Blender files, ciphertext,
-edit JSON, and logs remain under ignored `.tmp/`.
+`handveins` still rebuild byte-for-byte. For `hand2`, source and rebuild
+SHA-256 were both
+`ddfe1797efd29c1200e1c775d998b73ef73b9b0e8710e92d7b632c3a29c93fa8`.
+Topology fixtures using each of `hand2`, `hand2left`, and `handbones` produced
+three valid variants: an attached triangle (+1 vertex, +3 indices), one removed
+face (-3 indices), and reversed vertex order with remapped indices. All retained
+the 72-byte stride and exact graph-tail bytes. The Blender 5.2.2 pipeline also
+round-tripped an edited `hand2` with an added edge-connected triangle to 239
+vertices and 1,191 indices. Its 22,056-byte output encrypted with the installed
+executable's real cipher tables and `hand2` seed, then decrypted byte-identically.
+Generated payloads, Blender files, ciphertext, edit JSON, and logs are under
+ignored `.tmp/`.
 
 ### Source-arm identity assessment
 
-The record is a strong candidate for the original first-person arm: its logical
-name is `hand2`, its geometry dimensions match the draw exactly, its stride and
-attribute offsets match, and its bounds are arm-scale. Matching counts do not
-prove identity. The decisive per-vertex capture bytes are unavailable, and the
-runtime draw may apply a transform or a CPU-side pose before upload. Current
-evidence supports but does not confirm `hand2` as the source mesh. Recovering a
-new live capture is unnecessary for this offline milestone and was not
-attempted.
+The capture evidence in `RE_HAND.md` establishes that the deliberately modified
+tag-1 `hand2` geometry reached the recognized hand draw: the captured indices
+match both variants and its entire vertex buffer matches the 1.35× edited payload
+byte-for-byte. This topology-editing milestone did not perform another game run.
+The new serializer only establishes binary-format compatibility; it does not
+establish that an arbitrary changed topology remains compatible with the game's
+opaque graph property or animation behavior.
 
 ## Reproduce locally
 

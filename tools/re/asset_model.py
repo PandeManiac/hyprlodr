@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""Inspect and export geometry sections found in HYPER DEMON tag-1 assets.
+"""Inspect, export, and rebuild geometry in HYPER DEMON tag-1 assets.
 
 The parser follows FUN_140205ec0 / FUN_14021a710 (see docs/RE_PACK.md). It
 preserves the decrypted payload and validates all declared lengths before
-reading vertices or indices. OBJ is used for Blender-compatible geometry export.
+reading vertices or indices. Blender JSON can edit attributes and triangle
+topology while the serializer retains source-template bytes and unknown graph
+data.
 """
 from __future__ import annotations
 
 import argparse
+import array
 import json
 import math
 import pathlib
@@ -17,8 +20,12 @@ import sys
 GRAPH_OFFSET = 0x18
 MESH_SECTION_OFFSET = GRAPH_OFFSET + 8
 SECTION_HEADER_SIZE = 14  # u32 prefix, u32 index count, u32 vertex count, u8 stride, 1 pad byte
-MAX_VERTICES = 10_000_000
-MAX_INDICES = 60_000_000
+# Operational limits keep several in-memory validation/rebuild buffers below
+# roughly 200 MiB for a 72-byte mesh; the game loader's hard size ceiling is lower
+# than its nominal uint32 record field because FUN_140212920 casts size to int.
+MAX_VERTICES = 2_000_000
+MAX_INDICES = 12_000_000
+MAX_SECTION_SIZE = 0xFFFFFFFF
 VERTEX_ATTRIBUTES = [
     {"name": "position", "offset": 0, "components": 3},
     {"name": "normal", "offset": 12, "components": 3},
@@ -131,13 +138,22 @@ def inspect_payload(data: bytes) -> dict:
             attribute_ranges[component][1] = max(attribute_ranges[component][1], value)
         if stride >= 32 and not all(math.isfinite(v) for v in struct.unpack_from("<2f", data, offset + 24)):
             raise ValueError(f"non-finite UV at vertex {index}")
+        for component in range(min(18, stride // 4)):
+            if not math.isfinite(struct.unpack_from("<f", data, offset + component * 4)[0]):
+                raise ValueError(f"non-finite vertex component {component} at vertex {index}")
     min_index, max_index = vertex_count, 0
-    for (value,) in struct.iter_unpack("<I", data[index_offset:arrays_end]):
+    triangle_indices = []
+    for index_position, (value,) in enumerate(struct.iter_unpack("<I", data[index_offset:arrays_end])):
         min_index = min(min_index, value)
         max_index = max(max_index, value)
         if value >= vertex_count:
             raise ValueError(f"index {value} exceeds vertex count {vertex_count}")
-    if arrays_end != section_end:
+        triangle_indices.append(value)
+        if len(triangle_indices) == 3:
+            if len(set(triangle_indices)) != 3:
+                raise ValueError(f"triangle {index_position // 3} contains repeated vertex indices")
+            triangle_indices.clear()
+    if arrays_end > section_end:
         raise ValueError(f"mesh arrays end at {arrays_end}, declared section ends at {section_end}")
 
     attr_summary = []
@@ -172,6 +188,7 @@ def inspect_payload(data: bytes) -> dict:
         "vertex_attributes": attr_summary,
         "graph_tail": graph,
         "trailing_payload_bytes": len(data) - section_end,
+        "mesh_section_padding": data[arrays_end:section_end].hex(),
         "_data": data,
     }
 
@@ -180,8 +197,10 @@ def rebuild_payload(data: bytes, edit: dict | None = None) -> bytes:
     """Rebuild a v3 model while preserving every byte outside supported fields.
 
     The current format has no independent canonical serializer for its graph tail.
-    This therefore uses the validated source payload as a lossless template and
-    patches only explicitly supplied vertex fields. This supports same-count edits.
+    This uses the validated source payload as a lossless template. Legacy edits
+    patch supported fields in-place. Topology edits rebuild only the mesh arrays
+    and their verified count/length fields, cloning each output vertex from an
+    explicitly selected source vertex so opaque per-vertex bytes survive.
     """
     model = inspect_payload(data)
     if model["graph_tail"].get("parse_status") != "prefix-parsed":
@@ -190,8 +209,16 @@ def rebuild_payload(data: bytes, edit: dict | None = None) -> bytes:
         return data
     if not isinstance(edit, dict):
         raise ValueError("edit document must be a JSON object")
-    if edit.get("vertex_count") != model["vertex_count"]:
-        raise ValueError("edit vertex_count must exactly match the source model")
+    if "vertex_count" not in edit:
+        raise ValueError("edit document must specify vertex_count")
+    vertex_count = _checked_count(edit["vertex_count"], MAX_VERTICES, "vertex_count", minimum=1)
+    topology_edit = "indices" in edit or "source_vertices" in edit or vertex_count != model["vertex_count"]
+    if topology_edit:
+        if vertex_count != model["vertex_count"] and "source_vertices" not in edit:
+            raise ValueError("changed vertex_count requires source_vertices templates")
+        if vertex_count != model["vertex_count"] and "indices" not in edit:
+            raise ValueError("changed vertex_count requires an explicit indices array")
+        return _rebuild_topology(data, model, edit, vertex_count)
     attributes = edit.get("attributes")
     if not isinstance(attributes, dict) or not attributes:
         raise ValueError("edit document must contain a non-empty attributes object")
@@ -229,6 +256,116 @@ def rebuild_payload(data: bytes, edit: dict | None = None) -> bytes:
     return bytes(result)
 
 
+def _checked_count(value, maximum: int, name: str, minimum: int = 0) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+        raise ValueError(f"{name} must be an integer in [{minimum}, {maximum}]")
+    return value
+
+
+def _rebuild_topology(data: bytes, model: dict, edit: dict, vertex_count: int) -> bytes:
+    attributes = edit.get("attributes")
+    if not isinstance(attributes, dict) or set(attributes) != set(EDITABLE_ATTRIBUTES):
+        missing = set(EDITABLE_ATTRIBUTES) - set(attributes or {})
+        extra = set(attributes or {}) - set(EDITABLE_ATTRIBUTES)
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(sorted(missing)))
+        if extra:
+            detail.append("unsupported " + ", ".join(sorted(extra)))
+        raise ValueError("topology edits must provide every supported attribute (" + "; ".join(detail) + ")")
+    source_vertices = edit.get("source_vertices")
+    if source_vertices is None:
+        if vertex_count != model["vertex_count"]:
+            raise ValueError("topology edits with changed vertex_count require source_vertices templates")
+        source_vertices = list(range(vertex_count))
+    if not isinstance(source_vertices, list) or len(source_vertices) != vertex_count:
+        raise ValueError("source_vertices must have one source template index per output vertex")
+    templates = []
+    for i, source_index in enumerate(source_vertices):
+        source_index = _checked_count(source_index, MAX_VERTICES,
+                                      f"source_vertices[{i}]", minimum=0)
+        if source_index >= model["vertex_count"]:
+            raise ValueError(f"source vertex template {source_index} exceeds source vertex count")
+        templates.append(source_index)
+
+    indices = edit.get("indices")
+    if indices is None:
+        if vertex_count != model["vertex_count"]:
+            raise ValueError("topology edits with changed vertex_count require an explicit indices array")
+        source_data = model["_data"]
+        indices = list(struct.unpack_from(f"<{model['index_count']}I", source_data, model["index_offset"]))
+    if not isinstance(indices, list):
+        raise ValueError("indices must be an array of triangle vertex indices")
+    index_count = _checked_count(len(indices), MAX_INDICES, "index_count", minimum=0)
+    if index_count % 3:
+        raise ValueError("index_count must be divisible by three for triangle topology")
+    if index_count == 0:
+        raise ValueError("index_count must contain at least one triangle")
+    packed_indices = array.array("I")
+    triangle_indices = []
+    for i, value in enumerate(indices):
+        value = _checked_count(value, MAX_VERTICES, f"indices[{i}]", minimum=0)
+        if value >= vertex_count:
+            raise ValueError(f"index {value} exceeds vertex count {vertex_count}")
+        packed_indices.append(value)
+        triangle_indices.append(value)
+        if len(triangle_indices) == 3:
+            if len(set(triangle_indices)) != 3:
+                raise ValueError(f"triangle {i // 3} contains repeated vertex indices")
+            triangle_indices.clear()
+
+    stride = model["vertex_stride"]
+    if stride != 72:
+        raise ValueError("topology editing is currently supported only for the verified 72-byte vertex layout")
+    source_data = model["_data"]
+    source_vertex_offset = model["vertex_offset"]
+    vertex_records = bytearray()
+    for output_index, source_index in enumerate(templates):
+        base = source_vertex_offset + source_index * stride
+        record = bytearray(source_data[base:base + stride])
+        for name, spec in EDITABLE_ATTRIBUTES.items():
+            rows = attributes[name]
+            if not isinstance(rows, list) or len(rows) != vertex_count:
+                raise ValueError(f"attribute {name!r} must have one row per output vertex")
+            row = rows[output_index]
+            if not isinstance(row, (list, tuple)) or len(row) != spec["components"]:
+                raise ValueError(f"attribute {name!r} vertex {output_index} must have {spec['components']} values")
+            try:
+                values = tuple(float(value) for value in row)
+            except (TypeError, ValueError, OverflowError) as error:
+                raise ValueError(f"attribute {name!r} vertex {output_index} is not numeric") from error
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f"attribute {name!r} vertex {output_index} contains a non-finite value")
+            try:
+                struct.pack_into("<" + "f" * spec["components"], record, spec["offset"], *values)
+            except (OverflowError, struct.error) as error:
+                raise ValueError(f"attribute {name!r} vertex {output_index} exceeds float32 range") from error
+        vertex_records.extend(record)
+
+    section_padding = bytes.fromhex(model["mesh_section_padding"])
+    section_size = SECTION_HEADER_SIZE + len(vertex_records) + index_count * 4 + len(section_padding)
+    if section_size > MAX_SECTION_SIZE:
+        raise ValueError("rebuilt mesh section exceeds the 32-bit section-size field")
+    header = bytearray(source_data[model["mesh_section_offset"]:
+                                   model["mesh_section_offset"] + SECTION_HEADER_SIZE])
+    struct.pack_into("<II", header, 4, index_count, vertex_count)
+    if packed_indices.itemsize != 4:
+        raise ValueError("host unsigned-int width is not four bytes")
+    if sys.byteorder != "little":
+        packed_indices.byteswap()
+    index_data = packed_indices.tobytes()
+    section = bytes(header) + bytes(vertex_records) + index_data + section_padding
+    section_start = model["mesh_section_offset"]
+    old_section_end = section_start + model["mesh_section_size"]
+    new_payload = (source_data[:GRAPH_OFFSET] +
+                   struct.pack("<II", model["graph_version"], section_size) +
+                   section + source_data[old_section_end:])
+    if len(new_payload) > 0x7FFFFFFF:
+        raise ValueError("rebuilt payload exceeds the loader's signed 32-bit allocation size")
+    inspect_payload(new_payload)
+    return new_payload
+
+
 def write_blender_export_script(blend_input: pathlib.Path, edit_output: pathlib.Path,
                                 script_output: pathlib.Path) -> None:
     """Write a Blender script that exports supported mesh values to edit JSON."""
@@ -259,24 +396,39 @@ for name, components in [("normal",3),("attribute3",4),("tangent",3),("bitangent
         attrs[name] = [[float(x) for x in item.vector] for item in attr.data]
     else:
         attrs[name] = [[float(x) for x in item.color] for item in attr.data]
+attrs["uv0"] = []
 if "uv0" not in mesh.uv_layers: raise RuntimeError("missing uv0 layer")
-uv = [[None, None] for _ in range(count)]
-seen = [False] * count
+if "hyprlodr_source_vertex" not in mesh.attributes: raise RuntimeError("missing hyprlodr_source_vertex template attribute")
+template = mesh.attributes["hyprlodr_source_vertex"]
+if template.domain != "POINT" or len(template.data) != count: raise RuntimeError("source template attribute is not point-domain")
+output_attrs = {{name: [] for name in attrs}}
+source_vertices = []
+indices = []
+vertex_map = {{}}
 for poly in mesh.polygons:
+    if len(poly.loop_indices) != 3: raise RuntimeError("only triangle polygons are supported; triangulate the Blender mesh first")
     for loop_index in poly.loop_indices:
         vertex_index = mesh.loops[loop_index].vertex_index
-        value = [float(x) for x in mesh.uv_layers["uv0"].data[loop_index].uv]
-        if seen[vertex_index] and any(abs(uv[vertex_index][k]-value[k]) > 1e-7 for k in range(2)):
-            raise RuntimeError("UV seam requires vertex duplication; count-changing edits are unsupported")
-        uv[vertex_index] = value
-        seen[vertex_index] = True
-if not all(seen): raise RuntimeError("some vertices have no uv0 corner")
-attrs["uv0"] = uv
-for name, rows in attrs.items():
+        uv_value = tuple(float(x) for x in mesh.uv_layers["uv0"].data[loop_index].uv)
+        key = (vertex_index, uv_value)
+        if key not in vertex_map:
+            out_index = len(source_vertices)
+            vertex_map[key] = out_index
+            source_vertices.append(int(template.data[vertex_index].value))
+            for name in attrs:
+                if name == "position": row = [float(c) for c in mesh.vertices[vertex_index].co]
+                elif name == "uv0": row = list(uv_value)
+                else:
+                    item = mesh.attributes[name].data[vertex_index]
+                    row = [float(x) for x in (item.vector if len(attrs[name][0]) == 3 else item.color)]
+                output_attrs[name].append(row)
+        indices.append(vertex_map[key])
+if not source_vertices: raise RuntimeError("mesh has no triangle faces")
+for name, rows in output_attrs.items():
     if any(not math.isfinite(x) for row in rows for x in row): raise RuntimeError("non-finite value in " + name)
 edit_path.parent.mkdir(parents=True, exist_ok=True)
-edit_path.write_text(json.dumps({{"vertex_count": count, "attributes": attrs}}, separators=(",", ":")) + "\\n")
-print("wrote", edit_path, "with", count, "vertices")
+edit_path.write_text(json.dumps({{"vertex_count": len(source_vertices), "source_vertices": source_vertices, "indices": indices, "attributes": output_attrs}}, separators=(",", ":")) + "\\n")
+print("wrote", edit_path, "with", len(source_vertices), "vertices and", len(indices), "indices")
 ''', encoding="utf-8")
 
 
@@ -329,6 +481,8 @@ faces = [struct.unpack_from("<3I", b, i0 + i*4) for i in range(0, index_count, 3
 mesh = bpy.data.meshes.new({payload.stem!r})
 mesh.from_pydata(verts, [], faces)
 mesh.update()
+source_attr = mesh.attributes.new(name="hyprlodr_source_vertex", type="INT", domain="POINT")
+for i in range(vertex_count): source_attr.data[i].value = i
 for name, offset, count in [("normal",12,3),("uv0",24,2),("attribute3",32,4),("tangent",48,3),("bitangent",60,3)]:
     if offset + count*4 > stride: continue
     if name == "uv0":

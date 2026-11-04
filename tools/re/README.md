@@ -31,10 +31,17 @@ installed archive. A name duplicated across tables must use `table-id:name`; a u
 name can be used directly. Current capture coverage and unconfirmed candidates are
 reported in `docs/RE_PACK.md`.
 
-`asset_model.py` inspects the version-3 mesh section found in tag-1 graph payloads and
-exports validated position/normal/UV0/index data as OBJ for Blender. See [`RE_MODEL.md`](../../docs/RE_MODEL.md)
-for the verified `hand2` example and a local extraction workflow. Keep decrypted data and
-exports under the ignored `.tmp/` directory; they are proprietary game content.
+`asset_model.py` inspects the version-3 mesh section found in tag-1 graph payloads,
+exports OBJ, and generates a Blender import/export workflow. No-edit rebuilds remain
+byte-identical; topology edits accept `vertex_count`, `source_vertices`, a flat triangle
+`indices` array, and the six supported attributes (`position`, `normal`, `uv0`,
+`attribute3`, `tangent`, and `bitangent`). Each output vertex clones a complete source
+record before known fields are replaced, preserving opaque vertex bytes. The serializer
+updates verified mesh counts and section length while preserving graph and trailing bytes.
+Blender export includes triangle indices and splits UV seams using source-template
+indices. See [`RE_MODEL.md`](../../docs/RE_MODEL.md) for constraints and validation. Keep
+decrypted data and exports under the ignored `.tmp/` directory; they are proprietary game
+content.
 
 Read-only tooling for understanding a HYPER DEMON build. Nothing here modifies
 the game, and nothing here is required to install mods: it exists so that any
