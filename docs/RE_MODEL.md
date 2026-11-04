@@ -451,3 +451,19 @@ that stage only. A no-request result is interpreted according to process
 identity, attach, signature validation, hook installation, and coverage start;
 late-attach capture results explicitly state that earlier asset activity may
 have been missed. Rendering remains unobserved unless separately instrumented.
+
+## Passive GPU hand capture and comparison
+
+`examples/hand_hook.c` 0.9.4 adds an opt-in pass-through capture at the verified
+first-person hand draw. The implementation records actual vertex and index bytes
+from OpenGL buffers after validating the six attribute bindings and buffer bounds;
+the original draw is forwarded unchanged. The `HYPRCAP1` fixed-header format and
+`tools/re/hand_capture.py` comparison workflow are documented in `RE_HAND.md`.
+
+Synthetic tests prove the parser distinguishes exact source bytes, global affine
+position transforms, unique vertex reordering, ambiguous attribute keys, and malformed
+captures. Runtime comparison is still unresolved: the latest capture attempt installed
+the draw hook, but the installed proxy did not redirect the first archive open to the
+modified archive, and the game exited before gameplay. No GPU buffer capture exists
+from that attempt. The `hand2` source identity therefore remains supported by matching
+dimensions and attribute layout, but has not been confirmed by captured geometry.

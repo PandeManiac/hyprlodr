@@ -3,6 +3,7 @@
 LIBRARY KERNEL32.dll
 EXPORTS
 CreateDirectoryA
+CreateEventA
 CreateFileA
 CreateFileW
 CreateThread
@@ -12,6 +13,8 @@ ExitProcess
 FindClose
 FindFirstFileA
 FindNextFileA
+InterlockedCompareExchange
+InterlockedExchange
 FreeLibrary
 GetCommandLineA
 GetCurrentProcessId
@@ -35,6 +38,8 @@ WideCharToMultiByte
 VirtualProtect
 VirtualQuery
 SetUnhandledExceptionFilter
+SetEvent
 Sleep
+WaitForSingleObject
 WriteFile
 CloseHandle

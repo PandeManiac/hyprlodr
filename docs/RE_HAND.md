@@ -762,3 +762,65 @@ arm washed pale ice/white. The committed blue/white palette is restored. The aut
 material still does not reproduce HYPER DEMON's animated gold iridescence, and combined
 mode can show native gold along the hand edge; material separation and final fit remain
 the next work.
+
+## Passive hand geometry capture (0.9.4)
+
+`example.hand-hook` adds an opt-in `capture` mode. It uses the already verified draw
+dispatch slot and the same `GL_TRIANGLES` / 1,188-index / unsigned-int signature, but
+forwards the original draw arguments unchanged. Before forwarding the first matching
+draw, it verifies all six enabled attributes against the measured 72-byte layout and
+checks both buffer extents. It reads 17,136 bytes from the vertex buffer and the draw's
+4,752-byte index range into fixed storage. It restores the prior `GL_ARRAY_BUFFER`
+binding; it never rebinds the element buffer or modifies either buffer. A single
+`glGetBufferSubData` readback can stall the render thread, so capture mode is for a
+controlled diagnostic run only.
+
+The callback makes no allocation, formats no log messages and does no filesystem I/O.
+It signals a small writer thread after one successful snapshot. The writer emits a
+104-byte `HYPRCAP1` header followed by the raw vertex and index bytes. The header stores
+draw ordinal, a pair-derived frame estimate, monotonic milliseconds since boot, draw
+signature, buffer IDs, index offset and six attribute offsets. The frame estimate uses
+the previously measured pair of hand passes; it is not an independent swap/frame count.
+
+To opt in, `<state_dir>/hand-mode.txt` contains two lines: `capture`, then an absolute
+output path containing `.tmp`. The capture is therefore explicit and stays out of the
+game installation. The reusable analyzer is `tools/re/hand_capture.py`:
+
+```bash
+python3 tools/re/hand_capture.py .tmp/hand-capture/runtime/hand2.capture \
+  --original .tmp/analysis/hand2-original-expected.bin \
+  --modified .tmp/analysis/hand2-modified-expected.bin \
+  --json .tmp/hand-capture/runtime/comparison.json
+```
+
+It checks the capture structure and hashes, then reports exact byte equality,
+index-topology correspondence, exact UV0 / offset-32 attribute matches, unique
+vertex reordering where the keys are unambiguous, a global affine fit with position
+residuals, and normal direction error after the fitted transform's inverse transpose.
+It does not label counts alone as an identity match. UV0 and the
+bytes at offsets 32–47 are used as matching keys without assigning them new semantics.
+Ambiguous keys remain ambiguous; non-rigid CPU posing can produce a poor affine fit.
+
+**Offline validation:** synthetic captures cover exact bytes, a transformed mesh,
+vertex reordering, duplicate-key ambiguity, truncated data and out-of-range indices.
+The focused Python tests and the Windows cross-build pass. Proprietary captures are
+never committed.
+
+**Runtime result (2026-11-03): no hand geometry was captured.** The first attempt used
+`delay_ms: 0`; the verified build loaded, but the dispatch slot was still null when the
+mod initialized, so it declined to patch. A second attempt with `delay_ms: 2500`
+installed the capture hook at RVA `0x3d9ac8` and presented renderer frames. However, the
+first `_Fiopen` of `asset/asset` at 415 ms reported `redirected: false`; the redirect
+was registered and published later. No `hand2.capture` file appeared, and the process
+exited before gameplay input could be attempted. The installed proxy hash was
+`8e0a069370f76de7084c39f23360311715f18677236d0e767c9af3f7992dbe64`; its binary did not
+contain the `redirect_wait` event string used by the checked-in source, and the runtime
+log contained no wait event. This supports a stale installed proxy as the redirect
+blocker, but does not establish why the game exited. This run is not evidence that the
+modified `hand2` was loaded or unused.
+
+All 23 experiment-touched installation paths were restored and checked against their
+pre-run hashes or symlink targets. The original archive hash remains
+`2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7`; the executable,
+proxy, and bootstrap configuration also match their recorded pre-run hashes. Run logs,
+frame images and restore records remain in ignored `.tmp/hand-capture/`.

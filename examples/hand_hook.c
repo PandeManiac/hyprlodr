@@ -18,6 +18,8 @@
  *               bound to its live vertex positions
  *   "overlay-only"  diagnostic: suppress the native hand, draw only the
  *               feather cards deformed from its live vertex positions
+ *   "capture"   pass the native draw through and capture its first matched
+ *               vertex/index buffers; the second line must be an output path
  *   anything else (or no file)  pass every draw through unchanged
  *
  * Cube mode is the geometry-replacement proof. The first hand draw creates a
@@ -29,7 +31,9 @@
  *
  * The shim runs on the render thread inside the engine's draw call, so it does
  * not call the host logger or any loader code. An earlier version did and the
- * game died on the first gameplay hand draw. Only GL calls are made there.
+ * game died on the first gameplay hand draw. Capture mode performs one
+ * validated GL readback into fixed storage, then signals a deferred writer;
+ * the draw callback does no allocation, formatting, file I/O, or host calls.
  *
  * This example is Windows-only: it needs the live game image and the host's
  * ABI 6 write gate. On a host without a verified image it initializes inert.
@@ -45,7 +49,7 @@
 int _fltused = 0;
 
 #define MOD_ID "example.hand-hook"
-#define MOD_VERSION "0.9.3"
+#define MOD_VERSION "0.9.4"
 
 /* The engine's draw-table slot, from docs/RE_HAND.md. The host only lets a mod
  * touch the image when build_matches() is true, and this value is tied to the
@@ -65,6 +69,8 @@ int _fltused = 0;
  * binds to those vertices and follows their per-frame deltas. */
 #define HAND_VERTEX_COUNT 238
 #define HAND_VBO_BYTES (HAND_VERTEX_COUNT * 72)
+#define HAND_CAPTURE_HEADER_BYTES 104u
+#define HAND_CAPTURE_INDEX_BYTES (HAND_INDEX_COUNT * 4u)
 #define FEATHER_HEADER_BYTES 32
 #define FEATHER_VERTEX_BYTES 64
 #define FEATHER_MAX_VERTICES 65536
@@ -81,7 +87,14 @@ int _fltused = 0;
 #define GL_ELEMENT_ARRAY_BUFFER 0x8893u
 #define GL_VERTEX_ARRAY_BINDING 0x85B5u
 #define GL_ARRAY_BUFFER_BINDING 0x8894u
+#define GL_ELEMENT_ARRAY_BUFFER_BINDING 0x8895u
 #define GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING 0x889Fu
+#define GL_VERTEX_ATTRIB_ARRAY_ENABLED 0x8622u
+#define GL_VERTEX_ATTRIB_ARRAY_SIZE 0x8623u
+#define GL_VERTEX_ATTRIB_ARRAY_STRIDE 0x8624u
+#define GL_VERTEX_ATTRIB_ARRAY_TYPE 0x8625u
+#define GL_VERTEX_ATTRIB_ARRAY_POINTER 0x8645u
+#define GL_BUFFER_SIZE 0x8764u
 #define GL_CURRENT_PROGRAM 0x8B8Du
 #define GL_CULL_FACE 0x0B44u
 #define GL_DEPTH_TEST 0x0B71u
@@ -154,6 +167,9 @@ typedef void (WINAPI *get_uniformiv_fn)(unsigned program, int location, int *val
 typedef void (WINAPI *get_vertex_attribiv_fn)(unsigned index, unsigned pname, int *value);
 typedef void (WINAPI *get_buffer_subdata_fn)(unsigned target, long long offset,
                                              long long size, void *data);
+typedef void (WINAPI *get_buffer_parameteriv_fn)(unsigned target, unsigned pname, int *value);
+typedef void (WINAPI *get_vertex_attrib_pointerv_fn)(unsigned index, unsigned pname,
+                                                     void **pointer);
 typedef void (WINAPI *buffer_sub_data_fn)(unsigned target, long long offset,
                                           long long size, const void *data);
 typedef void *(*wgl_get_proc_fn)(const char *name);
@@ -186,12 +202,32 @@ static get_uniform_location_fn g_get_uniform_location;
 static get_uniformiv_fn g_get_uniformiv;
 static get_vertex_attribiv_fn g_get_vertex_attribiv;
 static get_buffer_subdata_fn g_get_buffer_subdata;
+static get_buffer_parameteriv_fn g_get_buffer_parameteriv;
+static get_vertex_attrib_pointerv_fn g_get_vertex_attrib_pointerv;
 static buffer_sub_data_fn g_buffer_sub_data;
+static int g_capture_gl_resolved;
 
 static unsigned g_mode; /* 0 pass-through, 1 suppress, 2 cube, 3 arm, 4 palette */
 static unsigned long g_hand_draws;
 static unsigned long g_substituted;
 static int g_active;
+static char g_capture_path[1024];
+static HANDLE g_capture_event;
+static HANDLE g_capture_thread;
+static volatile LONG g_capture_claimed;
+static volatile LONG g_capture_ready;
+static volatile LONG g_capture_saved;
+static volatile LONG g_capture_stop;
+static unsigned char g_capture_vertices[HAND_VBO_BYTES];
+static unsigned char g_capture_indices[HAND_CAPTURE_INDEX_BYTES];
+static unsigned long long g_capture_index_offset;
+static unsigned g_capture_array_buffer;
+static unsigned g_capture_element_buffer;
+static unsigned g_capture_attribute_offsets[6];
+static unsigned g_capture_draw_ordinal;
+static unsigned g_capture_timestamp_ms;
+static int g_capture_status;
+static unsigned g_capture_failure;
 
 /* Private geometry. 0 = not prepared, 1 = ready, -1 = unavailable. */
 static int g_geometry_state;
@@ -288,6 +324,97 @@ static const char *state_path(const hyprlodr_host_api *host, const char *name,
     return buffer;
 }
 
+static void put_u32(unsigned char *out, unsigned value) {
+    out[0] = (unsigned char)value;
+    out[1] = (unsigned char)(value >> 8);
+    out[2] = (unsigned char)(value >> 16);
+    out[3] = (unsigned char)(value >> 24);
+}
+
+static void put_u64(unsigned char *out, unsigned long long value) {
+    put_u32(out, (unsigned)value);
+    put_u32(out + 4, (unsigned)(value >> 32));
+}
+
+static int capture_path_is_local(const char *path) {
+    /* This research capture contains proprietary runtime geometry. Requiring
+     * an explicit .tmp path keeps it out of the installation and Git tree. */
+    int absolute = ((path[0] >= 'A' && path[0] <= 'Z') ||
+                    (path[0] >= 'a' && path[0] <= 'z')) &&
+                   path[1] == ':' && (path[2] == '\\' || path[2] == '/');
+    absolute = absolute || (path[0] == '\\' && path[1] == '\\');
+    if (!absolute) return 0;
+    for (const char *p = path; p[0]; ++p) {
+        int segment_start = p == path || p[-1] == '\\' || p[-1] == '/';
+        if (segment_start && p[0] == '.' && p[1] == 't' && p[2] == 'm' &&
+            p[3] == 'p' && (p[4] == '\0' || p[4] == '\\' || p[4] == '/')) return 1;
+    }
+    return 0;
+}
+
+static DWORD WINAPI capture_writer(void *unused) {
+    (void)unused;
+    for (;;) {
+        if (WaitForSingleObject(g_capture_event, INFINITE) != 0) return 0;
+        if (InterlockedCompareExchange(&g_capture_ready, 0, 0) == 1) {
+            unsigned char header[HAND_CAPTURE_HEADER_BYTES];
+            for (unsigned i = 0; i < sizeof header; ++i) header[i] = 0;
+            memcpy(header, "HYPRCAP1", 8);
+            put_u32(header + 8, 1);
+            put_u32(header + 12, HAND_CAPTURE_HEADER_BYTES);
+            put_u32(header + 16, g_capture_draw_ordinal);
+            /* The measured game issues two adjacent hand passes per frame.
+             * This is a pair-derived frame label, not a swap-hook frame count. */
+            put_u32(header + 20, (g_capture_draw_ordinal - 1u) / 2u);
+            put_u32(header + 24, 7);
+            put_u32(header + 28, HAND_INDEX_COUNT);
+            put_u32(header + 32, GL_UNSIGNED_INT);
+            put_u32(header + 36, HAND_VERTEX_COUNT);
+            put_u32(header + 40, 72);
+            put_u32(header + 44, HAND_VBO_BYTES);
+            put_u32(header + 48, HAND_INDEX_COUNT);
+            put_u32(header + 52, 4);
+            put_u64(header + 56, g_capture_index_offset);
+            put_u64(header + 64, g_capture_timestamp_ms);
+            put_u32(header + 72, g_capture_array_buffer);
+            put_u32(header + 76, g_capture_element_buffer);
+            for (unsigned i = 0; i < 6; ++i)
+                put_u32(header + 80 + i * 4u, g_capture_attribute_offsets[i]);
+
+            HANDLE file = CreateFileA(g_capture_path, GENERIC_WRITE, FILE_SHARE_READ,
+                                      NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (file == INVALID_HANDLE_VALUE) {
+                InterlockedExchange(&g_capture_saved, -1);
+            } else {
+                DWORD written = 0;
+                int ok = WriteFile(file, header, sizeof header, &written, NULL) &&
+                         written == sizeof header &&
+                         WriteFile(file, g_capture_vertices, HAND_VBO_BYTES, &written, NULL) &&
+                         written == HAND_VBO_BYTES &&
+                         WriteFile(file, g_capture_indices, HAND_CAPTURE_INDEX_BYTES,
+                                   &written, NULL) &&
+                         written == HAND_CAPTURE_INDEX_BYTES;
+                CloseHandle(file);
+                InterlockedExchange(&g_capture_saved, ok ? 1 : -1);
+            }
+            return 0;
+        }
+        if (InterlockedCompareExchange(&g_capture_stop, 0, 0)) return 0;
+    }
+}
+
+static int start_capture_writer(void) {
+    g_capture_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_capture_event) return 0;
+    g_capture_thread = CreateThread(NULL, 0, capture_writer, NULL, 0, NULL);
+    if (!g_capture_thread) {
+        CloseHandle(g_capture_event);
+        g_capture_event = NULL;
+        return 0;
+    }
+    return 1;
+}
+
 /* The minimal Windows C runtime has no memcmp, so compare prefixes directly. */
 static int has_prefix(const char *text, const char *prefix) {
     while (*prefix) {
@@ -312,6 +439,19 @@ static unsigned read_mode(const hyprlodr_host_api *host) {
         else if (has_prefix(word, "palette")) mode = 4;
         else if (has_prefix(word, "overlay-only")) mode = 6;
         else if (has_prefix(word, "overlay")) mode = 5;
+        else if (has_prefix(word, "capture")) {
+            char output[1024];
+            if (fgets(output, (int)sizeof output, file)) {
+                size_t length = strlen(output);
+                while (length && (output[length - 1] == '\r' || output[length - 1] == '\n' ||
+                                  output[length - 1] == ' ' || output[length - 1] == '\t'))
+                    output[--length] = '\0';
+                if (length < sizeof g_capture_path && capture_path_is_local(output)) {
+                    memcpy(g_capture_path, output, length + 1);
+                    mode = 7;
+                }
+            }
+        }
     }
     fclose(file);
     return mode;
@@ -324,6 +464,7 @@ static const char *mode_name(unsigned mode) {
     if (mode == 4) return "palette";
     if (mode == 5) return "overlay";
     if (mode == 6) return "overlay-only";
+    if (mode == 7) return "capture";
     return "pass-through";
 }
 
@@ -427,6 +568,9 @@ static void resolve_gl(void) {
         g_get_uniformiv = (get_uniformiv_fn)wgl("glGetUniformiv");
         g_get_vertex_attribiv = (get_vertex_attribiv_fn)wgl("glGetVertexAttribiv");
         g_get_buffer_subdata = (get_buffer_subdata_fn)wgl("glGetBufferSubData");
+        g_get_buffer_parameteriv = (get_buffer_parameteriv_fn)wgl("glGetBufferParameteriv");
+        g_get_vertex_attrib_pointerv =
+            (get_vertex_attrib_pointerv_fn)wgl("glGetVertexAttribPointerv");
         g_buffer_sub_data = (buffer_sub_data_fn)wgl("glBufferSubData");
     }
     if (!g_bind_buffer) g_bind_buffer = (bind_buffer_fn)GetProcAddress(module, "glBindBuffer");
@@ -454,6 +598,12 @@ static void resolve_gl(void) {
     if (!g_get_buffer_subdata)
         g_get_buffer_subdata =
             (get_buffer_subdata_fn)GetProcAddress(module, "glGetBufferSubData");
+    if (!g_get_buffer_parameteriv)
+        g_get_buffer_parameteriv =
+            (get_buffer_parameteriv_fn)GetProcAddress(module, "glGetBufferParameteriv");
+    if (!g_get_vertex_attrib_pointerv)
+        g_get_vertex_attrib_pointerv =
+            (get_vertex_attrib_pointerv_fn)GetProcAddress(module, "glGetVertexAttribPointerv");
     if (!g_buffer_sub_data)
         g_buffer_sub_data = (buffer_sub_data_fn)GetProcAddress(module, "glBufferSubData");
     if (wgl) g_get_attrib_location = (get_attrib_location_fn)wgl("glGetAttribLocation");
@@ -464,6 +614,37 @@ static void resolve_gl(void) {
     g_is_enabled = (is_enabled_fn)GetProcAddress(module, "glIsEnabled");
     g_enable = (enable_fn)GetProcAddress(module, "glEnable");
     g_disable = (disable_fn)GetProcAddress(module, "glDisable");
+}
+
+/* Resolve only the six entry points needed by one passive geometry snapshot.
+ * This runs on the first matching draw, where the WGL context is current. */
+static void resolve_capture_gl(void) {
+    if (g_capture_gl_resolved) return;
+    g_capture_gl_resolved = 1;
+    HMODULE module = GetModuleHandleA("opengl32.dll");
+    if (!module) return;
+    wgl_get_proc_fn wgl = (wgl_get_proc_fn)GetProcAddress(module, "wglGetProcAddress");
+    if (wgl) {
+        g_bind_buffer = (bind_buffer_fn)wgl("glBindBuffer");
+        g_get_integerv = (get_integerv_fn)wgl("glGetIntegerv");
+        g_get_vertex_attribiv = (get_vertex_attribiv_fn)wgl("glGetVertexAttribiv");
+        g_get_vertex_attrib_pointerv =
+            (get_vertex_attrib_pointerv_fn)wgl("glGetVertexAttribPointerv");
+        g_get_buffer_parameteriv = (get_buffer_parameteriv_fn)wgl("glGetBufferParameteriv");
+        g_get_buffer_subdata = (get_buffer_subdata_fn)wgl("glGetBufferSubData");
+    }
+    if (!g_bind_buffer) g_bind_buffer = (bind_buffer_fn)GetProcAddress(module, "glBindBuffer");
+    if (!g_get_integerv) g_get_integerv = (get_integerv_fn)GetProcAddress(module, "glGetIntegerv");
+    if (!g_get_vertex_attribiv)
+        g_get_vertex_attribiv = (get_vertex_attribiv_fn)GetProcAddress(module, "glGetVertexAttribiv");
+    if (!g_get_vertex_attrib_pointerv)
+        g_get_vertex_attrib_pointerv = (get_vertex_attrib_pointerv_fn)
+            GetProcAddress(module, "glGetVertexAttribPointerv");
+    if (!g_get_buffer_parameteriv)
+        g_get_buffer_parameteriv = (get_buffer_parameteriv_fn)
+            GetProcAddress(module, "glGetBufferParameteriv");
+    if (!g_get_buffer_subdata)
+        g_get_buffer_subdata = (get_buffer_subdata_fn)GetProcAddress(module, "glGetBufferSubData");
 }
 
 /* Recolor the game's own tex_grad ramp in place. Its original dimensions and
@@ -1095,6 +1276,86 @@ static void draw_native_palette(unsigned mode, int count, unsigned type,
     }
 }
 
+/* Read the exact live mesh storage once, without changing its contents or the
+ * VAO's element binding. glGetBufferSubData may synchronize with the driver,
+ * so this runs for one hand draw only in the explicitly selected capture mode.
+ * The render callback does no allocation, formatting, file I/O or host calls. */
+static void capture_native_hand(unsigned count, unsigned type, const void *indices) {
+    static const int expected_sizes[6] = {3, 3, 2, 4, 3, 3};
+    static const unsigned expected_offsets[6] = {0, 12, 24, 32, 48, 60};
+    if (InterlockedCompareExchange(&g_capture_claimed, 1, 0) != 0) return;
+    g_capture_status = -1;
+    resolve_capture_gl();
+    if (count != HAND_INDEX_COUNT || type != GL_UNSIGNED_INT || !g_capture_event ||
+        !g_get_integerv || !g_get_vertex_attribiv || !g_get_vertex_attrib_pointerv ||
+        !g_get_buffer_parameteriv || !g_get_buffer_subdata || !g_bind_buffer) {
+        g_capture_failure = 1;
+        return;
+    }
+
+    int array_buffer = 0, element_buffer = 0;
+    g_get_integerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &element_buffer);
+    if (element_buffer <= 0) { g_capture_failure = 2; return; }
+
+    for (unsigned i = 0; i < 6; ++i) {
+        int enabled = 0, size = 0, stride = 0, attribute_type = 0, source = 0;
+        void *pointer = NULL;
+        g_get_vertex_attribiv(i, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled);
+        g_get_vertex_attribiv(i, GL_VERTEX_ATTRIB_ARRAY_SIZE, &size);
+        g_get_vertex_attribiv(i, GL_VERTEX_ATTRIB_ARRAY_STRIDE, &stride);
+        g_get_vertex_attribiv(i, GL_VERTEX_ATTRIB_ARRAY_TYPE, &attribute_type);
+        g_get_vertex_attribiv(i, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &source);
+        g_get_vertex_attrib_pointerv(i, GL_VERTEX_ATTRIB_ARRAY_POINTER, &pointer);
+        if (i == 0) array_buffer = source;
+        if (!enabled || size != expected_sizes[i] || stride != 72 ||
+            (unsigned)attribute_type != GL_FLOAT || source <= 0 || source != array_buffer ||
+            (unsigned long long)(uintptr_t)pointer != expected_offsets[i])
+            { g_capture_failure = 3; return; }
+        g_capture_attribute_offsets[i] = expected_offsets[i];
+    }
+
+    unsigned long long index_offset = (unsigned long long)(uintptr_t)indices;
+    if (index_offset > 0xffffffffull || (index_offset & 3u)) {
+        g_capture_failure = 4;
+        return;
+    }
+    int saved_array_buffer = 0, vertex_buffer_size = 0, index_buffer_size = 0;
+    g_get_integerv(GL_ARRAY_BUFFER_BINDING, &saved_array_buffer);
+    g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)array_buffer);
+    g_get_buffer_parameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vertex_buffer_size);
+    if (vertex_buffer_size < (int)HAND_VBO_BYTES) {
+        g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
+        g_capture_failure = 5;
+        return;
+    }
+    g_get_buffer_parameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &index_buffer_size);
+    if (index_buffer_size < 0 || index_offset + HAND_CAPTURE_INDEX_BYTES >
+                                     (unsigned)index_buffer_size) {
+        g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
+        g_capture_failure = 6;
+        return;
+    }
+    g_get_buffer_subdata(GL_ARRAY_BUFFER, 0, HAND_VBO_BYTES, g_capture_vertices);
+    g_get_buffer_subdata(GL_ELEMENT_ARRAY_BUFFER, (long long)index_offset,
+                         HAND_CAPTURE_INDEX_BYTES, g_capture_indices);
+    g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
+
+    g_capture_index_offset = index_offset;
+    g_capture_array_buffer = (unsigned)array_buffer;
+    g_capture_element_buffer = (unsigned)element_buffer;
+    g_capture_draw_ordinal = (unsigned)g_hand_draws;
+    g_capture_timestamp_ms = GetTickCount();
+    g_capture_status = 0;
+    InterlockedExchange(&g_capture_ready, 1);
+    if (!SetEvent(g_capture_event)) {
+        g_capture_status = -1;
+        g_capture_failure = 7;
+        InterlockedExchange(&g_capture_saved, -1);
+        return;
+    }
+    g_capture_status = 1; /* queued for the deferred writer */
+}
+
 /* ------------------------------------------------------ feather overlay */
 
 static void cross3(const float a[3], const float b[3], float out[3]) {
@@ -1626,6 +1887,7 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
         hypr_hand_debug[4] = g_hand_draws;
         hypr_hand_debug[3] = (unsigned)g_geometry_state;
         hypr_hand_debug[6] = g_mode;
+        if (g_mode == 7) capture_native_hand((unsigned)count, type, indices);
         if (g_mode == 2 || g_mode == 3) {
             prepare_geometry();
             if (g_geometry_state == 1) {
@@ -1684,6 +1946,10 @@ static int mod_initialize(const hyprlodr_host_api *host) {
     g_original_draw = (draw_elements_fn)original;
     g_mode = read_mode(host);
     build_cube();
+    if (g_mode == 7 && !start_capture_writer()) {
+        g_mode = 0;
+        log_message("warn", "capture mode disabled: deferred writer could not start");
+    }
     if (g_mode == 5 || g_mode == 6) {
         int mesh_ok = load_feather_mesh();
         int bind_ok = load_bind_pose();
@@ -1734,14 +2000,26 @@ static int mod_initialize(const hyprlodr_host_api *host) {
 
 static void mod_shutdown(const hyprlodr_host_api *host) {
     g_active = 0;
+    if (g_mode == 7 && g_capture_event) {
+        InterlockedExchange(&g_capture_stop, 1);
+        (void)SetEvent(g_capture_event);
+    }
     size_t restored = 0;
     if (HYPRLODR_HOST_API_HAS(host, image_restore) && host->image_restore)
         restored = host->image_restore(host->context);
 
     char message[224];
-    snprintf(message, sizeof message,
-             "hook removed after %lu hand draws (%lu substituted); %lu image byte(s) restored",
-             g_hand_draws, g_substituted, (unsigned long)restored);
+    if (g_mode == 7) {
+        snprintf(message, sizeof message,
+                 "capture mode: draws=%lu capture_status=%d failure=%u writer_status=%ld; hook restored %lu byte(s)",
+                 g_hand_draws, g_capture_status, g_capture_failure,
+                 (long)InterlockedCompareExchange(&g_capture_saved, 0, 0),
+                 (unsigned long)restored);
+    } else {
+        snprintf(message, sizeof message,
+                 "hook removed after %lu hand draws (%lu substituted); %lu image byte(s) restored",
+                 g_hand_draws, g_substituted, (unsigned long)restored);
+    }
     host->log(host->context, "info", MOD_ID, message);
 }
 

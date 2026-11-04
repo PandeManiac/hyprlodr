@@ -65,6 +65,7 @@ typedef DWORD (*LPTHREAD_START_ROUTINE)(LPVOID);
 #define FILE_SHARE_READ 0x00000001u
 #define FILE_SHARE_WRITE 0x00000002u
 #define FILE_APPEND_DATA 0x00000004u
+#define INFINITE 0xffffffffu
 #define PAGE_READWRITE 0x00000004u
 #define PAGE_EXECUTE_READWRITE 0x00000040u
 #define STD_OUTPUT_HANDLE ((DWORD)-11)
@@ -146,6 +147,13 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI SetUnhandledExceptionFilter(
 BOOL WINAPI CreateDirectoryA(LPCSTR path, void *security);
 HANDLE WINAPI CreateFileA(LPCSTR name, DWORD access, DWORD share, void *security,
                           DWORD disposition, DWORD flags, HANDLE template_file);
+HANDLE WINAPI CreateEventA(void *attributes, BOOL manual_reset, BOOL initial_state,
+                           LPCSTR name);
+BOOL WINAPI SetEvent(HANDLE event);
+DWORD WINAPI WaitForSingleObject(HANDLE handle, DWORD milliseconds);
+LONG WINAPI InterlockedCompareExchange(volatile LONG *destination, LONG exchange,
+                                       LONG comparand);
+LONG WINAPI InterlockedExchange(volatile LONG *destination, LONG value);
 HANDLE WINAPI CreateFileW(const wchar_t *name, DWORD access, DWORD share, void *security,
                           DWORD disposition, DWORD flags, HANDLE template_file);
 BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, void *overlapped);
