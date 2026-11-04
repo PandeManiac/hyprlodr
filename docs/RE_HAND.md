@@ -765,7 +765,7 @@ the next work.
 
 ## Passive hand geometry capture (0.9.4)
 
-`example.hand-hook` adds an opt-in `capture` mode. It uses the already verified draw
+`example.hand-hook` 0.9.5 adds an opt-in `capture` mode. It uses the already verified draw
 dispatch slot and the same `GL_TRIANGLES` / 1,188-index / unsigned-int signature, but
 forwards the original draw arguments unchanged. Before forwarding the first matching
 draw, it verifies all six enabled attributes against the measured 72-byte layout and
@@ -853,3 +853,36 @@ outside the designated record. Runtime verification must separately confirm the
 proxy identity, `redirected: true` on the first archive open, dispatch install,
 gameplay hand draws, and the resulting `hand2.capture`; none of these stages
 should be inferred from a title screen or an empty capture file.
+
+**Controlled runtime result (2026-11-04): deployment, archive redirect and hook
+readiness succeeded; gameplay geometry remains unobserved.** The first staged run
+used commit `375c0c9`. Its runtime attach record showed the correct executable and
+8/8 anchors, and the redirect mod began initialization, but `example.hand-hook`
+stopped during initialization after its `state_dir` callback. A Wine fixture then
+reported `KERNEL32.InterlockedExchange` as unimplemented. That build imported the
+Interlocked functions; this was a plausible explanation for the stalled capture
+mod, although the game emitted no crash record proving causation. Commit `a9abf3b`
+replaced those imports with x64 lock-free atomics. The actual mod fixture then
+initialized in capture mode, waited through five null dispatch observations,
+installed against an executable target on observation six, and restored the slot
+on shutdown.
+
+The follow-up used the clean `a9abf3b` build. The runtime attach record reported
+that exact revision and capabilities `redirect-wait-v1,build-identity-v1`, with
+`build_matches=true` and 8/8 anchors. All mods initialized; the redirect registry
+published one entry; the first `_Fiopen` of `asset/asset` at 298 ms reported
+`redirected:true` and opened `.tmp/asset-proof/asset.patched`. The hand dispatch
+patch then installed after eight readiness polls, and the host recorded the
+8-byte image write at RVA `0x3d9ac8`.
+
+The game remained at its animated title menu with “Connecting to leaderboards”.
+Mouse clicks and Enter did not enter gameplay. The existing Wine input probe could
+not attach because its client reported a Steam Proton wineserver version mismatch
+(`931/965`). No `hand2.capture` was produced. Therefore this run proves the new
+proxy was loaded, archive redirection succeeded, and the draw hook became active;
+it does not prove the modified mesh was requested, decoded, drawn, or unused. The
+local title-menu screenshots, logs, build, archive and both deployment journals
+remain under ignored `.tmp/hand-capture/` and `.tmp/asset-proof/`. The temporary
+installation changes were restored; the installed archive and executable hashes
+remain unchanged, and all 23 paths in the second deployment journal match their
+pre-run state.

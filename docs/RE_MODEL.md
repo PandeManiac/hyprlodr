@@ -454,7 +454,7 @@ have been missed. Rendering remains unobserved unless separately instrumented.
 
 ## Passive GPU hand capture and comparison
 
-`examples/hand_hook.c` 0.9.4 adds an opt-in pass-through capture at the verified
+`examples/hand_hook.c` 0.9.5 adds an opt-in pass-through capture at the verified
 first-person hand draw. The implementation records actual vertex and index bytes
 from OpenGL buffers after validating the six attribute bindings and buffer bounds;
 the original draw is forwarded unchanged. The `HYPRCAP1` fixed-header format and
@@ -467,6 +467,14 @@ the draw hook, but the installed proxy did not redirect the first archive open t
 modified archive, and the game exited before gameplay. No GPU buffer capture exists
 from that attempt. The `hand2` source identity therefore remains supported by matching
 dimensions and attribute layout, but has not been confirmed by captured geometry.
+
+The 2026-11-04 modified-archive run verified the clean proxy build identity, exact
+tag-1 `hand2` archive redirection at the first `_Fiopen`, complete mod initialization,
+and a successful write of the verified hand dispatch slot after eight readiness
+polls. The game reached its animated title menu, remained at “Connecting to
+leaderboards”, and did not enter gameplay; no GPU snapshot was created. This does not
+show whether the modified mesh was subsequently loaded or rendered. The same run's
+temporary installation state was restored and verified against the deployment journal.
 
 The subsequent capture workflow uses a bounded readiness worker rather than delaying
 mod initialization or treating a null dispatch slot as a terminal error. It only
