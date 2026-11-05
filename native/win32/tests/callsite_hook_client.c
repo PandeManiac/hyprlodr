@@ -25,6 +25,7 @@ static volatile LONG g_release;
 static volatile LONG g_startup_parked;
 static volatile LONG g_startup_release;
 static volatile uintptr_t g_startup_result;
+static volatile long g_activation_gate;
 static const void *volatile g_last_name_object;
 static call_thunk_fn g_thunk;
 static hyprlodr_call_hook g_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
@@ -319,6 +320,7 @@ int main(int argc, char **argv) {
                "unpublished binding did not forward to original loader")) return 1;
     __atomic_store_n(&g_original_calls, 0l, __ATOMIC_SEQ_CST);
     hyprlodr_record_route_hook_bind(&g_binding, &g_hook, NULL);
+    hyprlodr_record_route_hook_set_activation_gate(&g_binding, &g_activation_gate);
     uintptr_t original_result = g_thunk(&context, record, &hand2, 0x55u);
     if (!check(original_result == (((uintptr_t)0x1234u << 32u) | 0x55u),
                "unhooked original return mismatch") ||
@@ -369,6 +371,14 @@ int main(int argc, char **argv) {
                "dormant hook did not pass through unchanged")) return 1;
     hyprlodr_record_route_hook_publish_route(&g_binding, &route);
     hyprlodr_call_hook_set_enabled(&g_hook, 1);
+    __atomic_store_n(&g_activation_gate, 3l, __ATOMIC_RELEASE);
+    init_record(record, 1u);
+    uintptr_t before_gate_result = g_thunk(&context, record, &hand2, 0x5bu);
+    if (!check(before_gate_result == (((uintptr_t)0x1234u << 32u) | 0x5bu) &&
+               get_u32(record, 0u) == route.original_offset &&
+               get_u32(record, 4u) == route.original_size,
+               "route substitution escaped before activation gate readiness")) return 1;
+    __atomic_store_n(&g_activation_gate, 1l, __ATOMIC_RELEASE);
     __atomic_store_n(&g_startup_release, 1l, __ATOMIC_RELEASE);
     if (!check(WaitForSingleObject(startup_thread, 30000u) == 0u,
                "startup resource thread did not leave the archive gate")) return 1;
@@ -383,7 +393,7 @@ int main(int argc, char **argv) {
     init_record(record, 1u);
     uintptr_t routed = g_thunk(&context, record, &hand2, 0x66u);
     if (!check(routed == (((uintptr_t)0x1234u << 32u) | 0x66u) &&
-               atomic_load(&g_original_calls) == 4 &&
+               atomic_load(&g_original_calls) == 5 &&
                get_u32(record, 0u) == route.original_offset &&
                get_u32(record, 4u) == route.original_size &&
                get_uptr(record, HYPRLODR_RECORD_OBJECT_FIELD) ==

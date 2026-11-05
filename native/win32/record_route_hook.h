@@ -10,6 +10,9 @@
 typedef struct {
     hyprlodr_call_hook *hook;
     const hyprlodr_record_route * volatile route;
+    /* Optional startup gate. When bound, route substitution is allowed only
+     * after this atomic word reaches the READY value (1). */
+    volatile long *activation_gate;
 } hyprlodr_game_route_binding;
 
 /* Bind immutable state before installing the callsite. binding and route must
@@ -23,6 +26,8 @@ void hyprlodr_record_route_hook_bind(hyprlodr_game_route_binding *binding,
 void hyprlodr_record_route_hook_set_original_target(void *target);
 void hyprlodr_record_route_hook_publish_route(
     hyprlodr_game_route_binding *binding, const hyprlodr_record_route *route);
+void hyprlodr_record_route_hook_set_activation_gate(
+    hyprlodr_game_route_binding *binding, volatile long *gate_state);
 
 /* Exact Windows x64 loader ABI: ctx, 0x58-byte descriptor, MSVC string*, flags. */
 uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,

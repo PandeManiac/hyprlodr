@@ -138,6 +138,31 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/tests/preentry_fixture_dynamic_client.exe" \
   "$OUT/obj/preentry_fixture_dynamic_client.obj" "$OUT/obj/preentry_fixture_thunk.obj" \
   "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+echo "== first _Fiopen import and archive-open gate fixture =="
+llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/tests/msvcp_fixture.def" \
+  -l "$OUT/lib/msvcp_fixture.lib"
+compile "$ROOT/native/win32/tests/msvcp_fixture.c" "$OUT/obj/msvcp_fixture.obj"
+lld-link /nologo /dll /nodefaultlib /noentry \
+  "/out:$OUT/tests/msvcp140.dll" \
+  /def:"$ROOT/native/win32/tests/msvcp_fixture.def" \
+  "$OUT/obj/msvcp_fixture.obj" "$CRT_OBJ" "$K32"
+llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/tests/startup_file_fixture_proxy.def" \
+  -l "$OUT/lib/startup_file_fixture_proxy.lib"
+compile "$ROOT/native/win32/tests/startup_file_fixture_proxy.c" \
+  "$OUT/obj/startup_file_fixture_proxy.obj"
+compile "$ROOT/native/win32/file_hook.c" "$OUT/obj/file_hook_fixture.obj" \
+  -DHYPRLODR_REDIRECT_WAIT_LIMIT_MS=250
+lld-link /nologo /dll /nodefaultlib /entry:startup_file_fixture_dllmain \
+  "/out:$OUT/tests/hyprlodr_startup_file_fixture.dll" \
+  /def:"$ROOT/native/win32/tests/startup_file_fixture_proxy.def" \
+  "$OUT/obj/startup_file_fixture_proxy.obj" "$OUT/obj/file_hook_fixture.obj" \
+  "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32"
+compile "$ROOT/native/win32/tests/startup_file_fixture_client.c" \
+  "$OUT/obj/startup_file_fixture_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/startup_file_fixture_client.exe" \
+  "$OUT/obj/startup_file_fixture_client.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" \
+  "$OUT/lib/msvcp_fixture.lib" "$OUT/lib/startup_file_fixture_proxy.lib"
 echo "== native append-manifest fixture =="
 compile "$ROOT/native/win32/tests/route_manifest_client.c" "$OUT/obj/route_manifest_client.obj"
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \

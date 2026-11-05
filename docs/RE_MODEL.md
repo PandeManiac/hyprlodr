@@ -395,28 +395,28 @@ The compiled Wine startup fixture exercises this lifecycle. It proves loader
 ordering for its generated static-import client, not every initialization path
 in the game.
 
-Live activation remains unverified for a timing reason distinct from the
-five-byte patch race. DllMain patches the main executable's import slots and
-installs the dormant callsite hook; the worker later enumerates and patches
-other loaded modules, validates the manifest, and publishes redirects. The
-first observed game archive open uses `_Fiopen` in MSVCP, so the early main-image
-patch alone does not prove that this open is gated before the worker reaches
-the MSVCP import table. If a cold `hand2` load completes while the hook is
-dormant, the original object may be cached and later requests can bypass the
-callsite. The ordinary game stream/cache synchronization remains a separate
-pre-existing uncertainty; the wrapper adds no shared descriptor, lock, wait,
-or additional I/O. A real-game run is not justified until the first cold load is
-shown to wait for route activation or an equivalent pre-load barrier is
-established.
+The pinned executable directly imports decorated `std::_Fiopen` from
+`MSVCP140.dll`; the relevant slot is in the executable's own IAT. The early
+main-image patch therefore covers this known archive-open path before the
+bootstrap worker begins. A compiled Wine fixture imports that exact decorated
+symbol from a stand-in runtime DLL and verifies that archive requests wait for
+redirect publication. It does not prove that every possible archive-open path
+or every first cold `hand2` lookup in the real game uses this import. If a cold
+`hand2` load completes while the route is dormant, the original object may be
+cached and later requests can bypass the callsite. The ordinary game
+stream/cache synchronization remains a separate pre-existing uncertainty; the
+wrapper adds no shared descriptor, lock, wait, or additional I/O. Thus the
+known first archive-open boundary is intercepted, while first-cold-model
+ordering in the game remains unproven.
 
 The append archive still cannot route itself: record offsets live in runtime
 resolver tables, not a self-contained directory. Native preflight validates
 hashes and range/resource identity; offline Python tooling separately verifies
 decryption and parsed mesh counts. Remaining runtime questions are whether the
 pinned game's dependency initialization can reach the callsite before the
-proxy's attach completes, whether every first archive-open path is gated before
-worker activation, whether stream/cache behavior can affect the replacement
-extent, and whether the enlarged object parses and reaches rendering. The
+proxy's attach completes, whether a first cold model lookup can precede route
+activation, whether stream/cache behavior can affect the replacement extent,
+and whether the enlarged object parses and reaches rendering. The
 proxy remains opt-in and fails closed when any early install or archive
 identity check fails.
 

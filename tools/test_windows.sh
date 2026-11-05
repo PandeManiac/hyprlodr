@@ -48,6 +48,30 @@ cp "$OUT/tests/hyprlodr_startup_fixture.dll" "$PREENTRY/"
     wine "$OUT/tests/preentry_fixture_dynamic_client.exe"
 ) || status=1
 
+echo "== wine: first MSVCP140!_Fiopen import is gated before bootstrap =="
+FILE_FIXTURE="$OUT/startup-file-fixture"
+mkdir -p "$FILE_FIXTURE/success/mods" "$FILE_FIXTURE/concurrent/mods" \
+  "$FILE_FIXTURE/fail/mods" "$FILE_FIXTURE/timeout/mods" \
+  "$FILE_FIXTURE/no-redirect/mods" "$FILE_FIXTURE/worker-fail/mods"
+for mode in success concurrent fail timeout no-redirect worker-fail; do
+  cp "$OUT/tests/startup_file_fixture_client.exe" "$FILE_FIXTURE/$mode/"
+  cp "$OUT/tests/hyprlodr_startup_file_fixture.dll" "$FILE_FIXTURE/$mode/"
+  cp "$OUT/tests/msvcp140.dll" "$FILE_FIXTURE/$mode/"
+  cp "$OUT/tests/redirect_mod.dll" "$FILE_FIXTURE/$mode/mods/"
+done
+cp "$OUT/tests/redirect_mod_no_redirect.dll" "$FILE_FIXTURE/no-redirect/mods/r.redirect.dll"
+(
+  cd "$FILE_FIXTURE/success" && timeout 30 wine ./startup_file_fixture_client.exe success
+  cd "$FILE_FIXTURE/concurrent" && timeout 30 wine ./startup_file_fixture_client.exe concurrent
+  cd "$FILE_FIXTURE/fail" && HYPRLODR_FILE_FIXTURE_FAIL=1 \
+    timeout 30 wine ./startup_file_fixture_client.exe fail
+  cd "$FILE_FIXTURE/timeout" && timeout 30 wine ./startup_file_fixture_client.exe timeout
+  cd "$FILE_FIXTURE/no-redirect" && HYPRLODR_FILE_FIXTURE_NO_REDIRECT=1 \
+    timeout 30 wine ./startup_file_fixture_client.exe no-redirect
+  cd "$FILE_FIXTURE/worker-fail" && HYPRLODR_FILE_FIXTURE_WORKER_FAIL=1 \
+    timeout 30 wine ./startup_file_fixture_client.exe worker-fail
+) || status=1
+
 if [[ -f "$OUT/tests/route_manifest_client.exe" \
      && -f "$ROOT/.tmp/archive-tests/asset-hand2-appended" \
      && -f "$ROOT/.tmp/archive-tests/hand2-override.json" ]]; then

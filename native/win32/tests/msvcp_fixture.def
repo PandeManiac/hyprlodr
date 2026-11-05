@@ -1,0 +1,5 @@
+LIBRARY msvcp140.dll
+EXPORTS
+  ?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z=fixture_fiopen
+  fixture_fiopen_call_count
+  fixture_fiopen_last_path

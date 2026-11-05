@@ -482,6 +482,8 @@ static void install_early_dormant_route_hook(LPVOID reserved) {
     hyprlodr_record_route_hook_set_original_target(target);
     g_route_call_hook.original_target = target;
     hyprlodr_record_route_hook_bind(&g_route_binding, &g_route_call_hook, NULL);
+    hyprlodr_record_route_hook_set_activation_gate(
+        &g_route_binding, hyprlodr_file_hook_archive_gate_word());
     hyprlodr_call_hook_status status = hyprlodr_call_hook_install(
         &g_route_call_hook, site, expected_call, target,
         (void *)hyprlodr_record_route_hook_call,
@@ -699,9 +701,20 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
                     snprintf(g_record_route_status, sizeof g_record_route_status,
                              "route_blocked_archive_redirect_mismatch");
                 } else {
-                    hyprlodr_call_hook_set_enabled(&g_route_call_hook, 1);
-                    snprintf(g_record_route_status, sizeof g_record_route_status,
-                             "route_enabled");
+                    if (!hyprlodr_file_hook_begin_route_activation()) {
+                        snprintf(g_record_route_status, sizeof g_record_route_status,
+                                 "route_blocked_archive_open_fallback");
+                    } else {
+                        hyprlodr_call_hook_set_enabled(&g_route_call_hook, 1);
+                        if (hyprlodr_file_hook_complete_route_activation()) {
+                            snprintf(g_record_route_status, sizeof g_record_route_status,
+                                     "route_enabled");
+                        } else {
+                            hyprlodr_call_hook_set_enabled(&g_route_call_hook, 0);
+                            snprintf(g_record_route_status, sizeof g_record_route_status,
+                                     "route_blocked_archive_open_fallback");
+                        }
+                    }
                 }
             }
         }

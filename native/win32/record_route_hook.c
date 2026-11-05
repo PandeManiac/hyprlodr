@@ -42,8 +42,15 @@ void hyprlodr_record_route_hook_bind(hyprlodr_game_route_binding *binding,
                                     const hyprlodr_record_route *route) {
     if (!binding) return;
     binding->hook = hook;
+    binding->activation_gate = NULL;
     __atomic_store_n(&binding->route, route, __ATOMIC_RELEASE);
     (void)__atomic_exchange_n(&g_binding, binding, __ATOMIC_RELEASE);
+}
+
+void hyprlodr_record_route_hook_set_activation_gate(
+    hyprlodr_game_route_binding *binding, volatile long *gate_state) {
+    if (binding)
+        __atomic_store_n(&binding->activation_gate, gate_state, __ATOMIC_RELEASE);
 }
 
 void hyprlodr_record_route_hook_set_original_target(void *target) {
@@ -80,6 +87,9 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
     call.function = original;
     call.game_context = context;
     if (!binding || !binding->hook || !hyprlodr_call_hook_is_enabled(binding->hook))
+        return original(context, record, name_object, flags);
+    volatile long *gate = __atomic_load_n(&binding->activation_gate, __ATOMIC_ACQUIRE);
+    if (gate && __atomic_load_n(gate, __ATOMIC_ACQUIRE) != 1l)
         return original(context, record, name_object, flags);
     route = __atomic_load_n(&binding->route, __ATOMIC_ACQUIRE);
     if (!game_name_is_hand2(name_object, requested_name) || !route)

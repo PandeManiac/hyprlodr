@@ -82,8 +82,11 @@ static fiopen_fn g_original_fiopen;
 static wfopen_s_fn g_original_wfopen_s;
 static hyprlodr_loader *g_loader;
 static volatile int g_redirects_ready;
+static volatile unsigned g_asset_waiters;
+static volatile LONG g_archive_gate_state = HYPRLODR_ARCHIVE_GATE_PENDING;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static unsigned g_logged;
+static unsigned g_event_sequence;
 /* Tick when the hook was installed, so every record carries a relative time:
  * a long session then says *when* the game touches a file, not just that it did. */
 static DWORD g_start_tick;
@@ -100,10 +103,7 @@ static char g_detail[320] = "";
  * append to a file nobody owns. */
 static int fail_install(const char *status) {
     g_status = status;
-    if (g_log != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_log);
-        g_log = INVALID_HANDLE_VALUE;
-    }
+    /* Keep the diagnostic handle alive for any shim already in flight. */
     return -1;
 }
 
@@ -180,7 +180,8 @@ static void escape_into(char *destination, size_t capacity, const char *source) 
 
 static void record_open(const char *requested, const char *opened, const char *via, int redirected,
                         int ok) {
-    if (g_log == INVALID_HANDLE_VALUE) return;
+    HANDLE log = __atomic_load_n(&g_log, __ATOMIC_ACQUIRE);
+    if (log == INVALID_HANDLE_VALUE) return;
     char requested_json[768];
     char opened_json[768];
     char line[2048];
@@ -188,11 +189,13 @@ static void record_open(const char *requested, const char *opened, const char *v
     /* Game threads open files concurrently. Reserve the sequence number
      * atomically so two records can never claim the same one, and stop writing
      * once the cap is reached. */
-    unsigned sequence = __atomic_add_fetch(&g_logged, 1u, __ATOMIC_RELAXED);
-    if (sequence > (unsigned)HYPRLODR_FILE_LOG_LIMIT) return;
+    unsigned open_index = __atomic_add_fetch(&g_logged, 1u, __ATOMIC_RELAXED);
+    if (open_index > (unsigned)HYPRLODR_FILE_LOG_LIMIT) return;
+    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
     escape_into(requested_json, sizeof requested_json, requested);
     escape_into(opened_json, sizeof opened_json, opened);
-    unsigned long elapsed_ms = g_start_tick ? (unsigned long)(GetTickCount() - g_start_tick) : 0ul;
+    DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
+    unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
              "{\"seq\":%u,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"file_open\","
              "\"via\":\"%s\",\"redirected\":%s,\"ok\":%s,"
@@ -202,7 +205,7 @@ static void record_open(const char *requested, const char *opened, const char *v
     /* The handle is opened for append, so each WriteFile lands at end-of-file
      * without a lock: game threads may interleave records but never corrupt the
      * file pointer, and no kernel32 interlocked import is needed. */
-    WriteFile(g_log, line, (DWORD)strlen(line), &written, NULL);
+    WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
 }
 
 static int is_asset_archive_path(const char *name) {
@@ -222,30 +225,36 @@ static int is_asset_archive_path(const char *name) {
 }
 
 static void record_redirect_wait(const char *requested, const char *stage, DWORD waited_ms) {
-    if (g_log == INVALID_HANDLE_VALUE) return;
+    HANDLE log = __atomic_load_n(&g_log, __ATOMIC_ACQUIRE);
+    if (log == INVALID_HANDLE_VALUE) return;
     char requested_json[768];
     char line[1200];
     DWORD written = 0;
     escape_into(requested_json, sizeof requested_json, requested);
-    unsigned long elapsed_ms = g_start_tick ? (unsigned long)(GetTickCount() - g_start_tick) : 0ul;
+    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
+    DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
+    unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"event\":\"redirect_wait\",\"stage\":\"%s\",\"t_ms\":%lu,"
+             "{\"seq\":%u,\"event\":\"redirect_wait\",\"stage\":\"%s\",\"t_ms\":%lu,"
              "\"thread\":%lu,\"waited_ms\":%lu,\"requested\":\"%s\"}\n",
-             stage, elapsed_ms, (unsigned long)GetCurrentThreadId(), (unsigned long)waited_ms,
+             sequence, stage, elapsed_ms, (unsigned long)GetCurrentThreadId(), (unsigned long)waited_ms,
              requested_json);
-    WriteFile(g_log, line, (DWORD)strlen(line), &written, NULL);
+    WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
 }
 
 static void record_hook_install(const char *phase, unsigned patched) {
-    if (g_log == INVALID_HANDLE_VALUE) return;
+    HANDLE log = __atomic_load_n(&g_log, __ATOMIC_ACQUIRE);
+    if (log == INVALID_HANDLE_VALUE) return;
     char line[512];
     DWORD written = 0;
-    unsigned long elapsed_ms = g_start_tick ? (unsigned long)(GetTickCount() - g_start_tick) : 0ul;
+    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
+    DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
+    unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"event\":\"file_hook_install\",\"phase\":\"%s\",\"t_ms\":%lu,"
+             "{\"seq\":%u,\"event\":\"file_hook_install\",\"phase\":\"%s\",\"t_ms\":%lu,"
              "\"thread\":%lu,\"patched_targets\":%u}\n",
-             phase, elapsed_ms, (unsigned long)GetCurrentThreadId(), patched);
-    WriteFile(g_log, line, (DWORD)strlen(line), &written, NULL);
+             sequence, phase, elapsed_ms, (unsigned long)GetCurrentThreadId(), patched);
+    WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
 }
 
 static void wait_for_asset_redirects(const char *name) {
@@ -253,28 +262,92 @@ static void wait_for_asset_redirects(const char *name) {
         __atomic_load_n(&g_redirects_ready, __ATOMIC_ACQUIRE))
         return;
     DWORD started = GetTickCount();
+    __atomic_add_fetch(&g_asset_waiters, 1u, __ATOMIC_RELAXED);
     record_redirect_wait(name, "begin", 0u);
     for (;;) {
-        DWORD waited = GetTickCount() - started;
-        if (__atomic_load_n(&g_redirects_ready, __ATOMIC_ACQUIRE)) {
-            record_redirect_wait(name, "ready", waited);
+        LONG gate_state = __atomic_load_n(&g_archive_gate_state, __ATOMIC_ACQUIRE);
+        if (gate_state == HYPRLODR_ARCHIVE_GATE_READY ||
+            gate_state == HYPRLODR_ARCHIVE_GATE_FALLBACK) {
+            record_redirect_wait(name,
+                                 gate_state == HYPRLODR_ARCHIVE_GATE_READY ? "ready" : "fallback",
+                                 GetTickCount() - started);
+            __atomic_sub_fetch(&g_asset_waiters, 1u, __ATOMIC_RELAXED);
             return;
         }
+        DWORD waited = GetTickCount() - started;
         if (waited >= HYPRLODR_REDIRECT_WAIT_LIMIT_MS) {
-            record_redirect_wait(name, "timeout", waited);
-            return;
+            LONG expected = HYPRLODR_ARCHIVE_GATE_PENDING;
+            if (__atomic_compare_exchange_n(&g_archive_gate_state, &expected,
+                                             HYPRLODR_ARCHIVE_GATE_FALLBACK, 0,
+                                             __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                record_redirect_wait(name, "timeout", waited);
+                __atomic_sub_fetch(&g_asset_waiters, 1u, __ATOMIC_RELAXED);
+                return;
+            }
+            if (expected == HYPRLODR_ARCHIVE_GATE_ACTIVATING) {
+                expected = HYPRLODR_ARCHIVE_GATE_ACTIVATING;
+                if (__atomic_compare_exchange_n(&g_archive_gate_state, &expected,
+                                                 HYPRLODR_ARCHIVE_GATE_FALLBACK, 0,
+                                                 __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+                    record_redirect_wait(name, "timeout_activation_aborted", waited);
+                    __atomic_sub_fetch(&g_asset_waiters, 1u, __ATOMIC_RELAXED);
+                    return;
+                }
+                continue;
+            }
+            continue;
         }
         Sleep(1u);
     }
 }
 
 void hyprlodr_file_hook_mark_redirects_ready(void) {
+    LONG expected = HYPRLODR_ARCHIVE_GATE_PENDING;
+    (void)__atomic_compare_exchange_n(&g_archive_gate_state, &expected,
+                                      HYPRLODR_ARCHIVE_GATE_READY, 0,
+                                      __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_redirects_ready, 1, __ATOMIC_RELEASE);
+}
+
+int hyprlodr_file_hook_begin_route_activation(void) {
+    LONG expected = HYPRLODR_ARCHIVE_GATE_PENDING;
+    return __atomic_compare_exchange_n(&g_archive_gate_state, &expected,
+                                       HYPRLODR_ARCHIVE_GATE_ACTIVATING, 0,
+                                       __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+}
+
+int hyprlodr_file_hook_complete_route_activation(void) {
+    LONG expected = HYPRLODR_ARCHIVE_GATE_ACTIVATING;
+    if (__atomic_compare_exchange_n(&g_archive_gate_state, &expected,
+                                    HYPRLODR_ARCHIVE_GATE_READY, 0,
+                                    __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&g_redirects_ready, 1, __ATOMIC_RELEASE);
+        return 1;
+    }
+    return 0;
+}
+
+hyprlodr_archive_gate_state hyprlodr_file_hook_archive_gate_state(void) {
+    return (hyprlodr_archive_gate_state)__atomic_load_n(&g_archive_gate_state,
+                                                         __ATOMIC_ACQUIRE);
+}
+
+volatile long *hyprlodr_file_hook_archive_gate_word(void) {
+    return &g_archive_gate_state;
 }
 
 /* Ask the published registry for a replacement path. Returns the path to open. */
 static const char *resolve_path(const char *name, char *buffer, int *redirected) {
     wait_for_asset_redirects(name);
+    /* Once a bounded wait has fallen back, keep the archive identity pinned
+     * for the rest of the process. A later bootstrap publication must not make
+     * the game open the appended archive while record routing is disabled. */
+    if (is_asset_archive_path(name) &&
+        __atomic_load_n(&g_archive_gate_state, __ATOMIC_ACQUIRE) ==
+            HYPRLODR_ARCHIVE_GATE_FALLBACK) {
+        *redirected = 0;
+        return name;
+    }
     hyprlodr_loader *loader = __atomic_load_n(&g_loader, __ATOMIC_ACQUIRE);
     *redirected = 0;
     if (!name || !loader) return name;
@@ -564,21 +637,18 @@ static unsigned patch_loaded_modules(hook_target *targets, size_t count) {
     return modules;
 }
 
-/* Phase 1, called from DllMain: open the log and patch the main module. The
- * game's own asset I/O starts within milliseconds of load, so waiting for the
- * worker thread loses it. Only the executable's import slots are touched here;
- * enumerating modules under the loader lock is left to phase 2. */
+/* Phase 1, called from DllMain: patch only the main module's import slots. Do
+ * no file I/O, module enumeration, or waiting while the loader lock is held.
+ * The worker opens diagnostics and completes the broader module walk later. */
 int hyprlodr_file_hook_install_early(hyprlodr_loader *loader, const char *log_path) {
     if (g_started) return g_installed ? 0 : -1;
     if (!log_path || !*log_path) return -1;
     g_started = 1;
     /* This first call is made from DllMain before the bootstrap thread exists. */
     g_loader = loader;
-    g_start_tick = GetTickCount();
+    __atomic_store_n(&g_start_tick, GetTickCount(), __ATOMIC_RELEASE);
 
-    /* Open the log before patching, so this open cannot re-enter a shim. */
-    g_log = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    (void)log_path; /* The path is consumed by install() after loader-lock release. */
 
     pe_layout layout;
     if (prepare_layout((const uint8_t *)GetModuleHandleA(NULL), &layout) != 0) {
@@ -600,6 +670,16 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     if (g_complete) return 0;
     if (!loader || !log_path || !*log_path) return fail_install("invalid_argument");
     __atomic_store_n(&g_loader, loader, __ATOMIC_RELEASE);
+    if (__atomic_load_n(&g_log, __ATOMIC_ACQUIRE) == INVALID_HANDLE_VALUE) {
+        HANDLE log = CreateFileA(log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (log != INVALID_HANDLE_VALUE) {
+            __atomic_store_n(&g_log, log, __ATOMIC_RELEASE);
+            /* The diagnostic handle is opened only by the bootstrap worker,
+             * after DllMain returned and the loader lock was released. */
+            __atomic_store_n(&g_start_tick, GetTickCount(), __ATOMIC_RELEASE);
+        }
+    }
     /* DllMain may already have patched the main module; this is idempotent. */
     if (!g_started) (void)hyprlodr_file_hook_install_early(loader, log_path);
     __atomic_store_n(&g_loader, loader, __ATOMIC_RELEASE);
@@ -639,7 +719,8 @@ int hyprlodr_file_hook_install(hyprlodr_loader *loader, const char *log_path) {
     record_hook_install("all_modules", (unsigned)g_installed);
 
     if (g_installed == 0) return fail_install("no_import_patched");
-    g_status = g_log == INVALID_HANDLE_VALUE ? "installed_no_log" : "installed";
+    g_status = __atomic_load_n(&g_log, __ATOMIC_ACQUIRE) == INVALID_HANDLE_VALUE
+                   ? "installed_no_log" : "installed";
     g_complete = 1;
     return 0;
 }
@@ -652,4 +733,8 @@ int hyprlodr_file_hook_logged(void) {
     unsigned logged = __atomic_load_n(&g_logged, __ATOMIC_RELAXED);
     return (int)(logged > (unsigned)HYPRLODR_FILE_LOG_LIMIT ? (unsigned)HYPRLODR_FILE_LOG_LIMIT
                                                             : logged);
+}
+
+unsigned hyprlodr_file_hook_archive_waiters(void) {
+    return __atomic_load_n(&g_asset_waiters, __ATOMIC_ACQUIRE);
 }

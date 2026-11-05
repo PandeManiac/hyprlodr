@@ -35,6 +35,24 @@ The fixture proves behavior for its generated executable and Wine's startup
 loader path. It does not substitute for the pinned game executable's runtime
 anchor/import/TLS checks, which remain fail-closed in the proxy.
 
+## First `_Fiopen` archive-open ordering (Windows x64 under Wine)
+
+The pinned executable imports the decorated
+`?_Fiopen@std@@YAPEAU_iobuf@@PEBDHH@Z` symbol from `MSVCP140.dll`; the import
+slot being patched belongs to the executable, not to MSVCP140. The compiled
+fixture links a client with that exact decorated import from a stand-in
+`msvcp140.dll`, loads the actual `file_hook.c`, and counts calls at the original
+target. It covers a held first archive open until redirect publication,
+concurrent opens, unrelated paths, bootstrap failure, worker-creation failure,
+replacement-disabled pass-through, and timeout fallback. The timeout case also
+checks a later archive open remains on the original path after bootstrap
+finishes, preventing an appended archive from being paired with a disabled
+record route. The callsite fixture also enables its wrapper while the gate is in
+the intermediate ACTIVATING state and verifies pass-through until READY. These
+fixtures prove the synthetic import, timeout fallback and route gating under
+Wine; they do not prove every game resource lookup follows the archive-open
+path or that the first cold `hand2` lookup occurs after activation.
+
 ## Managed callsite fixture (Windows x64 under Wine)
 
 `tools/build_windows.sh` builds `tests/callsite_hook_client.exe` from the same

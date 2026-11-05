@@ -41,4 +41,24 @@ const char *hyprlodr_file_hook_detail(void);
 /* Number of opens logged so far (saturates at the log limit). */
 int hyprlodr_file_hook_logged(void);
 
+/* Number of asset/asset opens currently held at the redirect readiness gate.
+ * Intended for diagnostics and deterministic startup fixtures. */
+unsigned hyprlodr_file_hook_archive_waiters(void);
+
+typedef enum {
+    HYPRLODR_ARCHIVE_GATE_PENDING = 0,
+    HYPRLODR_ARCHIVE_GATE_READY = 1,
+    HYPRLODR_ARCHIVE_GATE_FALLBACK = 2,
+    HYPRLODR_ARCHIVE_GATE_ACTIVATING = 3
+} hyprlodr_archive_gate_state;
+
+/* Route activation claims the pending gate before enabling the hook, then
+ * completes it immediately afterward. This makes a timeout race fail closed:
+ * either timeout owns the gate and routing stays disabled, or activation owns
+ * it and waiters observe the enabled route before proceeding. */
+int hyprlodr_file_hook_begin_route_activation(void);
+int hyprlodr_file_hook_complete_route_activation(void);
+hyprlodr_archive_gate_state hyprlodr_file_hook_archive_gate_state(void);
+volatile long *hyprlodr_file_hook_archive_gate_word(void);
+
 #endif /* HYPRLODR_FILE_HOOK_H */

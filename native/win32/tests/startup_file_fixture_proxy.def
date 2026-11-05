@@ -1,0 +1,6 @@
+LIBRARY hyprlodr_startup_file_fixture.dll
+EXPORTS
+  startup_file_fixture_release
+  startup_file_fixture_route_enabled
+  startup_file_fixture_status
+  startup_file_fixture_waiters
