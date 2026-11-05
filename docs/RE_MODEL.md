@@ -639,7 +639,9 @@ Xvfb inside the same private mount namespace with `-displayfd`.
 `tools/re/isolated_proton.py` stages a new copy of the verified game files,
 omits installed mods, user state, crash artifacts and captures, installs the
 current proxy plus the hash-verified shipped OpenAL runtime into that copy, and
-uses a fresh compatdata prefix. A run is claimed before preflight and cannot be
+uses a fresh compatdata prefix. Proton itself is copied into the run as well,
+because its launcher writes a distribution lockfile; only relative symlinks
+that resolve within the Proton tree are allowed. A run is claimed before preflight and cannot be
 launched a second time; a new run ID is required after success or failure. The
 original game directory and archive are never deployment targets. The game
 process has no Steam client IPC or network route; it receives the real app ID

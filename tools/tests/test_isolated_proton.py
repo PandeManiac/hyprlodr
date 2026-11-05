@@ -35,6 +35,7 @@ def fixture_tree(tmp_path: Path, monkeypatch):
     proton.mkdir()
     (proton / "proton").write_text("#!/bin/sh\nexit 0\n")
     (proton / "proton").chmod(0o755)
+    (proton / "proton-alias").symlink_to("proton")
     monkeypatch.setattr(isolated, "EXPECTED_EXE", hashlib.sha256(exe).hexdigest())
     monkeypatch.setattr(isolated, "EXPECTED_ARCHIVE", hashlib.sha256(b"original archive").hexdigest())
     monkeypatch.setattr(isolated, "EXPECTED_OPENAL", hashlib.sha256(b"original OpenAL").hexdigest())
@@ -49,6 +50,8 @@ def test_stages_mod_free_game_copy_and_proves_runtime_isolation(tmp_path, monkey
     manifest = isolated.stage(source, proton, proxy, openal, run)
     game = run / "game"
     assert manifest["replacement_routing"] is False
+    assert Path(manifest["proton_root"]).is_relative_to(run)
+    assert (Path(manifest["proton_root"]) / "proton-alias").is_symlink()
     assert (game / "hyperdemon.exe").read_bytes() == (source / "hyperdemon.exe").read_bytes()
     assert (game / "asset/asset").read_bytes() == (source / "asset/asset").read_bytes()
     assert (game / "OpenAL32.dll").read_bytes() == proxy.read_bytes()
@@ -74,6 +77,13 @@ def test_preflight_rejects_existing_run_directory_and_bad_executable(tmp_path, m
         isolated.stage(source, proton, proxy, openal, run)
 
 
+def test_staging_rejects_proton_symlink_escape(tmp_path, monkeypatch):
+    sandbox, source, proton, proxy, openal, run = fixture_tree(tmp_path, monkeypatch)
+    (proton / "escape").symlink_to(openal)
+    with pytest.raises(ValueError, match="symlink escapes or is broken"):
+        isolated.stage(source, proton, proxy, openal, run)
+
+
 def test_preflight_detects_mutated_copy_before_launch(tmp_path, monkeypatch):
     if not __import__("shutil").which("bwrap"):
         pytest.skip("Bubblewrap is not installed")
@@ -89,7 +99,7 @@ def test_bubblewrap_runner_keeps_a_stub_proton_write_inside_run_root(tmp_path, m
         pytest.skip("Bubblewrap is not installed")
     sandbox, source, proton, proxy, openal, run = fixture_tree(tmp_path, monkeypatch)
     (proton / "proton").write_text(
-        "#!/bin/sh\nprintf '%s\\n' \"$HOME|$STEAM_COMPAT_DATA_PATH|$DISPLAY\" > \"$HOME/proton-write.txt\"\nexit 0\n")
+        "#!/bin/sh\nprintf '%s\\n' \"$HOME|$STEAM_COMPAT_DATA_PATH|$DISPLAY\" > \"$HOME/proton-write.txt\"\nprintf 'private runtime write\\n' > \"$(dirname \"$0\")/dist.lock\"\nexit 0\n")
     (proton / "proton").chmod(0o755)
     isolated.stage(source, proton, proxy, openal, run)
     assert isolated.launch(run, source, duration=5) == 0
@@ -99,6 +109,8 @@ def test_bubblewrap_runner_keeps_a_stub_proton_write_inside_run_root(tmp_path, m
     assert inventory["host_game_source_unchanged"] is True
     assert "home/proton-write.txt" in inventory["created_or_modified"]
     assert (run / "launch.claimed").is_file()
+    assert (run / "proton/dist.lock").read_text().strip() == "private runtime write"
+    assert not (proton / "dist.lock").exists()
     with pytest.raises(ValueError, match="already been claimed"):
         isolated.launch(run, source, duration=5)
 

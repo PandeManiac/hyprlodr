@@ -130,7 +130,7 @@ python3 tools/re/isolated_proton.py preflight --run "$RUN" --source-game "$GAME"
 python3 tools/re/isolated_proton.py launch --run "$RUN" --source-game "$GAME"
 ```
 
-The runner invokes the installed Proton `run` verb with the game copy, a fresh
+The runner invokes the disposable Proton copy's `run` verb with the game copy, a fresh
 compatdata prefix, sanitized environment, and a private Bubblewrap network,
 PID, mount, HOME, `/run`, and `/tmp` view. Xvfb starts inside that same private
 view with a dynamically reserved display and remains alive until the game

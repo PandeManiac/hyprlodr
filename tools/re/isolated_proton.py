@@ -95,6 +95,17 @@ def _validate_source_tree(source: Path) -> None:
             raise ValueError(f"source game tree contains a special file: {path}")
 
 
+def _validate_proton_tree(source: Path) -> None:
+    """Require Proton's links to remain within the copied runtime tree."""
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            target = path.resolve()
+            if not target.exists() or not inside(target, source):
+                raise ValueError(f"Proton runtime symlink escapes or is broken: {path}")
+        elif not path.is_dir() and not path.is_file():
+            raise ValueError(f"Proton runtime contains a special file: {path}")
+
+
 def stage(source_game: Path, proton_root: Path, proxy: Path,
           original_openal: Path, run_root: Path, app_id: str = APP_ID,
           input_probe: Path | None = None) -> dict:
@@ -141,6 +152,7 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     if proton_fixups.exists() and proton_stamp.exists() and \
             proton_stamp.read_text(encoding="utf-8").strip() != str(proton_fixups.stat().st_mtime):
         raise ValueError("installed Proton has pending fixups; refusing to run a read-only runtime")
+    _validate_proton_tree(proton_root)
 
     run_root.parent.mkdir(parents=True, exist_ok=True)
     run_root.mkdir()
@@ -159,7 +171,11 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     for relative in ("compatdata", "home", "xdg/config", "xdg/cache", "xdg/data",
                      "xdg/state", "runtime", "temp", "steam-client", "logs", "evidence"):
         (run_root / relative).mkdir(parents=True, exist_ok=True)
-    (run_root / "proton").mkdir()
+    shutil.copytree(proton_root, run_root / "proton", symlinks=True,
+                    copy_function=shutil.copy2,
+                    ignore=shutil.ignore_patterns("user_settings.py"))
+    copied_proton = run_root / "proton"
+    _validate_proton_tree(copied_proton)
     exe_hash = sha256(source_game / "hyperdemon.exe")
     archive_hash = sha256(source_game / "asset/asset")
     if sha256(game / "hyperdemon.exe") != exe_hash or \
@@ -170,9 +186,16 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     if sha256(game / "OpenAL32_real.dll") != sha256(original_openal):
         raise RuntimeError("original OpenAL copy verification failed")
     meta = {"schema": 1, "app_id": app_id, "source_game": str(source_game),
-        "game_copy": str(game), "proton_root": str(proton_root),
+        "game_copy": str(game), "proton_root": str(copied_proton),
+        "source_proton_root": str(proton_root),
+        "proton_launcher_sha256": sha256(copied_proton / "proton"),
+        "source_proton_launcher_sha256": sha256(proton_root / "proton"),
+        "proton_runtime_isolated_copy": True,
         "proxy_build_manifest": str(identity_path),
         "source_executable_sha256": exe_hash, "source_archive_sha256": archive_hash,
+        "source_installed_openal_sha256": sha256(source_game / "OpenAL32.dll"),
+        "source_openal_runtime_path": str(original_openal),
+        "source_openal_runtime_sha256": sha256(original_openal),
         "copied_executable_sha256": sha256(game / "hyperdemon.exe"),
         "copied_archive_sha256": sha256(game / "asset/asset"),
         "proxy_sha256": sha256(game / "OpenAL32.dll"),
@@ -200,11 +223,17 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
     game = run_root / "game"
     proton = Path(meta["proton_root"])
+    source_proton = Path(meta["source_proton_root"])
     proxy_identity = json.loads(Path(meta["proxy_build_manifest"]).read_text(encoding="utf-8"))
     source_revision, source_clean = current_source_identity()
-    roots = {name: run_root / name for name in ("game", "compatdata", "home", "temp", "steam-client")}
-    reject_external_links(roots, run_root)
-    reject_external_links({"complete_run_tree": run_root}, run_root)
+    roots = {name: run_root / name for name in
+             ("game", "compatdata", "home", "temp", "steam-client", "proton")}
+    strict_roots = {name: path for name, path in roots.items() if name != "proton"}
+    reject_external_links(strict_roots, run_root)
+    reject_external_links({"proton": roots["proton"]}, run_root,
+                          allowed_symlink_root=roots["proton"])
+    reject_external_links({"complete_run_tree": run_root}, run_root,
+                          allowed_symlink_root=roots["proton"])
     for path in roots.values():
         path.mkdir(parents=True, exist_ok=True)
     if source_game == game or source_game in game.parents or game in source_game.parents:
@@ -220,6 +249,12 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
             proxy_identity.get("source_revision") == source_revision == meta.get("proxy_source_revision"),
         "routing_disabled": meta.get("replacement_routing") is False,
         "proton_readable": (proton / "proton").is_file(),
+        "proton_is_disposable_copy": proton.resolve() == roots["proton"].resolve() and
+            meta.get("proton_runtime_isolated_copy") is True,
+        "proton_source_launcher_unchanged": sha256(source_proton / "proton") ==
+            meta.get("source_proton_launcher_sha256"),
+        "proton_copy_launcher_matches_stage": sha256(proton / "proton") ==
+            meta.get("proton_launcher_sha256"),
         "fresh_compatdata_prefix": not any(roots["compatdata"].iterdir()),
         "run_not_previously_claimed": (
             not (run_root / "launch.claimed").exists() if not allow_claimed else
@@ -228,6 +263,10 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
         "run_directory_separate": game != source_game}
     original_archive_hash = sha256(source_game / "asset/asset")
     checks["source_archive_unchanged"] = original_archive_hash == meta["source_archive_sha256"]
+    checks["source_installed_openal_unchanged"] = sha256(source_game / "OpenAL32.dll") == \
+        meta["source_installed_openal_sha256"]
+    checks["source_openal_runtime_unchanged"] = sha256(Path(meta["source_openal_runtime_path"])) == \
+        meta["source_openal_runtime_sha256"] == EXPECTED_OPENAL
     if not all(checks.values()):
         failed = [name for name, passed in checks.items() if not passed]
         raise ValueError("isolated Proton preflight failed: " + ", ".join(failed))
@@ -412,7 +451,6 @@ def _launch_claimed(run_root: Path, source_game: Path, duration: int,
         "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
         "--tmpfs", "/run", "--tmpfs", "/tmp", "--dir", "/tmp/hyprlodr",
         "--bind", str(run_root), "/tmp/hyprlodr",
-        "--ro-bind", str(proton), "/tmp/hyprlodr/proton",
         "--bind", str(run_root / "home"), user_home_target,
         "--", sys.executable, "-c", _SUPERVISOR,
         "/tmp/hyprlodr", "/tmp/hyprlodr/proton/proton", "/tmp/hyprlodr/game", str(duration)]
@@ -473,7 +511,14 @@ def _launch_claimed(run_root: Path, source_game: Path, duration: int,
                     "deleted": sorted(set(before) - set(after)),
                     "host_game_source_unchanged":
                         sha256(source_game / "hyperdemon.exe") == EXPECTED_EXE and
-                        sha256(source_game / "asset/asset") == meta["source_archive_sha256"]},
+                        sha256(source_game / "asset/asset") == meta["source_archive_sha256"],
+                    "host_game_openal_files_unchanged":
+                        sha256(source_game / "OpenAL32.dll") == meta["source_installed_openal_sha256"] and
+                        sha256(Path(meta["source_openal_runtime_path"])) ==
+                        meta["source_openal_runtime_sha256"] == EXPECTED_OPENAL,
+                    "source_proton_launcher_unchanged":
+                        sha256(Path(meta["source_proton_root"]) / "proton") ==
+                        meta["source_proton_launcher_sha256"]},
                    indent=2, sort_keys=True) + "\n", encoding="utf-8")
     attach_files = list((run_root / "game").glob("hyprlodr-attach-*.json"))
     if attach_files:

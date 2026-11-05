@@ -357,7 +357,8 @@ def inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def reject_external_links(paths: dict[str, Path], sandbox: Path) -> None:
+def reject_external_links(paths: dict[str, Path], sandbox: Path,
+                          allowed_symlink_root: Path | None = None) -> None:
     roots = list(paths.items())
     for index, (left_name, left) in enumerate(roots):
         for right_name, right in roots[index + 1:]:
@@ -367,7 +368,10 @@ def reject_external_links(paths: dict[str, Path], sandbox: Path) -> None:
             raise ValueError(f"{left_name} must not be a symlink: {left}")
         for child in [left, *left.rglob("*")] if left.exists() else []:
             if child.is_symlink():
-                raise ValueError(f"symlink in isolated writable tree: {child}")
+                if allowed_symlink_root is None or \
+                        not inside(child, allowed_symlink_root) or \
+                        not child.resolve().exists() or not inside(child.resolve(), sandbox):
+                    raise ValueError(f"symlink in isolated writable tree: {child}")
             if child.is_file() and child.stat().st_nlink != 1:
                 raise ValueError(f"hard-linked file in isolated writable tree: {child}")
             if child.exists() and not inside(child, sandbox):
@@ -395,7 +399,8 @@ def validate_isolated_paths(sandbox: Path, game_root: Path, compat_data: Path,
         if absolute.exists():
             for child in absolute.rglob("*"):
                 if child.is_symlink():
-                    raise ValueError(f"symlink in isolated writable tree is not allowed: {child}")
+                    if not inside(child.resolve(), sandbox_real):
+                        raise ValueError(f"symlink in isolated writable tree escapes sandbox: {child}")
         resolved[name] = str(absolute)
     reject_external_links({name: Path(value) for name, value in resolved.items()}, sandbox_real)
     source = source_game.resolve()
