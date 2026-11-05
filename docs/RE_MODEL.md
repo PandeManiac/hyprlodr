@@ -253,11 +253,9 @@ The evidence establishes the instruction form and wrapper ABI; it does not
 establish a safe time to patch it concurrently. Current Ghidra evidence does
 not identify an outer lock protecting the name cache or prove that the archive
 stream's seek/read sequence is serialized. Nested resource loads and objects
-cached before route activation also remain possible. Therefore the live
-callsite is still not installed. The managed facility now has a synthetic Wine
-fixture, but the game still lacks a demonstrated quiescent installation point
-and verified cache/stream synchronization. The exact five-byte anchor is
-detection, not permission to patch a live instruction.
+cached before route activation also remain possible. The live callsite remains
+uninstalled because no process-wide quiescent installation point is known. The
+exact five-byte anchor is detection, not permission to patch a live instruction.
 
 The generic Windows facility is now implemented in
 `native/win32/callsite_hook.c` and linked into the proxy, but proxy startup does
@@ -292,8 +290,8 @@ publication edge before a wrapper can observe the immutable state.
 Failures free only temporary parser storage; no published route is reclaimed.
 `hyprlodr-attach.json` reports `experimental_record_route_requested` and a
 specific preflight status. A successful result is reported as
-`validated_blocked_runtime_synchronization`: it proves the replacement inputs,
-not a safe callsite installation. The proxy still never installs the callsite.
+`validated_blocked_no_process_quiescence`: it proves the replacement inputs,
+not permission to write the live callsite. The proxy still never installs it.
 
 The Wine fixture executes this compiled validator against the real 306,816,425
 byte appended archive and the installed executable. It also exercises stale
@@ -322,9 +320,29 @@ The static evidence also does not establish whether higher-level callers can
 serve a cached model without entering this resolver, or whether first-time
 resource loads are confined to initialization. Thus cache insertion
 serialization, stream serialization, nested-load interactions, and the real
-installation window remain unresolved. Do not enable a live route or install
-the callsite in the game until those conditions are established. No global
-loader mutex is added.
+installation window remain unresolved. The existing
+loader's synchronization is distinct from additional wrapper behavior:
+
+| Invariant | Evidence | Status |
+|---|---|---|
+| Each invocation edits only its own 0x58-byte descriptor | Resolver stack copy at `FUN_140211e70`; route helper writes/restores offset and size only | Verified statically and in native/Wine fixtures |
+| Original loader ABI and call count are preserved | Exact call bytes and Windows x64 arguments; wrapper forwards context, name object and flags | Verified statically and in executable Wine fixture |
+| Route publication is immutable and process-lived | Proxy static manifest/binding storage; release/acquire publication; relay retained to process exit | Verified in source and manifest fixture |
+| Five-byte patch cannot overlap execution | Hook API requires external quiescence; startup fixture parks its sole caller before patch | Fixture-only; no equivalent game-wide exclusion established |
+| Archive seek/read transaction is serialized | Shared stream observed in loader; no lock around seek/read identified | Unresolved pre-existing game property; wrapper adds no lock or I/O operation |
+| Cache insertion and cache-hit behavior are safe for activation timing | Resolver copies the post-loader descriptor; outer cache lock and hit path not established | Unresolved; route must be enabled before first target request to affect a cold load |
+| Nested loads do not deadlock | Wrapper adds no blocking or lock; nested behavior in game call graph not established | Wrapper introduces no new lock cycle; game recursion remains unknown |
+| Replacement object is cached with original resolver metadata | Helper restores offset/size and preserves loader-written `+0x48` object pointer before caller cache copy | Verified helper contract; game cache semantics remain unverified |
+
+The route is request-local: concurrent invocations use separate stack
+records, and the wrapper adds no shared scratch descriptor, allocation, lock,
+wait, or extra I/O. If the game's shared-stream seek/read sequence is racy, the
+replacement read can be affected by that existing race, but changing the
+requested extent does not create stream sharing. Restoring the original
+metadata lets the normal cache-copy path retain the parsed-object pointer;
+whether later cache hits depend on the restored extent is unknown. Cache hits
+may bypass the callsite, so activation must precede the first relevant cold
+lookup. No global loader mutex is added.
 
 That operation is implemented as the allocation-free helper
 `native/src/record_route.c` (`hyprlodr_record_route_invoke`). It requires an
@@ -340,24 +358,30 @@ compiled helper also ran under Wine and verified the 22,056-byte replacement
 extent plus rejection of the tag-2 `hand2` request. These are tests of the
 request-level component, not of a game callsite detour.
 
-The runtime preflight now constructs and binds this route state, but leaves the
-permanent callsite hook uninstalled. The existing managed hook is compiled and
-tested separately; its relay and callback code remain allocated until process
-exit. The first-archive-open redirect gate is not evidence that no thread can
-execute the target callsite, and the resolver's shared `istream` seek/read plus
-name-cache insert have no established outer synchronization contract. Static
-analysis also does not establish nested-load behavior or whether cache hits
-bypass the resolver. No global mutex was introduced because its interaction
-with existing locks and recursive loading is unknown. Therefore no real-game
-callsite patch or launch was justified in this milestone.
+The runtime preflight constructs and binds this route state, but leaves the
+permanent callsite hook uninstalled with status
+`validated_blocked_no_process_quiescence`. The compiled Wine fixture now models
+the archive-open ordering: its only resource thread is blocked before the
+callsite while installation occurs, then is released and exercises the route.
+That proves the contract for the fixture, not for HYPER DEMON. The actual
+redirect gate only blocks threads that reached the intercepted archive open;
+it does not establish that other game threads cannot reach the callsite. This is
+the concrete interception-specific blocker. Unknown stream/cache locking and
+cache timing remain properties to investigate in the game, but the wrapper adds
+no shared descriptor, loader lock, wait, or additional I/O. No global mutex was
+introduced. A real-game callsite patch or launch is not justified until a
+process-wide startup exclusion (or a different safe interception boundary) is
+verified.
 
 The append archive still cannot route itself: record offsets live in runtime
 resolver tables, not a self-contained directory. Native preflight validates
 hashes and range/resource identity; offline Python tooling separately verifies
 decryption and parsed mesh counts. The remaining activation blocker is concrete:
-establish a guaranteed quiescent point before the five-byte write and prove the
-game's cache and shared archive stream are serialized (or establish an
-alternative boundary that does not rely on those assumptions).
+establish a process-wide quiescent point before the five-byte write and determine
+whether cache timing or archive-stream access can invalidate request-local
+routing. The current evidence does not show that these game-level properties
+are newly made unsafe by the wrapper, but it also does not establish their
+behavior for the replacement extent.
 
 `Group8673` remains an unknown 8-byte graph value (`00000000a4040000`); its
 upper u32 numerically matches the original index count 1,188, but no consumer

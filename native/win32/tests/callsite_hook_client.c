@@ -22,6 +22,9 @@ static volatile LONG g_error_count;
 static volatile LONG g_block;
 static volatile LONG g_entered;
 static volatile LONG g_release;
+static volatile LONG g_startup_parked;
+static volatile LONG g_startup_release;
+static volatile uintptr_t g_startup_result;
 static const void *volatile g_last_name_object;
 static call_thunk_fn g_thunk;
 static hyprlodr_call_hook g_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
@@ -275,6 +278,19 @@ static DWORD WINAPI inflight_worker(void *opaque) {
     return 0;
 }
 
+/* Startup-order fixture: this is the only synthetic resource thread. It parks
+ * at the stand-in archive-open gate, before it can reach the CALL rel32 site.
+ * The test thread installs while the worker is provably blocked here, then
+ * publishes enabled state before releasing it. */
+static DWORD WINAPI startup_resource_worker(void *opaque) {
+    inflight_call *call = (inflight_call *)opaque;
+    __atomic_store_n(&g_startup_parked, 1l, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&g_startup_release, __ATOMIC_ACQUIRE)) Sleep(0u);
+    uintptr_t result = g_thunk(&call->context, call->record, &call->name, 0x77u);
+    __atomic_store_n(&g_startup_result, result, __ATOMIC_RELEASE);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     unsigned char *callsite = NULL;
     unsigned char *code = make_call_thunk((void *)original_loader, &callsite);
@@ -306,6 +322,17 @@ int main(int argc, char **argv) {
     void *far_bridge = make_far_bridge((void *)hyprlodr_record_route_hook_call);
     if (!check(far_bridge != NULL, "could not allocate far replacement bridge")) return 1;
     int32_t displacement = 0;
+    inflight_call startup_call;
+    startup_call.context.marker = 0x4321u;
+    startup_call.context.reenter = 0;
+    startup_call.context.depth = 0;
+    startup_call.name = hand2;
+    init_record(startup_call.record, 1u);
+    HANDLE startup_thread = CreateThread(NULL, 0, startup_resource_worker,
+                                         &startup_call, 0, NULL);
+    if (!check(startup_thread != NULL, "startup resource thread creation failed")) return 1;
+    while (!__atomic_load_n(&g_startup_parked, __ATOMIC_ACQUIRE)) Sleep(0u);
+
     if (!make_rel32((uintptr_t)(callsite + 5u), (uintptr_t)far_bridge, &displacement)) {
         hyprlodr_call_hook quiescence_probe = HYPRLODR_CALL_HOOK_INITIALIZER;
         if (!check(hyprlodr_call_hook_install(&quiescence_probe, callsite, callsite,
@@ -327,10 +354,21 @@ int main(int argc, char **argv) {
               HYPRLODR_CALL_HOOK_INSTALL_QUIESCENT, NULL) == HYPRLODR_CALL_HOOK_ALREADY,
               "same install was not idempotent")) return 1;
     hyprlodr_call_hook_set_enabled(&g_hook, 1);
+    __atomic_store_n(&g_startup_release, 1l, __ATOMIC_RELEASE);
+    if (!check(WaitForSingleObject(startup_thread, 30000u) == 0u,
+               "startup resource thread did not leave the archive gate")) return 1;
+    CloseHandle(startup_thread);
+    if (!check(__atomic_load_n(&g_startup_result, __ATOMIC_ACQUIRE) ==
+                   (((uintptr_t)0x4321u << 32u) | 0x77u) &&
+               get_u32(startup_call.record, 0u) == route.original_offset &&
+               get_u32(startup_call.record, 4u) == route.original_size &&
+               get_uptr(startup_call.record, HYPRLODR_RECORD_OBJECT_FIELD) ==
+                   (uintptr_t)0x123456789abcdef0ull,
+               "gated startup request did not route and restore correctly")) return 1;
     init_record(record, 1u);
     uintptr_t routed = g_thunk(&context, record, &hand2, 0x66u);
     if (!check(routed == (((uintptr_t)0x1234u << 32u) | 0x66u) &&
-               atomic_load(&g_original_calls) == 2 &&
+               atomic_load(&g_original_calls) == 3 &&
                get_u32(record, 0u) == route.original_offset &&
                get_u32(record, 4u) == route.original_size &&
                get_uptr(record, HYPRLODR_RECORD_OBJECT_FIELD) ==
@@ -518,6 +556,6 @@ int main(int argc, char **argv) {
               "different repeated install was not rejected")) return 1;
 
     (void)argc; (void)argv;
-    printf("callsite fixture: direct/relay CALL, routing, rollback, concurrency, reentry, and disable passed\n");
+    printf("callsite fixture: direct/relay CALL, gated startup install, routing, rollback, concurrency, reentry, and disable passed\n");
     return 0;
 }

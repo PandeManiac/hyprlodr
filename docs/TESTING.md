@@ -26,8 +26,11 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 `callsite_hook.c` and `record_route_hook.c` sources linked into the proxy.
 `tools/test_windows.sh` always executes it, even when no original OpenAL DLL is
 provided. The fixture emits executable Windows x64 machine code with a known
-five-byte `CALL rel32`, first calls the original target, then installs before
-worker threads start and calls through the patched instruction.
+five-byte `CALL rel32`, first calls the original target, then runs a
+startup-order case where the only resource thread parks at an archive-open gate
+before the callsite. The fixture
+installs and enables while that thread is blocked, releases it, and verifies the
+patched request and restored descriptor.
 
 The fixture checks direct and relayed replacement targets, the four argument
 registers and return value, the tag-1 enlarged record route (239 vertices,
@@ -54,9 +57,10 @@ unsupported schema, overflow and concurrent reads of process-lifetime route
 state. The proxy regression run checks that `experimental_record_route` is off
 by default. On the unsupported Wine stand-in an opt-in request is reported as
 `executable_unsupported`. Successful preflight reports
-`validated_blocked_runtime_synchronization`; the proxy still does not install
-the callsite because game cache/stream synchronization and a live quiescent
-point remain unestablished.
+`validated_blocked_no_process_quiescence`; the proxy still does not install
+the callsite because the archive-open gate does not prove process-wide
+quiescence. The fixture establishes quiescence only for its controlled single
+resource thread.
 
 ## Loader scenarios (native, 41/41 passing)
 

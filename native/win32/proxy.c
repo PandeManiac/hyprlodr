@@ -337,7 +337,7 @@ static void preflight_record_route(int build_matches) {
      * callsite is deliberately not installed while game synchronization is
      * unresolved. */
     hyprlodr_record_route_hook_bind(&g_route_binding,&g_route_call_hook,&g_route_manifest.route);
-    snprintf(g_record_route_status,sizeof g_record_route_status,"validated_blocked_runtime_synchronization");
+    snprintf(g_record_route_status,sizeof g_record_route_status,"validated_blocked_no_process_quiescence");
 }
 
 
