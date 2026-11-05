@@ -563,7 +563,8 @@ game content and must not be committed.
 `HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` enables a passive, bounded event recorder.
 The early proxy attach and intercepted loader callbacks only copy fixed-size
 records into a 128-entry static ring. The bootstrap worker creates
-`hyprlodr-startup.jsonl` and drains the ring; each JSONL event has a shared
+`hyprlodr-startup.jsonl`, drains the ring, and starts a dedicated writer thread;
+each JSONL event has a shared
 `seq`, monotonic process tick, thread ID, event kind, archive gate state, and
 the relevant resource tag/extent/route flags. The first archive open record
 includes the actual path selected. First loader-entry and return events retain
@@ -576,6 +577,36 @@ original loader unchanged. The trace answers whether the first cold target
 request follows archive and route readiness; an absent target event is only
 meaningful if the first general callsite event and complete, non-overflowed
 trace establish that the instrumentation ran.
+
+### Controlled diagnostic-only run (2026-11-05)
+
+The executable fingerprint matched all 9 anchors. With route configuration
+disabled and the installed archive unchanged, the file log recorded the first
+`asset/asset` open through the executable's `_Fiopen` import at relative
+`t_ms: 275`; the original relative path opened successfully and was not
+redirected. There was no `redirect_wait` entry, consistent with the archive
+gate already being released by the time of the open. That ordering is an
+inference because the startup ring stopped after its two attach-time entries.
+
+The trace is incomplete: it contains no bootstrap, gate-release, resolver
+callsite, `hand2`, or loader-return event. The early-hook event says
+`installed_dormant`, while the final attach record says the early hook was not
+requested; this contradictory pair is not accepted as proof of live hook
+installation. The OpenGL log shows the game reached its rendering loop, but no
+gameplay navigation, first-person hand draw, or model parse was established.
+No variable-size replacement was attempted.
+
+The missing ring drain was corrected by starting a dedicated writer thread
+from the bootstrap worker and directly draining bootstrap milestones. A
+compiled Wine fixture now checks shared event sequencing across two producer
+threads. The real-game result was not repeated: the initial attempt launched
+through the already-running Steam client, which placed the game on shared
+display `:0` instead of the isolated `:99`; startup also updated files under
+Proton's HyperDemon AppData directory. The proxy, mods, root configuration,
+runtime logs, and prior GL captures were restored, and executable/archive
+hashes remained unchanged. The pre-run AppData contents were not snapshotted,
+so their exact original contents could not be restored. This is a remaining
+runtime-testing limitation.
 
 ## Native replacement experiment (2026-11-03)
 

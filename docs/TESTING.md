@@ -62,8 +62,9 @@ tag-1 target, original loader entry, and first loader return in a fixed 128
 record process ring. Separate `tag1_hand2_loader_call` and
 `tag1_hand2_loader_return` events retain the exact target's outcome even if
 the distinct tag-2 `hand2` request occurred first. The worker writes
-`hyprlodr-startup.jsonl` after attach
-returns and drains the ring. Sort by `seq`, not timestamps across files;
+`hyprlodr-startup.jsonl` after attach returns and starts a dedicated ring
+writer; bootstrap transitions also drain from the safe worker context. Sort by
+`seq`, not timestamps across files;
 `t_ms` is a monotonic `GetTickCount` sample and `thread` is the Windows thread
 ID. A `diagnostic_events_dropped` record invalidates completeness. No event
 from the loader callback is formatted or written to disk. This diagnostic mode

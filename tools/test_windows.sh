@@ -29,6 +29,19 @@ mkdir -p "$WORK/mods" "$WORK/proxy/mods"
 
 status=0
 
+echo "== wine: bounded startup diagnostic ring and background drain =="
+timeout 15 wine "$OUT/tests/startup_diag_client.exe" || status=1
+python3 - "$OUT/tests/startup-diag.jsonl" <<'PY' || status=1
+import json, pathlib, sys
+events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+assert [event["seq"] for event in events] == [1, 2, 3], events
+assert [event["event"] for event in events] == [
+    "early_hook_install", "bootstrap_start", "first_archive_attempt"
+], events
+assert len({event["thread"] for event in events}) >= 2, events
+print("startup diagnostics: early and worker events drained in shared sequence order")
+PY
+
 echo "== wine: compiled CALL rel32 interception fixture =="
 timeout 45 wine "$OUT/tests/callsite_hook_client.exe" || status=1
 

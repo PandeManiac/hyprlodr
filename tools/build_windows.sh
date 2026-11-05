@@ -74,6 +74,8 @@ compile "$ROOT/native/win32/asset_probe.c" "$OUT/obj/asset_probe.obj"
 compile "$ROOT/native/win32/crt_impl.c" "$OUT/obj/crt_impl.obj" -fno-builtin
 # Executable-only entry shim; the DLL uses dll_main instead.
 compile "$ROOT/native/win32/entry.c" "$OUT/obj/entry.obj"
+compile "$ROOT/native/win32/tests/startup_diag_client.c" \
+  "$OUT/obj/startup_diag_client.obj"
 
 CRT_OBJ="$OUT/obj/crt_impl.obj"
 K32="$OUT/lib/kernel32.lib"
@@ -84,6 +86,12 @@ echo "== host =="
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/hyprlodr-host.exe" \
   "$OUT/obj/loader.obj" "$OUT/obj/host.obj" "$OUT/obj/anchors.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+
+echo "== bounded startup diagnostic writer fixture =="
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/startup_diag_client.exe" \
+  "$OUT/obj/startup_diag_client.obj" "$OUT/obj/startup_diag.obj" \
+  "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 
 echo "== sample mods =="
 link_mod() { # link_mod <source> <mod-id>

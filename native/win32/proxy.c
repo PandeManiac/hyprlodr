@@ -590,9 +590,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     char startup_log[1024];
     snprintf(startup_log, sizeof startup_log, "%s\\hyprlodr-startup.jsonl", g_game_dir);
     (void)hyprlodr_startup_diag_start(startup_log);
-    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_BOOTSTRAP_START, 0u, 0u, 0u,
-                               (uint32_t)hyprlodr_file_hook_archive_gate_state(),
-                               0u, 0u, 0u, "bootstrap worker started");
+    hyprlodr_startup_diag_drain();
 
     /* Evidence and build identity first. A game that exits during start-up can
      * still prove which executable ran and whether it matches the analysis; the
@@ -617,7 +615,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     if (!g_loader) {
         write_attach_record("no_memory", HYPRLODR_ERR_LIMIT);
         hyprlodr_file_hook_mark_redirects_ready();
-        hyprlodr_startup_diag_pump();
+        hyprlodr_startup_diag_drain();
         return 0;
     }
     if (hyprlodr_loader_set_log(g_loader, log_path) != HYPRLODR_OK) {
@@ -625,7 +623,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
         hyprlodr_loader_destroy(g_loader);
         g_loader = NULL;
         hyprlodr_file_hook_mark_redirects_ready();
-        hyprlodr_startup_diag_pump();
+        hyprlodr_startup_diag_drain();
         return 0;
     }
     hyprlodr_loader_add_dir(g_loader, mods_dir);
@@ -647,6 +645,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
         (g_record_route_requested ? 1u : 0u) |
             (g_route_binding.route ? 2u : 0u),
         0u, 0u, g_record_route_status);
+    hyprlodr_startup_diag_drain();
     hyprlodr_image image;
     image.base = g_module.base;
     image.size = (size_t)g_module.size_of_image;
@@ -698,6 +697,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     hyprlodr_startup_diag_emit(HYPRLODR_DIAG_REDIRECT_PUBLICATION, 0u, 0u, 0u,
         (uint32_t)hyprlodr_file_hook_archive_gate_state(),
         status == HYPRLODR_OK ? 1u : 0u, 0u, 0u, redirect_count_text);
+    hyprlodr_startup_diag_drain();
 
     /* The asset-open shim still holds the first archive open. Activate only
      * after manifest validation and publication of the matching archive
@@ -759,12 +759,13 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
         (uint32_t)hyprlodr_file_hook_archive_gate_state(),
         strcmp(g_record_route_status, "route_enabled") == 0 ? 1u : 0u,
         0u, 0u, g_record_route_status);
+    hyprlodr_startup_diag_drain();
 
     /* The loader's own cap is internal; asking for more ids than it can hold is
      * harmless and keeps this call free of a private constant. */
 
     write_attach_record(status == HYPRLODR_OK ? "mods_loaded" : "mods_failed", status);
-    hyprlodr_startup_diag_pump();
+    hyprlodr_startup_diag_drain();
     return 0;
 }
 
