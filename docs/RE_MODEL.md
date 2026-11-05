@@ -628,7 +628,7 @@ review at `.tmp/first-load-diagnostic/evidence/first-attempt/coverage-review.jso
 confirms the original `asset/asset` open in the file log, but correctly marks
 hook execution and tag-1 `hand2` ordering unknown.
 
-No second launch was made. The earlier preflight treated any active Steam
+No second launch was made during that earlier audit. The earlier preflight treated any active Steam
 process as a veto, while the actual requirement is preventing IPC, Cloud, and
 filesystem access. A new Bubblewrap probe can establish a private PID/network
 namespace, no default route, inaccessible host abstract sockets, read-only
@@ -656,6 +656,54 @@ and is terminated as an owned process group on timeout. A startup trace does
 not claim gameplay coverage; absent `hand2` requests are limited to the
 observed process lifetime and do not prove the model would not load later.
 No variable-size replacement is enabled by this runner.
+
+### Three offline startup attempts (2026-11-05)
+
+The later isolated attempts are preserved separately at
+`.tmp/first-load-diagnostic/isolated/trace-20261105-01`, `-02`, and `-03`;
+each uses its own claimed run directory and disposable prefix. Attempt 1 never
+started Wine: Proton could not create `dist.lock` in the read-only installed
+runtime. Attempts 2 and 3 copied Proton into their disposable run trees. In
+attempt 2, the proxy attached but mod discovery returned I/O error because the
+staged mod directory could not be scanned. In attempt 3, `z.foundation` was
+discovered, initialized, and logged its test capability; the proxy reported
+`mods_loaded`, and the diagnostic writer finished with zero dropped events.
+
+Attempt 3's proxy record identifies `hyperdemon.exe` at the expected image
+base/timestamp and records the dormant hook as installed. Its startup stream
+orders early hook and main-image file-hook installation before bootstrap,
+writer startup, all-module file-hook installation, redirect publication,
+gate release, and the disabled route state. Bootstrap succeeded with zero
+redirects because replacement was intentionally off. Neither the shared file
+log nor the attach summary records an `asset/asset` open. No intercepted loader
+call, `hand2` request, parsed object, game window, or title/menu observation was
+captured. Thus the first archive and model-load ordering remain unknown; the
+run cannot establish whether the model was cached before route activation.
+
+The attach record says 8/9 anchors matched (`call:record_loader`) even though
+the early hook status is `installed_dormant`. Source inspection explains the
+conflict: early installation verifies the complete original image and then
+patches the call instruction; bootstrap subsequently re-verifies the modified
+image and overwrites the saved anchor report with the expected call-byte
+mismatch. `inspect_main_module()` now keeps the first fingerprint snapshot so
+the known hook patch does not invalidate the build identity used by route
+preflight. This fix has been cross-built and existing Windows/Wine
+regression-tested. Those fixtures do not recreate the supported game's full
+anchor set and intentional call patch as one test, so that exact transition
+remains without a dedicated fixture and was not validated in another game
+process.
+
+The Proton wrapper exited normally with status 0 after approximately 12
+seconds; the supervisor did not record its runtime-limit or operator-stop
+path. Its stdin was closed, which disabled optional screen capture and Win32
+input, but did not itself stop the process. The Proton log reports DXVK Vulkan
+instance failure and an Xalia `No displays available` exception. Those records
+do not prove the cause of HYPER DEMON's exit. The isolated post-run inventory
+contains the observed game, prefix, Proton, and diagnostic writes; hashes for
+the original installed executable, archive, both OpenAL DLLs, and source Proton
+launcher remained unchanged. Replacement remains disabled and unsupported by
+this trace. No fourth launch was made because there is no evidence-backed
+correction to the offline authentication/display boundary yet.
 
 ## Native replacement experiment (2026-11-03)
 

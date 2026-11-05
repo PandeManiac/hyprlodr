@@ -154,6 +154,44 @@ executable/archive hashes again. A complete process trace is not a gameplay
 trace: if gameplay was not reached, absence of a hand load applies only to
 that process run.
 
+The three disposable attempts from 2026-11-05 are preserved under
+`.tmp/first-load-diagnostic/isolated/trace-20261105-01` through `-03` and must
+not be reused. Attempt 1 stopped before Wine startup because the installed
+read-only Proton tree could not create `dist.lock`; attempts 2 and 3 used a
+copied Proton runtime and fresh prefixes. Attempt 2 attached HYPRLODR but mod
+discovery failed because the staged `mods` directory was not usable. Attempt 3
+loaded the repository-only `z.foundation` sample successfully, started the
+diagnostic writer, and completed bootstrap with replacement routing disabled.
+Its shared startup sequence records early hook installation, bootstrap and
+writer startup, all-module file-hook installation, redirect publication with
+zero redirects, archive-gate release, and disabled route state. It contains no
+archive-open or native loader-call event, so those events and any later
+gameplay load remain unknown.
+
+Attempt 3 did execute `hyperdemon.exe`: the attach record identifies that image,
+the pinned image base and timestamp, and a process-scoped proxy run ID/PID.
+The attach record says the dormant hook was installed. No intercepted callsite
+execution was observed. It also reports 8/9 post-bootstrap anchors with
+`call:record_loader` mismatched. This follows from the source lifecycle: the
+early hook first validates and patches that exact call instruction, then
+bootstrap re-runs the full-image anchor check and mistakes the intentional
+patch for an unsupported build. `inspect_main_module()` now preserves the
+initial fingerprint instead of rechecking patched code. The historical run
+still has `build_matches=false`; this source correction has not been exercised
+in another game process.
+
+The Proton wrapper exited with code 0 after about 12 seconds. The supervisor
+did not record a timeout or operator stop. Its stdin had reached EOF, which
+only disabled the optional snapshot/input commands; no input or screenshot was
+sent. Proton's log records DXVK Vulkan initialization failure and an Xalia
+`No displays available` exception, but the log does not establish that either
+caused HYPER DEMON's exit. There is no saved game-window inventory or reliable
+renderer/title-screen observation. The offline sandbox and post-run inventory
+show the copied game, Proton runtime, and prefix contained the observed writes;
+the source executable, archive, OpenAL files, and Proton launcher hashes
+remained unchanged. No fourth launch or replacement attempt is justified by
+this incomplete trace.
+
 ## Managed callsite fixture (Windows x64 under Wine)
 
 `tools/build_windows.sh` builds `tests/callsite_hook_client.exe` from the same

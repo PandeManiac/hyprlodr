@@ -114,6 +114,12 @@ static int bytes_equal(const unsigned char *left, const unsigned char *right,
 }
 
 static void inspect_main_module(void) {
+    /* Keep the attach-time fingerprint.  The early record hook deliberately
+     * replaces the verified CALL instruction, so verifying this image again
+     * from the bootstrap worker would report that one expected patch as an
+     * unsupported executable and disable routing.  An invalid initial image
+     * remains fail-closed; it is never upgraded by a later inspection. */
+    if (g_anchors_checked) return;
     g_anchors_checked = 1;
     HMODULE handle = GetModuleHandleA(NULL);
     if (!handle) return;

@@ -18,6 +18,12 @@
 3. **Hosts** — `native/src/host.c` (synthetic test host, JSON summary) and `native/win32/proxy.c` (in-game bootstrap inside the OpenAL32 proxy).
 4. **Tooling** (`tools/`) — diagnostics, installation with rollback, proxy `.def` generation, Windows build/test drivers.
 
+The proxy fingerprints the main executable before installing its optional early
+record-call hook. That fingerprint is an attach-time snapshot: once the hook
+replaces the verified five-byte `CALL`, later bootstrap code must reuse the
+snapshot instead of treating the intentional patch as executable drift. An
+unsupported image remains fail-closed and cannot enable routing.
+
 The loader does not know which host runs it. The synthetic host and the real game use the same code path, which is why the Wine host test is meaningful evidence about the game path (minus the game itself).
 
 ## Loader phases
