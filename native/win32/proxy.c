@@ -141,6 +141,29 @@ static void inspect_main_module(void) {
                             HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors);
 }
 
+static int main_module_build_matches(void) {
+    if (!g_module.parsed || g_module.timestamp != HYPRLODR_GAME_BUILD_TIMESTAMP ||
+        g_module.size_of_image != HYPRLODR_GAME_SIZE_OF_IMAGE ||
+        g_anchors.total != HYPRLODR_GAME_ANCHOR_COUNT ||
+        g_anchors.matched != HYPRLODR_GAME_ANCHOR_COUNT ||
+        g_anchors.out_of_range != 0 || g_anchors.first_mismatch != NULL)
+        return 0;
+    if (!g_route_call_hook.installed) {
+        hyprlodr_anchor_report live;
+        return hyprlodr_anchors_verify(g_module.base, g_module.size_of_image,
+                    hyprlodr_game_anchors, HYPRLODR_GAME_ANCHOR_COUNT, &live) == 0;
+    }
+    if (g_route_call_hook.site !=
+            (void *)(g_module.base + HYPRLODR_GAME_CALLSITE_RVA) ||
+        !hyprlodr_call_hook_site_matches(&g_route_call_hook))
+        return 0;
+    hyprlodr_anchor_report live;
+    return hyprlodr_anchors_verify_hooked(g_module.base, g_module.size_of_image,
+                hyprlodr_game_anchors, HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors,
+                HYPRLODR_GAME_CALLSITE_RVA, g_route_call_hook.installed_bytes,
+                sizeof g_route_call_hook.installed_bytes, &live) == 0;
+}
+
 /* Early patching is accepted only when the executable proves the proxy is a
  * static dependency and the executable itself has no TLS callback that could
  * have run before the imported DLL's process attach. This bounded PE read uses
@@ -548,9 +571,7 @@ static void write_attach_record(const char *stage, int status) {
     fputs("\",\"expected_timestamp\":\"", file);
     put_hex(file, (uint64_t)HYPRLODR_GAME_BUILD_TIMESTAMP, 8u);
 
-    int build_matches = g_module.parsed != 0 &&
-                        g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
-                        g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    int build_matches = main_module_build_matches();
     fputs("\",\"build_matches\":", file);
     fputs(build_matches ? "true" : "false", file);
     fputs(",\"experimental_record_route_requested\":", file);
@@ -664,9 +685,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * inspect real code and data; a different build yields build_matches=0 and
      * every read is refused. */
     inspect_main_module();
-    int build_matches = g_module.parsed &&
-                        g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
-                        g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    int build_matches = main_module_build_matches();
     preflight_record_route(build_matches);
     hyprlodr_startup_diag_emit(HYPRLODR_DIAG_ROUTE_PREFLIGHT, 0u, 0u, 0u,
         (uint32_t)hyprlodr_file_hook_archive_gate_state(),
@@ -681,9 +700,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * loader restores them when the process shuts down. */
     image.write_context = NULL;
     image.write = image_write_bytes;
-    image.build_matches = g_module.parsed &&
-                          g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
-                          g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    image.build_matches = main_module_build_matches();
     hyprlodr_loader_set_image(g_loader, &image);
 
     /* ABI 7: publish the named, hash-verified locations the RE pipeline recorded

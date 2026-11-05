@@ -27,7 +27,7 @@ CFLAGS=(
   -I"$ROOT/native/src"
 )
 
-mkdir -p "$OUT/obj" "$OUT/lib" "$OUT/mods" "$OUT/generated"
+mkdir -p "$OUT/obj" "$OUT/lib" "$OUT/mods" "$OUT/generated" "$OUT/tests"
 SOURCE_REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
   SOURCE_CLEAN=0
@@ -126,6 +126,13 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
   "$OUT/obj/startup_diag.obj" \
   "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+echo "== early-hook fingerprint transition fixture =="
+compile "$ROOT/native/win32/tests/fingerprint_transition_client.c" \
+  "$OUT/obj/fingerprint_transition_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/fingerprint_transition_client.exe" \
+  "$OUT/obj/fingerprint_transition_client.obj" "$OUT/obj/callsite_hook.obj" \
+  "$OUT/obj/anchors.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 echo "== pre-entrypoint dormant hook fixture =="
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/tests/preentry_fixture_proxy.def" \
   -l "$OUT/lib/preentry_fixture_proxy.lib"

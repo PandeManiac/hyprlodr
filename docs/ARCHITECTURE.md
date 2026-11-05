@@ -24,6 +24,13 @@ replaces the verified five-byte `CALL`, later bootstrap code must reuse the
 snapshot instead of treating the intentional patch as executable drift. An
 unsupported image remains fail-closed and cannot enable routing.
 
+The retained snapshot is not a blanket exemption for modified executable code.
+Bootstrap rechecks every non-callsite anchor and verifies that the live callsite
+still contains the exact five-byte patch recorded by the installed hook. Any
+other callsite bytes or any unexpected change to another anchor rejects build
+identity. The Windows/Wine `fingerprint_transition_client.exe` exercises the
+same portable anchor-validation path and the actual callsite patcher.
+
 The loader does not know which host runs it. The synthetic host and the real game use the same code path, which is why the Wine host test is meaningful evidence about the game path (minus the game itself).
 
 ## Loader phases

@@ -168,6 +168,7 @@ hyprlodr_call_hook_status hyprlodr_call_hook_install(
     }
 
     memcpy(hook->original_bytes, saved_call, HOOK_CALL_SIZE);
+    memcpy(hook->installed_bytes, replacement_call, HOOK_CALL_SIZE);
     hook->site = site;
     hook->original_target = (void *)original;
     hook->replacement = replacement;
@@ -186,4 +187,10 @@ void hyprlodr_call_hook_set_enabled(hyprlodr_call_hook *hook, int enabled) {
 int hyprlodr_call_hook_is_enabled(const hyprlodr_call_hook *hook) {
     if (!hook || !hook->installed) return 0;
     return __atomic_load_n(&hook->enabled, __ATOMIC_ACQUIRE) != 0;
+}
+
+int hyprlodr_call_hook_site_matches(const hyprlodr_call_hook *hook) {
+    if (!hook || !hook->installed || !hook->site) return 0;
+    return bytes_equal((const unsigned char *)hook->site, hook->installed_bytes,
+                       HOOK_CALL_SIZE);
 }

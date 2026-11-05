@@ -70,6 +70,9 @@ PY
 echo "== wine: compiled CALL rel32 interception fixture =="
 timeout 45 wine "$OUT/tests/callsite_hook_client.exe" || status=1
 
+echo "== wine: pre-hook fingerprint and exact installed-patch transition fixture =="
+timeout 30 wine "$OUT/tests/fingerprint_transition_client.exe" || status=1
+
 echo "== wine: pre-entrypoint dormant hook and deferred activation fixture =="
 PREENTRY="$OUT/preentry-fixture"
 mkdir -p "$PREENTRY"

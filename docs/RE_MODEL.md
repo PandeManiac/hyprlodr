@@ -685,13 +685,28 @@ the early hook status is `installed_dormant`. Source inspection explains the
 conflict: early installation verifies the complete original image and then
 patches the call instruction; bootstrap subsequently re-verifies the modified
 image and overwrites the saved anchor report with the expected call-byte
-mismatch. `inspect_main_module()` now keeps the first fingerprint snapshot so
-the known hook patch does not invalidate the build identity used by route
-preflight. This fix has been cross-built and existing Windows/Wine
-regression-tested. Those fixtures do not recreate the supported game's full
-anchor set and intentional call patch as one test, so that exact transition
-remains without a dedicated fixture and was not validated in another game
-process.
+mismatch. `inspect_main_module()` keeps the first fingerprint snapshot so the
+known hook patch does not invalidate build identity. A dedicated compiled
+Windows/Wine lifecycle fixture is now described below; the real-game run still
+used the older proxy and does not validate the corrected behavior in-game.
+
+The fingerprint lifecycle is now checked separately: the attach-time report
+must show every original anchor matched, bootstrap rechecks every anchor except
+the five-byte callsite, and the callsite must still equal the exact installed
+patch saved by the hook. The compiled Windows/Wine transition fixture uses a
+synthetic image and the real hook installer to check acceptance of that
+authorized change and rejection of an invalid baseline or any subsequent
+unexpected code change. This verifies the lifecycle logic but is not evidence
+from a new HYPER DEMON process.
+
+An offline Bubblewrap probe confirms its private Xvfb socket is reachable and
+that Wine can create a Win32 window there. Mesa llvmpipe exposes OpenGL 4.6;
+Vulkan reports no usable device. The prior DXVK failure belongs to the
+auxiliary `xalia.exe` process in the captured Proton log, while its SDL display
+exception is still unexplained. Neither observation proves why the game
+process exited. Since the game itself has not been shown to require Vulkan and
+the offline probes do not isolate a game-specific correction, no additional
+launch was performed.
 
 The Proton wrapper exited normally with status 0 after approximately 12
 seconds; the supervisor did not record its runtime-limit or operator-stop

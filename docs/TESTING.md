@@ -170,6 +170,8 @@ gameplay load remain unknown.
 
 Attempt 3 did execute `hyperdemon.exe`: the attach record identifies that image,
 the pinned image base and timestamp, and a process-scoped proxy run ID/PID.
+The proxy's own build manifest identifies its source revision as
+`ab9ddfd246b351786eac0073448d487d70276ca9`, before the current snapshot fix.
 The attach record says the dormant hook was installed. No intercepted callsite
 execution was observed. It also reports 8/9 post-bootstrap anchors with
 `call:record_loader` mismatched. This follows from the source lifecycle: the
@@ -191,6 +193,28 @@ show the copied game, Proton runtime, and prefix contained the observed writes;
 the source executable, archive, OpenAL files, and Proton launcher hashes
 remained unchanged. No fourth launch or replacement attempt is justified by
 this incomplete trace.
+
+The `ab9ddfd` proxy used by that run predates the fingerprint snapshot fix.
+The follow-up implementation keeps the initial complete anchor report as
+the baseline, checks every non-callsite anchor again in bootstrap, and checks
+the live five-byte callsite against the exact patch bytes stored by the call
+hook. `tools/build_windows.sh` builds
+`tests/fingerprint_transition_client.exe`; `tools/test_windows.sh` runs it under
+Wine. It verifies an initially supported synthetic image before and after the
+real callsite patcher runs, rejects an initially invalid image, and rejects
+post-install changes to either the patched call or another anchor.
+
+An offline graphics probe was run inside a private Bubblewrap mount/network/PID
+environment with its own Xvfb. `xdpyinfo` connected to the private X socket;
+`glxinfo -B` reported Mesa llvmpipe and OpenGL 4.6; and the existing Win32
+fixture created a visible window. `vulkaninfo` found no device in that sandbox.
+This establishes usable X11 and software OpenGL for the fixture, but not that
+HYPER DEMON itself initialized a renderer. The prior Proton log's DXVK error
+comes from the auxiliary Xalia process shown in the log (`Game: xalia.exe`),
+and its SDL `No displays available` exception remains unexplained by the
+successful probe. Neither has been tied to the game process exit. No new game
+launch was justified because the offline evidence does not identify a game
+startup correction.
 
 ## Managed callsite fixture (Windows x64 under Wine)
 

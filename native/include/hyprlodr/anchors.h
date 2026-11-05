@@ -44,4 +44,22 @@ int hyprlodr_anchors_verify(const uint8_t *image, size_t image_size,
                             const hyprlodr_anchor *anchors, size_t count,
                             hyprlodr_anchor_report *report);
 
+/* Verify every anchor except one exact RVA/length pair. Use only when the
+ * caller separately proves the authorized live bytes and retained a successful
+ * complete baseline report before changing that range. */
+int hyprlodr_anchors_verify_except(const uint8_t *image, size_t image_size,
+                                   const hyprlodr_anchor *anchors, size_t count,
+                                   uint32_t excluded_rva, uint32_t excluded_length,
+                                   hyprlodr_anchor_report *report);
+
+/* Validate the post-install image against a complete successful pre-hook
+ * report. Exactly one anchor may differ, and only when its live bytes equal
+ * the exact patch bytes supplied by the installed hook. */
+int hyprlodr_anchors_verify_hooked(const uint8_t *image, size_t image_size,
+                                   const hyprlodr_anchor *anchors, size_t count,
+                                   const hyprlodr_anchor_report *baseline,
+                                   uint32_t patch_rva, const uint8_t *patch_bytes,
+                                   uint32_t patch_length,
+                                   hyprlodr_anchor_report *live_report);
+
 #endif /* HYPRLODR_ANCHORS_H */

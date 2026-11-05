@@ -57,6 +57,7 @@ typedef struct {
     void *replacement;
     void *relay;
     unsigned char original_bytes[5];
+    unsigned char installed_bytes[5];
 } hyprlodr_call_hook;
 
 #define HYPRLODR_CALL_HOOK_INITIALIZER { 0 }
@@ -75,5 +76,9 @@ hyprlodr_call_hook_status hyprlodr_call_hook_install(
  * valid because neither callback nor relay is reclaimed. */
 void hyprlodr_call_hook_set_enabled(hyprlodr_call_hook *hook, int enabled);
 int hyprlodr_call_hook_is_enabled(const hyprlodr_call_hook *hook);
+
+/* Confirm that the live instruction still has the exact bytes installed by
+ * this hook. This is separate from the original executable fingerprint. */
+int hyprlodr_call_hook_site_matches(const hyprlodr_call_hook *hook);
 
 #endif
