@@ -637,9 +637,11 @@ active. The prior attempt's Xvfb display collision is also avoided by creating
 Xvfb inside the same private mount namespace with `-displayfd`.
 
 `tools/re/isolated_proton.py` stages a new copy of the verified game files,
-omits installed mods, user state, crash artifacts and captures, installs the
-current proxy plus the hash-verified shipped OpenAL runtime into that copy, and
-uses a fresh compatdata prefix. Proton itself is copied into the run as well,
+omits installed user mods, user state, crash artifacts and captures, and adds
+only the repository-built `z.foundation` diagnostic sample (host state,
+capability and log calls only). It installs the current proxy plus the
+hash-verified shipped OpenAL runtime into that copy and uses a fresh compatdata
+prefix. Proton itself is copied into the run as well,
 because its launcher writes a distribution lockfile; only relative symlinks
 that resolve within the Proton tree are allowed. A run is claimed before preflight and cannot be
 launched a second time; a new run ID is required after success or failure. The

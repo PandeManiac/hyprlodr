@@ -146,6 +146,10 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     required_caps = {"redirect-wait-v1", "build-identity-v1"}
     if not required_caps.issubset(set(proxy_identity.get("capabilities", []))):
         raise ValueError("proxy lacks required archive redirect and build identity capabilities")
+    diagnostic_mod = proxy.parent / "mods/z.foundation.dll"
+    if not diagnostic_mod.is_file() or \
+            sha256(diagnostic_mod) != proxy_identity.get("foundation_diagnostic_mod_sha256"):
+        raise ValueError("repository diagnostic mod does not match the clean proxy build identity")
     _validate_source_tree(source_game)
     proton_fixups = proton_root / "steampipe_fixups.json"
     proton_stamp = proton_root / "files/steampipe_fixups_mtime"
@@ -161,6 +165,7 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     (game / "OpenAL32.dll").write_bytes(proxy.read_bytes())
     shutil.copy2(original_openal, game / "OpenAL32_real.dll")
     (game / "mods").mkdir(exist_ok=True)
+    shutil.copy2(diagnostic_mod, game / "mods/z.foundation.dll")
     (game / "hyprlodr-config.json").write_text('{"delay_ms":0}\n', encoding="utf-8")
     if input_probe:
         probe = input_probe.resolve()
@@ -199,9 +204,12 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
         "copied_executable_sha256": sha256(game / "hyperdemon.exe"),
         "copied_archive_sha256": sha256(game / "asset/asset"),
         "proxy_sha256": sha256(game / "OpenAL32.dll"),
+        "diagnostic_mod_sha256": sha256(game / "mods/z.foundation.dll"),
+        "diagnostic_mod_id": "z.foundation",
+        "diagnostic_mod_source": "repository sample; host state/capability/log only",
         "original_openal_sha256": sha256(game / "OpenAL32_real.dll"),
         "proxy_source_revision": proxy_identity["source_revision"],
-        "replacement_routing": False, "mods_copied": False,
+        "replacement_routing": False, "user_mods_copied": False,
         "excluded_source_entries": sorted(IGNORED_NAMES | RUNTIME_NAMES)}
     (run_root / "stage.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
@@ -244,6 +252,10 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
             meta.get("copied_archive_sha256") == EXPECTED_ARCHIVE,
         "proxy_matches_build_identity": sha256(game / "OpenAL32.dll") == proxy_identity.get("proxy_sha256") and
             meta.get("proxy_sha256") == proxy_identity.get("proxy_sha256"),
+        "diagnostic_mod_matches_build_identity":
+            sha256(game / "mods/z.foundation.dll") ==
+            proxy_identity.get("foundation_diagnostic_mod_sha256") ==
+            meta.get("diagnostic_mod_sha256") and meta.get("diagnostic_mod_id") == "z.foundation",
         "proxy_built_from_current_clean_source": source_clean and
             proxy_identity.get("source_clean") is True and
             proxy_identity.get("source_revision") == source_revision == meta.get("proxy_source_revision"),

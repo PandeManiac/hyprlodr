@@ -118,11 +118,13 @@ python3 tools/re/isolated_proton.py stage \\
 ```
 
 The staging tool requires the exact supported executable and original archive,
-the shipped OpenAL hash, copies no installed mods or local game state, and
-refuses to reuse an existing run directory. The compatdata prefix must be
-empty before launch, and a permanent one-shot claim prevents a failed or
-completed prefix from being launched again. Review the generated run directory name, then run its preflight
-and launch commands:
+the shipped OpenAL hash, excludes installed user mods and local game state, and
+includes only the hash-verified repository `z.foundation` diagnostic sample
+(which registers host state/capability and logs without game hooks). It refuses
+to reuse an existing run directory. The compatdata prefix must be empty before
+launch, and a permanent one-shot claim prevents a failed or completed prefix
+from being launched again. Review the generated run directory name, then run
+its preflight and launch commands:
 
 ```sh
 RUN=".tmp/first-load-diagnostic/isolated/<run-id>"

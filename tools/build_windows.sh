@@ -286,6 +286,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     "$K32" "$U32" "$G32" "$OUT/lib/bcrypt.lib"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
   PROXY_SHA256="$(sha256sum "$OUT/OpenAL32.dll" | cut -d ' ' -f 1)"
+  FOUNDATION_DIAGNOSTIC_SHA256="$(sha256sum "$OUT/mods/z.foundation.dll" | cut -d ' ' -f 1)"
   HAND_MOD_SHA256="$(sha256sum "$OUT/examples/example.hand-hook.dll" | cut -d ' ' -f 1)"
   REDIRECT_MOD_SHA256="$(sha256sum "$OUT/examples/example.asset-redirect.dll" | cut -d ' ' -f 1)"
   cat > "$OUT/hyprlodr-proxy-build.json" <<EOF
@@ -294,6 +295,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   "source_revision": "$SOURCE_REVISION",
   "source_clean": $([ "$SOURCE_CLEAN" = 1 ] && echo true || echo false),
   "proxy_sha256": "$PROXY_SHA256",
+  "foundation_diagnostic_mod_sha256": "$FOUNDATION_DIAGNOSTIC_SHA256",
   "hand_capture_mod_sha256": "$HAND_MOD_SHA256",
   "asset_redirect_mod_sha256": "$REDIRECT_MOD_SHA256",
   "capabilities": ["redirect-wait-v1", "build-identity-v1"],

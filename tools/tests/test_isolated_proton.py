@@ -25,11 +25,15 @@ def fixture_tree(tmp_path: Path, monkeypatch):
     proxy, openal = tmp_path / "proxy.dll", tmp_path / "openal-real.dll"
     proxy.write_bytes(b"new verified proxy")
     openal.write_bytes(b"original OpenAL")
+    diagnostic_mod = tmp_path / "mods/z.foundation.dll"
+    diagnostic_mod.parent.mkdir()
+    diagnostic_mod.write_bytes(b"verified repository diagnostic plugin")
     source_revision = "fixture-source-revision"
     monkeypatch.setattr(isolated, "current_source_identity", lambda: (source_revision, True))
     (tmp_path / "hyprlodr-proxy-build.json").write_text(json.dumps({
         "schema": 1, "source_revision": source_revision, "source_clean": True,
         "proxy_sha256": hashlib.sha256(proxy.read_bytes()).hexdigest(),
+        "foundation_diagnostic_mod_sha256": hashlib.sha256(diagnostic_mod.read_bytes()).hexdigest(),
         "capabilities": ["redirect-wait-v1", "build-identity-v1"]}))
     proton = tmp_path / "Proton"
     proton.mkdir()
@@ -43,20 +47,24 @@ def fixture_tree(tmp_path: Path, monkeypatch):
     return sandbox, source, proton, proxy, openal, run
 
 
-def test_stages_mod_free_game_copy_and_proves_runtime_isolation(tmp_path, monkeypatch):
+def test_stages_game_copy_without_user_mods_and_proves_runtime_isolation(tmp_path, monkeypatch):
     if not __import__("shutil").which("bwrap"):
         pytest.skip("Bubblewrap is not installed")
     sandbox, source, proton, proxy, openal, run = fixture_tree(tmp_path, monkeypatch)
     manifest = isolated.stage(source, proton, proxy, openal, run)
     game = run / "game"
     assert manifest["replacement_routing"] is False
+    assert manifest["user_mods_copied"] is False
+    assert manifest["diagnostic_mod_id"] == "z.foundation"
     assert Path(manifest["proton_root"]).is_relative_to(run)
     assert (Path(manifest["proton_root"]) / "proton-alias").is_symlink()
     assert (game / "hyperdemon.exe").read_bytes() == (source / "hyperdemon.exe").read_bytes()
     assert (game / "asset/asset").read_bytes() == (source / "asset/asset").read_bytes()
     assert (game / "OpenAL32.dll").read_bytes() == proxy.read_bytes()
     assert (game / "OpenAL32_real.dll").read_bytes() == openal.read_bytes()
-    assert list((game / "mods").iterdir()) == []
+    assert [path.name for path in (game / "mods").iterdir()] == ["z.foundation.dll"]
+    assert (game / "mods/z.foundation.dll").read_bytes() == \
+        (proxy.parent / "mods/z.foundation.dll").read_bytes()
     assert not (game / "OST").exists()
     report = isolated.check_runtime(run, source)
     assert report["safe"] is True
