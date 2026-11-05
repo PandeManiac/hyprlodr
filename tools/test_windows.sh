@@ -328,6 +328,7 @@ PY
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" \
     "$OUT/obj/file_hook_timeout.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" \
     "$OUT/obj/callsite_hook.obj" "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+    "$OUT/obj/startup_diag.obj" \
     "$OUT/obj/route_manifest.obj" "$OUT/obj/crt_impl.obj" "$OUT/lib/kernel32.lib" \
     "$OUT/lib/user32.lib" "$OUT/lib/gdi32.lib" "$OUT/lib/bcrypt.lib"
   clang "${CFG[@]}" -DHYPRLODR_TEST_ASSET_OPEN_DELAY_MS=0 \

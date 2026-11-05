@@ -36,6 +36,7 @@
 
 #include "hypr_win32.h"
 #include "file_hook.h"
+#include "startup_diag.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -178,8 +179,14 @@ static void escape_into(char *destination, size_t capacity, const char *source) 
     destination[used] = '\0';
 }
 
+static int is_asset_archive_path(const char *name);
+
 static void record_open(const char *requested, const char *opened, const char *via, int redirected,
                         int ok) {
+    if (is_asset_archive_path(requested))
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_ARCHIVE_OPEN, 0u, 0u, 0u,
+            (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+            (redirected ? 1u : 0u) | (ok ? 2u : 0u), 0u, 0u, opened);
     HANDLE log = __atomic_load_n(&g_log, __ATOMIC_ACQUIRE);
     if (log == INVALID_HANDLE_VALUE) return;
     char requested_json[768];
@@ -263,6 +270,8 @@ static void wait_for_asset_redirects(const char *name) {
         return;
     DWORD started = GetTickCount();
     __atomic_add_fetch(&g_asset_waiters, 1u, __ATOMIC_RELAXED);
+    hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_ARCHIVE_WAIT, 0u, 0u, 0u,
+        (uint32_t)hyprlodr_file_hook_archive_gate_state(), 0u, 0u, 0u, name);
     record_redirect_wait(name, "begin", 0u);
     for (;;) {
         LONG gate_state = __atomic_load_n(&g_archive_gate_state, __ATOMIC_ACQUIRE);
@@ -307,6 +316,9 @@ void hyprlodr_file_hook_mark_redirects_ready(void) {
                                       HYPRLODR_ARCHIVE_GATE_READY, 0,
                                       __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
     __atomic_store_n(&g_redirects_ready, 1, __ATOMIC_RELEASE);
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_GATE_RELEASE, 0u, 0u, 0u,
+        (uint32_t)__atomic_load_n(&g_archive_gate_state, __ATOMIC_ACQUIRE), 0u,
+        0u, 0u, "redirect registry published or bootstrap failed");
 }
 
 int hyprlodr_file_hook_begin_route_activation(void) {
@@ -322,8 +334,12 @@ int hyprlodr_file_hook_complete_route_activation(void) {
                                     HYPRLODR_ARCHIVE_GATE_READY, 0,
                                     __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
         __atomic_store_n(&g_redirects_ready, 1, __ATOMIC_RELEASE);
+        hyprlodr_startup_diag_emit(HYPRLODR_DIAG_ROUTE_ACTIVATION, 0u, 0u, 0u,
+            HYPRLODR_ARCHIVE_GATE_READY, 1u, 0u, 0u, "enabled");
         return 1;
     }
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_ROUTE_ACTIVATION, 0u, 0u, 0u,
+        (uint32_t)expected, 0u, 0u, 0u, "activation aborted by archive fallback");
     return 0;
 }
 
@@ -338,6 +354,9 @@ volatile long *hyprlodr_file_hook_archive_gate_word(void) {
 
 /* Ask the published registry for a replacement path. Returns the path to open. */
 static const char *resolve_path(const char *name, char *buffer, int *redirected) {
+    if (is_asset_archive_path(name))
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_ARCHIVE_ATTEMPT, 0u, 0u, 0u,
+            (uint32_t)hyprlodr_file_hook_archive_gate_state(), 0u, 0u, 0u, name);
     wait_for_asset_redirects(name);
     /* Once a bounded wait has fallen back, keep the archive identity pinned
      * for the rest of the process. A later bootstrap publication must not make
@@ -663,6 +682,9 @@ int hyprlodr_file_hook_install_early(hyprlodr_loader *loader, const char *log_pa
         if (targets[index].patched) ++patched;
     g_installed = (int)patched;
     g_status = patched ? "installed_early_main_only" : "early_no_import_patched";
+    hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_FILE_HOOK, 0u, 0u, 0u,
+        (uint32_t)hyprlodr_file_hook_archive_gate_state(), patched ? 1u : 0u,
+        0u, 0u, g_status);
     return patched ? 0 : -1;
 }
 

@@ -558,6 +558,25 @@ The tool rejects truncated sections, non-finite positions/normals/UV0, and
 out-of-range indices. Extracted payloads and generated OBJ/Blend files are local
 game content and must not be committed.
 
+## First-load event capture
+
+`HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` enables a passive, bounded event recorder.
+The early proxy attach and intercepted loader callbacks only copy fixed-size
+records into a 128-entry static ring. The bootstrap worker creates
+`hyprlodr-startup.jsonl` and drains the ring; each JSONL event has a shared
+`seq`, monotonic process tick, thread ID, event kind, archive gate state, and
+the relevant resource tag/extent/route flags. The first archive open record
+includes the actual path selected. First loader-entry and return events retain
+the original descriptor values and parsed-object pointer. A drop marker means
+the trace is incomplete. This mode does not activate routing.
+
+The intended diagnostic run uses the original archive and
+`experimental_record_route: false`, so any `hand2` request passes through the
+original loader unchanged. The trace answers whether the first cold target
+request follows archive and route readiness; an absent target event is only
+meaningful if the first general callsite event and complete, non-overflowed
+trace establish that the instrumentation ran.
+
 ## Native replacement experiment (2026-11-03)
 
 A local proof archive was built under `.tmp/asset-proof/` by scaling every

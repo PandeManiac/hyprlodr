@@ -62,6 +62,7 @@ compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
 compile "$ROOT/native/src/record_route.c" "$OUT/obj/record_route.obj"
 compile "$ROOT/native/win32/callsite_hook.c" "$OUT/obj/callsite_hook.obj"
 compile "$ROOT/native/win32/record_route_hook.c" "$OUT/obj/record_route_hook.obj"
+compile "$ROOT/native/win32/startup_diag.c" "$OUT/obj/startup_diag.obj"
 compile "$ROOT/native/win32/route_manifest.c" "$OUT/obj/route_manifest.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
@@ -112,6 +113,7 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/tests/callsite_hook_client.exe" \
   "$OUT/obj/callsite_hook_client.obj" "$OUT/obj/callsite_hook.obj" \
   "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+  "$OUT/obj/startup_diag.obj" \
   "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 echo "== pre-entrypoint dormant hook fixture =="
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/tests/preentry_fixture_proxy.def" \
@@ -121,7 +123,8 @@ lld-link /nologo /dll /nodefaultlib /entry:startup_fixture_dllmain \
   "/out:$OUT/tests/hyprlodr_startup_fixture.dll" \
   /def:"$ROOT/native/win32/tests/preentry_fixture_proxy.def" \
   "$OUT/obj/preentry_fixture_proxy.obj" "$OUT/obj/callsite_hook.obj" \
-  "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" "$CRT_OBJ" "$K32"
+  "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+  "$OUT/obj/startup_diag.obj" "$CRT_OBJ" "$K32"
 "$CC" --target="$TARGET" -c "$ROOT/native/win32/tests/preentry_fixture_thunk.s" \
   -o "$OUT/obj/preentry_fixture_thunk.obj"
 compile "$ROOT/native/win32/tests/preentry_fixture_client.c" "$OUT/obj/preentry_fixture_client.obj"
@@ -156,7 +159,7 @@ lld-link /nologo /dll /nodefaultlib /entry:startup_file_fixture_dllmain \
   "/out:$OUT/tests/hyprlodr_startup_file_fixture.dll" \
   /def:"$ROOT/native/win32/tests/startup_file_fixture_proxy.def" \
   "$OUT/obj/startup_file_fixture_proxy.obj" "$OUT/obj/file_hook_fixture.obj" \
-  "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32"
+  "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$OUT/obj/startup_diag.obj" "$CRT_OBJ" "$K32"
 compile "$ROOT/native/win32/tests/startup_file_fixture_client.c" \
   "$OUT/obj/startup_file_fixture_client.obj"
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
@@ -267,6 +270,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     /def:"$OUT/OpenAL32.def" \
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" "$OUT/obj/file_hook.obj" \
     "$OUT/obj/callsite_hook.obj" "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+    "$OUT/obj/startup_diag.obj" \
     "$OUT/obj/route_manifest.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" \
     "$K32" "$U32" "$G32" "$OUT/lib/bcrypt.lib"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"

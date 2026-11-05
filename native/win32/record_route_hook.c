@@ -1,4 +1,5 @@
 #include "record_route_hook.h"
+#include "startup_diag.h"
 
 #include <string.h>
 
@@ -12,6 +13,31 @@ typedef struct {
 
 static hyprlodr_game_route_binding *volatile g_binding;
 static void *volatile g_original_target;
+
+static uint32_t record_u32(const void *record, size_t offset) {
+    uint32_t value = 0;
+    if (record) memcpy(&value, (const unsigned char *)record + offset, sizeof value);
+    return value;
+}
+
+static uint32_t binding_gate_state(const hyprlodr_game_route_binding *binding) {
+    volatile long *gate = binding ?
+        __atomic_load_n(&binding->activation_gate, __ATOMIC_ACQUIRE) : NULL;
+    return gate ? (uint32_t)__atomic_load_n(gate, __ATOMIC_ACQUIRE) : 0xffffffffu;
+}
+
+static uint32_t hand2_diag_flags(int hand2, uint32_t tag, uint32_t offset,
+                                 uint32_t size,
+                                 const hyprlodr_game_route_binding *binding,
+                                 int routed) {
+    uint32_t flags = hand2 ? 1u : 0u;
+    if (hand2 && tag == 1u && offset == 295758784u && size == 21972u) flags |= 2u;
+    if (hand2 && tag == 2u) flags |= 4u;
+    if (binding && __atomic_load_n(&binding->route, __ATOMIC_ACQUIRE)) flags |= 8u;
+    if (binding && binding->hook && hyprlodr_call_hook_is_enabled(binding->hook)) flags |= 16u;
+    if (routed) flags |= 32u;
+    return flags;
+}
 
 static int game_name_is_hand2(const void *name_object, char output[6]) {
     const unsigned char *object = (const unsigned char *)name_object;
@@ -65,6 +91,20 @@ void hyprlodr_record_route_hook_publish_route(
 static uintptr_t invoke_original(void *context, void *record,
                                  const void *name_object, uint32_t flags) {
     original_call *call = (original_call *)context;
+    if (hyprlodr_startup_diag_enabled()) {
+        char name[6];
+        if (game_name_is_hand2(name_object, name)) {
+            uint32_t tag = record_u32(record, HYPRLODR_RECORD_TAG_FIELD);
+            uint32_t offset = record_u32(record, HYPRLODR_RECORD_OFFSET_FIELD);
+            uint32_t size = record_u32(record, HYPRLODR_RECORD_SIZE_FIELD);
+            hyprlodr_game_route_binding *binding =
+                __atomic_load_n(&g_binding, __ATOMIC_ACQUIRE);
+            hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_HAND2_LOADER_CALL,
+                tag, offset, size, binding_gate_state(binding),
+                hand2_diag_flags(1, tag, offset, size, binding, 0), 0u, 0u,
+                "original loader entered");
+        }
+    }
     return call->function(call->game_context, record, name_object, flags);
 }
 
@@ -78,6 +118,37 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
     const hyprlodr_record_route *route = NULL;
     uintptr_t result;
     void *original_target = __atomic_load_n(&g_original_target, __ATOMIC_ACQUIRE);
+    int diag = hyprlodr_startup_diag_enabled();
+    int hand2 = 0;
+    int first_hand2 = 0;
+    uint32_t original_offset = 0, original_size = 0, tag = 0;
+    int route_can_run = binding && binding->hook &&
+                        hyprlodr_call_hook_is_enabled(binding->hook);
+    if (diag || route_can_run) {
+        if (diag) {
+            original_offset = record_u32(record, HYPRLODR_RECORD_OFFSET_FIELD);
+            original_size = record_u32(record, HYPRLODR_RECORD_SIZE_FIELD);
+            tag = record_u32(record, HYPRLODR_RECORD_TAG_FIELD);
+            hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_FIRST_CALLSITE,
+                tag, original_offset, original_size, binding_gate_state(binding),
+                0u, 0u, 0u, "first intercepted loader callsite invocation");
+        }
+        hand2 = game_name_is_hand2(name_object, requested_name);
+    }
+    if (diag) {
+      if (hand2) {
+        first_hand2 = 1;
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_FIRST_HAND2,
+            tag, original_offset, original_size, binding_gate_state(binding),
+            hand2_diag_flags(hand2, tag, original_offset, original_size, binding, 0),
+            0u, 0u, "first exact hand2 name request");
+        if (tag == 1u && original_offset == 295758784u && original_size == 21972u)
+            hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_FIRST_TARGET,
+                tag, original_offset, original_size, binding_gate_state(binding),
+                hand2_diag_flags(hand2, tag, original_offset, original_size, binding, 0),
+                0u, 0u, "verified original tag-1 hand2 resolver metadata");
+      }
+    }
     if (binding && binding->hook && binding->hook->original_target)
         original_target = binding->hook->original_target;
     /* Installation publishes this target before modifying the call instruction.
@@ -86,18 +157,53 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
     original = (game_loader_fn)original_target;
     call.function = original;
     call.game_context = context;
-    if (!binding || !binding->hook || !hyprlodr_call_hook_is_enabled(binding->hook))
-        return original(context, record, name_object, flags);
+    if (!binding || !binding->hook || !hyprlodr_call_hook_is_enabled(binding->hook)) {
+        result = invoke_original(&call, record, name_object, flags);
+        goto report_hand2;
+    }
     volatile long *gate = __atomic_load_n(&binding->activation_gate, __ATOMIC_ACQUIRE);
-    if (gate && __atomic_load_n(gate, __ATOMIC_ACQUIRE) != 1l)
-        return original(context, record, name_object, flags);
+    if (gate && __atomic_load_n(gate, __ATOMIC_ACQUIRE) != 1l) {
+        result = invoke_original(&call, record, name_object, flags);
+        goto report_hand2;
+    }
     route = __atomic_load_n(&binding->route, __ATOMIC_ACQUIRE);
-    if (!game_name_is_hand2(name_object, requested_name) || !route)
-        return original(context, record, name_object, flags);
+    if (!hand2 || !route) {
+        result = invoke_original(&call, record, name_object, flags);
+        goto report_hand2;
+    }
     hyprlodr_route_status status = hyprlodr_record_route_invoke(
         record, HYPRLODR_GAME_RECORD_SIZE, requested_name, route,
         invoke_original, &call, name_object, flags, &result);
-    if (status == HYPRLODR_ROUTE_BAD_ARGUMENT || status == HYPRLODR_ROUTE_BAD_MANIFEST)
-        return original(context, record, name_object, flags);
+    if (status == HYPRLODR_ROUTE_BAD_ARGUMENT || status == HYPRLODR_ROUTE_BAD_MANIFEST) {
+        result = invoke_original(&call, record, name_object, flags);
+        status = HYPRLODR_ROUTE_PASSTHROUGH;
+    }
+    if (hand2) {
+        uintptr_t object = 0;
+        if (record) {
+            memcpy(&object, (const unsigned char *)record + HYPRLODR_RECORD_OBJECT_FIELD,
+                   sizeof object);
+        }
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_HAND2_LOADER_RETURN,
+            tag, original_offset, original_size, binding_gate_state(binding),
+            hand2_diag_flags(hand2, tag, original_offset, original_size, binding,
+                             status == HYPRLODR_ROUTE_APPLIED) | (object ? 64u : 0u),
+            result, object, object ? "original loader returned parsed object" :
+                                     "original loader returned without parsed object");
+    }
+    return result;
+
+report_hand2:
+    if (first_hand2) {
+        uintptr_t object = 0;
+        if (record) memcpy(&object,
+            (const unsigned char *)record + HYPRLODR_RECORD_OBJECT_FIELD, sizeof object);
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_HAND2_LOADER_RETURN,
+            tag, original_offset, original_size, binding_gate_state(binding),
+            hand2_diag_flags(hand2, tag, original_offset, original_size, binding, 0) |
+                (object ? 64u : 0u), result, object,
+            object ? "original loader returned parsed object" :
+                     "original loader returned without parsed object");
+    }
     return result;
 }

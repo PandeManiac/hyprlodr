@@ -53,6 +53,20 @@ fixtures prove the synthetic import, timeout fallback and route gating under
 Wine; they do not prove every game resource lookup follows the archive-open
 path or that the first cold `hand2` lookup occurs after activation.
 
+## Passive first-load diagnostics
+
+Set `HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` for one explicitly opted-in run. The
+proxy stores attach-time, first archive attempt/wait/open, gate release,
+bootstrap/preflight/redirect/activation, first callsite, first `hand2`, exact
+tag-1 target, original loader entry, and first loader return in a fixed 128
+record process ring. The worker writes `hyprlodr-startup.jsonl` after attach
+returns and drains the ring. Sort by `seq`, not timestamps across files;
+`t_ms` is a monotonic `GetTickCount` sample and `thread` is the Windows thread
+ID. A `diagnostic_events_dropped` record invalidates completeness. No event
+from the loader callback is formatted or written to disk. This diagnostic mode
+does not enable route validation or replacement by itself; the ordinary
+configuration remains authoritative.
+
 ## Managed callsite fixture (Windows x64 under Wine)
 
 `tools/build_windows.sh` builds `tests/callsite_hook_client.exe` from the same

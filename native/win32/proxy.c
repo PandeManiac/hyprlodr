@@ -23,6 +23,7 @@
 #include "route_manifest.h"
 #include "callsite_hook.h"
 #include "record_route_hook.h"
+#include "startup_diag.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -40,6 +41,7 @@ static DWORD g_delay_ms = HYPRLODR_BOOTSTRAP_DELAY_MS;
 static int g_record_route_requested;
 static char g_record_route_status[64] = "disabled";
 static int g_early_hook_requested;
+static int g_startup_diag_requested;
 static char g_early_hook_status[64] = "not_requested";
 static hyprlodr_manifest_result g_route_manifest;
 static hyprlodr_call_hook g_route_call_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
@@ -356,6 +358,13 @@ static int bootstrap_record_route_requested(void) {
     return requested;
 }
 
+static int startup_diag_requested(void) {
+    char value[8];
+    DWORD length = GetEnvironmentVariableA("HYPRLODR_FIRST_LOAD_DIAGNOSTICS",
+                                           value, (DWORD)sizeof value);
+    return length == 1u && value[0] == '1';
+}
+
 /* This switch is intentionally separate from the ordinary config. It opts in
  * only to a dormant pre-entry hook; the worker config and validated manifest
  * remain authoritative for route activation. */
@@ -578,6 +587,13 @@ static void write_attach_record(const char *stage, int status) {
 static DWORD WINAPI bootstrap(LPVOID unused) {
     (void)unused;
 
+    char startup_log[1024];
+    snprintf(startup_log, sizeof startup_log, "%s\\hyprlodr-startup.jsonl", g_game_dir);
+    (void)hyprlodr_startup_diag_start(startup_log);
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_BOOTSTRAP_START, 0u, 0u, 0u,
+                               (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+                               0u, 0u, 0u, "bootstrap worker started");
+
     /* Evidence and build identity first. A game that exits during start-up can
      * still prove which executable ran and whether it matches the analysis; the
      * mod start-up delay below is about the game being ready, not about us. */
@@ -601,6 +617,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     if (!g_loader) {
         write_attach_record("no_memory", HYPRLODR_ERR_LIMIT);
         hyprlodr_file_hook_mark_redirects_ready();
+        hyprlodr_startup_diag_pump();
         return 0;
     }
     if (hyprlodr_loader_set_log(g_loader, log_path) != HYPRLODR_OK) {
@@ -608,6 +625,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
         hyprlodr_loader_destroy(g_loader);
         g_loader = NULL;
         hyprlodr_file_hook_mark_redirects_ready();
+        hyprlodr_startup_diag_pump();
         return 0;
     }
     hyprlodr_loader_add_dir(g_loader, mods_dir);
@@ -624,6 +642,11 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
                         g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
                         g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
     preflight_record_route(build_matches);
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_ROUTE_PREFLIGHT, 0u, 0u, 0u,
+        (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+        (g_record_route_requested ? 1u : 0u) |
+            (g_route_binding.route ? 2u : 0u),
+        0u, 0u, g_record_route_status);
     hyprlodr_image image;
     image.base = g_module.base;
     image.size = (size_t)g_module.size_of_image;
@@ -667,6 +690,14 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
 
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);
+
+    char redirect_count_text[64];
+    snprintf(redirect_count_text, sizeof redirect_count_text,
+             "loader status=%d redirects=%lu", status,
+             (unsigned long)hyprlodr_loader_redirect_count(g_loader));
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_REDIRECT_PUBLICATION, 0u, 0u, 0u,
+        (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+        status == HYPRLODR_OK ? 1u : 0u, 0u, 0u, redirect_count_text);
 
     /* The asset-open shim still holds the first archive open. Activate only
      * after manifest validation and publication of the matching archive
@@ -724,11 +755,16 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * failed. The file shim then proceeds with the original path instead of
      * holding the game thread indefinitely. */
     hyprlodr_file_hook_mark_redirects_ready();
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_ROUTE_ACTIVATION, 0u, 0u, 0u,
+        (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+        strcmp(g_record_route_status, "route_enabled") == 0 ? 1u : 0u,
+        0u, 0u, g_record_route_status);
 
     /* The loader's own cap is internal; asking for more ids than it can hold is
      * harmless and keeps this call free of a private constant. */
 
     write_attach_record(status == HYPRLODR_OK ? "mods_loaded" : "mods_failed", status);
+    hyprlodr_startup_diag_pump();
     return 0;
 }
 
@@ -741,8 +777,14 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         trim_filename(g_game_dir);
         snprintf(g_evidence_path, sizeof g_evidence_path, "%s\\hyprlodr-attach.json", g_game_dir);
         DisableThreadLibraryCalls((HMODULE)instance);
+        g_startup_diag_requested = startup_diag_requested();
+        hyprlodr_startup_diag_enable(g_startup_diag_requested);
         g_early_hook_requested = early_record_route_requested();
         install_early_dormant_route_hook(reserved);
+        hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_EARLY_HOOK, 0u, 0u, 0u,
+            (uint32_t)hyprlodr_file_hook_archive_gate_state(),
+            g_route_call_hook.installed ? 1u : 0u,
+            0u, 0u, g_early_hook_status);
         /* Chain, do not replace: Steam's crash handler stays in charge. */
         g_previous_filter = SetUnhandledExceptionFilter(hyprlodr_crash_filter);
         /* Patch the executable's own import slots *now*: hyperdemon.exe opens its
@@ -767,6 +809,7 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
             hyprlodr_file_hook_mark_redirects_ready();
         }
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
+        hyprlodr_startup_diag_request_stop();
         if (g_loader) {
             hyprlodr_loader_shutdown(g_loader);
             hyprlodr_loader_destroy(g_loader);
