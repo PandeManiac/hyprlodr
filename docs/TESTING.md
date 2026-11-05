@@ -93,9 +93,64 @@ Missing instrumentation, mismatched identities, sequence gaps, overflow, or a
 missing callsite event leave resource absence classified as unknown. The deployment
 preflight in `tools/re/first_load_diagnostics.py preflight` requires the game
 copy, Proton compatdata, HOME, temp/cache, and Steam state roots under
-`.tmp/first-load-diagnostic/isolated`, rejects symlinked writable roots and
-the installed game tree, and fails while a Steam client process is active.
-Do not launch if this check fails.
+`.tmp/first-load-diagnostic/isolated`, rejects symlinked and hard-linked files,
+and runs an active Bubblewrap proof. The proof checks private PID/network
+namespaces, no default network route, host abstract-socket inaccessibility,
+read-only host mounts, and isolated `/tmp`, `/run`, HOME, and writable mounts.
+Active Steam PIDs are recorded as context; they are not a veto when the runtime
+is proven inaccessible to the game process.
+
+For a disposable offline Proton diagnostic, build the proxy against the
+installed original OpenAL runtime, then stage into a fresh run directory:
+
+```sh
+TASK_TMP="$PWD/.tmp"
+mkdir -p "$TASK_TMP"
+export TMPDIR="$TASK_TMP" TMP="$TASK_TMP" TEMP="$TASK_TMP"
+GAME="$HOME/.local/share/Steam/steamapps/common/hyperdemon"
+PROTON="$HOME/.local/share/Steam/steamapps/common/Proton - Experimental"
+tools/build_windows.sh .tmp/build-win "$GAME/OpenAL32_real.dll"
+python3 tools/re/isolated_proton.py stage \\
+  --source-game "$GAME" --proton "$PROTON" \\
+  --proxy .tmp/build-win/OpenAL32.dll \\
+  --original-openal "$GAME/OpenAL32_real.dll" \\
+  --run-id "first-load-$(date +%Y%m%d-%H%M%S)"
+```
+
+The staging tool requires the exact supported executable and original archive,
+the shipped OpenAL hash, copies no installed mods or local game state, and
+refuses to reuse an existing run directory. The compatdata prefix must be
+empty before launch, and a permanent one-shot claim prevents a failed or
+completed prefix from being launched again. Review the generated run directory name, then run its preflight
+and launch commands:
+
+```sh
+RUN=".tmp/first-load-diagnostic/isolated/<run-id>"
+python3 tools/re/isolated_proton.py preflight --run "$RUN" --source-game "$GAME"
+python3 tools/re/isolated_proton.py launch --run "$RUN" --source-game "$GAME"
+```
+
+The runner invokes the installed Proton `run` verb with the game copy, a fresh
+compatdata prefix, sanitized environment, and a private Bubblewrap network,
+PID, mount, HOME, `/run`, and `/tmp` view. Xvfb starts inside that same private
+view with a dynamically reserved display and remains alive until the game
+exits. Proton's `WINEPREFIX` is fixed to that run's prefix; on timeout, only
+the owned Proton process group and that prefix's wineserver are stopped. The
+outer Bubblewrap process also receives a sanitized environment, so the game
+does not inherit host Steam or preload variables. `snapshot`, `enter`, and `click-enter` may be sent to the running
+diagnostic session; input is delivered only through the existing Win32 probe
+and only to a matching HYPER DEMON window. The app ID is read from the verified
+installation. The runner does not provide Steam authentication; an offline
+startup or license failure is reported without connecting to the active Steam
+client. Network isolation also prevents Cloud synchronization.
+
+The runner creates `preflight.json`, `launch-environment.json`,
+`prelaunch-inventory.json`, `postlaunch-inventory.json`, and a coverage report
+under the run's `evidence/`. `postlaunch-inventory.json` records created,
+modified, and deleted paths in the disposable tree and checks the original
+executable/archive hashes again. A complete process trace is not a gameplay
+trace: if gameplay was not reached, absence of a hand load applies only to
+that process run.
 
 ## Managed callsite fixture (Windows x64 under Wine)
 

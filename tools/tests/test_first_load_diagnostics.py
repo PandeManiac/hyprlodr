@@ -56,6 +56,25 @@ def test_missing_target_is_unknown_until_complete_callsite_coverage(tmp_path):
     assert report["conclusions"]["tag1_hand2_request"] == "unknown_incomplete_coverage"
 
 
+def test_no_target_conclusion_is_limited_to_observed_process_not_later_gameplay(tmp_path):
+    run_id = "0000000100000002"
+    base = {"run_id": run_id, "pid": 1}
+    startup, files, attach = (tmp_path / "startup.jsonl", tmp_path / "files.jsonl",
+                              tmp_path / "attach.json")
+    write_jsonl(startup, [
+        {**base, "seq": 1, "event": "first_loader_callsite"},
+        {**base, "seq": 2, "event": "bootstrap_start"},
+        {**base, "seq": 3, "event": "diagnostic_writer_status", "flags": 2},
+    ])
+    write_jsonl(files, [])
+    attach.write_text(json.dumps({**base, "diagnostics_requested": True,
+        "diagnostic_events_dropped": 0}))
+    report = diag.build_coverage(startup, files, attach, process_exited=True)
+    assert report["conclusions"]["tag1_hand2_request"] == \
+           "not_observed_during_instrumented_process"
+    assert report["observation_scope"]["gameplay_trace_complete"] is False
+
+
 def test_coverage_rejects_mixed_run_ids(tmp_path):
     startup, files, attach = (tmp_path / "startup.jsonl", tmp_path / "files.jsonl",
                               tmp_path / "attach.json")
@@ -97,10 +116,13 @@ def isolated_tree(tmp_path: Path):
     game = sandbox / "game"
     (game / "hyperdemon.exe").parent.mkdir(parents=True)
     (game / "hyperdemon.exe").write_bytes(b"fixture")
-    return sandbox, game, sandbox / "compatdata", sandbox / "home", sandbox / "temp", sandbox / "steam"
+    roots = [sandbox / name for name in ("compatdata", "home", "temp", "steam")]
+    for root in roots:
+        root.mkdir(parents=True)
+    return sandbox, game, *roots
 
 
-def test_preflight_accepts_only_disposable_roots_and_rejects_active_steam(tmp_path, monkeypatch):
+def test_preflight_accepts_private_namespaces_while_recording_active_steam(tmp_path, monkeypatch):
     sandbox, game, compat, home, temp, steam_state = isolated_tree(tmp_path)
     source = tmp_path / "installed-game"
     source.mkdir()
@@ -113,12 +135,16 @@ def test_preflight_accepts_only_disposable_roots_and_rejects_active_steam(tmp_pa
     result = diag.validate_isolated_paths(sandbox, game, compat, home, temp,
                                           steam_state, source, proc)
     assert result["safe"] is True
+    assert result["isolation"]["verified"] is True
+    assert result["isolation"]["checks"]["host_abstract_ipc_unreachable"] is True
     (proc / "102").mkdir()
     (proc / "102/comm").write_text("steam\n")
     (proc / "102/cmdline").write_bytes(b"steam\0")
-    with pytest.raises(ValueError, match="Steam client is active"):
-        diag.validate_isolated_paths(sandbox, game, compat, home, temp,
-                                     steam_state, source, proc)
+    result = diag.validate_isolated_paths(sandbox, game, compat, home, temp,
+                                          steam_state, source, proc)
+    assert result["safe"] is True
+    assert result["active_steam_pids"] == [102]
+    assert "blocked" in result["steam_cloud"]
 
 
 def test_preflight_rejects_installed_game_tree_and_symlinked_writable_root(tmp_path, monkeypatch):
@@ -134,3 +160,29 @@ def test_preflight_rejects_installed_game_tree_and_symlinked_writable_root(tmp_p
     with pytest.raises(ValueError, match="must not be a symlink"):
         diag.validate_isolated_paths(sandbox, game, compat, link, temp,
             steam_state, tmp_path / "source", proc)
+
+
+def test_writable_hardlinks_are_rejected(tmp_path):
+    sandbox = tmp_path / "sandbox"
+    game, temp = sandbox / "game", sandbox / "temp"
+    game.mkdir(parents=True)
+    temp.mkdir()
+    original = game / "original.bin"
+    original.write_bytes(b"private")
+    (temp / "linked.bin").hardlink_to(original)
+    with pytest.raises(ValueError, match="hard-linked file"):
+        diag.reject_external_links({"game": game, "temp": temp}, sandbox)
+
+
+def test_bubblewrap_probe_proves_private_namespaces_and_host_ipc_isolation(tmp_path):
+    import shutil
+    if not shutil.which("bwrap"):
+        pytest.skip("Bubblewrap is not installed")
+    sandbox = tmp_path / "sandbox"
+    home = sandbox / "home"
+    home.mkdir(parents=True)
+    report = diag.probe_bubblewrap_isolation(sandbox, home)
+    assert report["verified"] is True
+    assert all(value is True for key, value in report["checks"].items()
+               if key != "unexpected_writable_mounts")
+    assert report["checks"]["unexpected_writable_mounts"] == []

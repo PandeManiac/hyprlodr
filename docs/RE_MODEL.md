@@ -628,13 +628,30 @@ review at `.tmp/first-load-diagnostic/evidence/first-attempt/coverage-review.jso
 confirms the original `asset/asset` open in the file log, but correctly marks
 hook execution and tag-1 `hand2` ordering unknown.
 
-No second launch was made. The preflight rejected launch because Steam was
-active; Xvfb `:99` was unavailable and network namespace isolation was denied.
-Game files, Proton compatdata, HOME, temporary/cache state, and Steam state
-must now all be rooted in `.tmp/first-load-diagnostic/isolated`; symlinked
-writable roots and the installed game tree are rejected. This avoids changing
-the existing profile or relying on an incomplete restoration journal. No
-variable-size replacement was attempted.
+No second launch was made. The earlier preflight treated any active Steam
+process as a veto, while the actual requirement is preventing IPC, Cloud, and
+filesystem access. A new Bubblewrap probe can establish a private PID/network
+namespace, no default route, inaccessible host abstract sockets, read-only
+host filesystems, and disposable HOME/`/tmp`/`/run` mounts while Steam remains
+active. The prior attempt's Xvfb display collision is also avoided by creating
+Xvfb inside the same private mount namespace with `-displayfd`.
+
+`tools/re/isolated_proton.py` stages a new copy of the verified game files,
+omits installed mods, user state, crash artifacts and captures, installs the
+current proxy plus the hash-verified shipped OpenAL runtime into that copy, and
+uses a fresh compatdata prefix. A run is claimed before preflight and cannot be
+launched a second time; a new run ID is required after success or failure. The
+original game directory and archive are never deployment targets. The game
+process has no Steam client IPC or network route; it receives the real app ID
+read from the installed game's manifest but no Steam credentials or ownership
+spoof. If HYPER DEMON requires an authenticated client for initialization, the
+isolated diagnostic can stop there. Cloud sync cannot occur in this mode. Each
+run has a preflight JSON, launch environment, pre/post file inventories, and a
+process-scoped event report. The Proton child uses the disposable `WINEPREFIX`
+and is terminated as an owned process group on timeout. A startup trace does
+not claim gameplay coverage; absent `hand2` requests are limited to the
+observed process lifetime and do not prove the model would not load later.
+No variable-size replacement is enabled by this runner.
 
 ## Native replacement experiment (2026-11-03)
 

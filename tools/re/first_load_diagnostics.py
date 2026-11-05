@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
+import os
 from pathlib import Path
+import secrets
+import shutil
+import socket
+import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -159,10 +165,10 @@ def build_coverage(startup: Path, files: Path, attach: Path,
                               route_rows[-1] if route_rows else None),
         "conclusions": {
             "hand2_request": ("observed" if hand2_rows else
-                              "not_observed_with_complete_coverage" if complete and callsite_seen else
+                              "not_observed_during_instrumented_process" if complete and callsite_seen else
                               "unknown_incomplete_coverage"),
             "tag1_hand2_request": ("observed" if target_rows else
-                                   "not_observed_with_complete_coverage" if complete and callsite_seen else
+                                   "not_observed_during_instrumented_process" if complete and callsite_seen else
                                    "unknown_incomplete_coverage"),
             "first_tag1_request_after_archive_open": (
                 target_rows[0]["seq"] > archive_rows[0]["seq"]
@@ -178,6 +184,15 @@ def build_coverage(startup: Path, files: Path, attach: Path,
                 enabled_route_rows and target_rows[0]["seq"] > enabled_route_rows[-1]["seq"] and
                 target_calls[0]["seq"] > enabled_route_rows[-1]["seq"] and
                 target_calls[0].get("flags", 0) & 32),
+        },
+        "observation_scope": {
+            "process_exited": process_exited,
+            "startup_event_stream_complete": complete,
+            "intercepted_loader_execution_observed": callsite_seen,
+            "intercepted_loader_observation_complete_for_this_process": bool(complete and callsite_seen),
+            "gameplay_state_instrumented": False,
+            "gameplay_trace_complete": False,
+            "absence_conclusion_scope": "this instrumented process only; no inference about later gameplay or a fresh process",
         },
         "raw_event_timeline": rows,
     }
@@ -202,11 +217,168 @@ def live_steam_processes(proc_root: Path = Path("/proc")) -> list[int]:
     return sorted(found)
 
 
+def probe_bubblewrap_isolation(sandbox: Path, home: Path,
+                               bwrap: str | Path | None = None) -> dict:
+    """Prove the exact namespace and mount controls used by the offline runner.
+
+    This probe is intentionally active: it creates a private abstract Unix
+    socket in the parent, then confirms a child in the isolated network
+    namespace cannot connect to it. It also checks namespace identities,
+    read-only host root, private /tmp and /run, the bound HOME, and that the
+    sole persistent writable bind is the disposable sandbox.
+    """
+    executable = str(bwrap or shutil.which("bwrap") or "")
+    if not executable or not Path(executable).is_file():
+        raise ValueError("Bubblewrap is unavailable; cannot prove process and network isolation")
+    sandbox, home = sandbox.resolve(), home.resolve()
+    if not sandbox.is_dir() or not home.is_dir() or not inside(home, sandbox):
+        raise ValueError("Bubblewrap probe requires an existing isolated sandbox and HOME")
+
+    username = Path.home().name
+    home_mount = f"/home/{username}"
+    socket_name = "hyprlodr-probe-" + secrets.token_hex(12)
+    host_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        host_socket.bind("\0" + socket_name)
+        host_socket.listen(1)
+        control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        control.connect("\0" + socket_name)
+        accepted, _ = host_socket.accept()
+        accepted.close()
+        control.close()
+    except OSError as error:
+        host_socket.close()
+        raise ValueError(f"cannot establish host IPC isolation probe: {error}") from error
+
+    code = r'''import errno, json, os, socket, sys
+expected_home = tuple(map(int, sys.argv[2:4]))
+result = {}
+result["network_namespace_private"] = os.stat("/proc/self/ns/net").st_ino != int(sys.argv[1])
+result["pid_namespace_private"] = os.stat("/proc/self/ns/pid").st_ino != int(sys.argv[4])
+mounts = open("/proc/self/mountinfo", encoding="utf-8").read().splitlines()
+def mount_at(path):
+    for line in mounts:
+        fields = line.split()
+        if len(fields) > 6 and fields[4] == path:
+            return fields
+    return None
+root = mount_at("/")
+result["host_root_read_only"] = bool(root and "ro" in root[5].split(","))
+result["tmp_private_tmpfs"] = bool((m := mount_at("/tmp")) and "tmpfs" in m)
+result["run_private_tmpfs"] = bool((m := mount_at("/run")) and "tmpfs" in m)
+routes = open("/proc/net/route", encoding="ascii").read().splitlines()[1:]
+result["no_default_network_route"] = not any(
+    row.split()[1] == "00000000" for row in routes if len(row.split()) > 1)
+allowed_rw_binds = {"/tmp/hyprlodr", sys.argv[5]}
+ephemeral_types = {"tmpfs", "proc", "devpts", "mqueue", "devtmpfs"}
+unexpected_rw = []
+for line in mounts:
+    fields = line.split()
+    if len(fields) < 10 or "rw" not in fields[5].split(","):
+        continue
+    separator = fields.index("-")
+    mountpoint, fstype = fields[4], fields[separator + 1]
+    ephemeral_path = mountpoint in ("/dev", "/proc", "/run", "/tmp") or any(
+        mountpoint.startswith(prefix + "/") for prefix in ("/dev", "/proc", "/run", "/tmp"))
+    if mountpoint in allowed_rw_binds or (ephemeral_path and fstype in ephemeral_types):
+        continue
+    unexpected_rw.append(mountpoint)
+result["persistent_writes_confined"] = not unexpected_rw
+result["unexpected_writable_mounts"] = unexpected_rw
+home_stat = os.stat(sys.argv[5])
+bound_home_stat = os.stat(sys.argv[6])
+result["home_bound_to_disposable"] = ((home_stat.st_dev, home_stat.st_ino) == expected_home and
+    (bound_home_stat.st_dev, bound_home_stat.st_ino) == expected_home)
+try:
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(0.5)
+    client.connect("\0" + sys.argv[7])
+    result["host_abstract_ipc_unreachable"] = False
+except OSError as error:
+    result["host_abstract_ipc_unreachable"] = error.errno in (errno.ENOENT, errno.ECONNREFUSED)
+try:
+    with open("/var/tmp/.hyprlodr-readonly-probe", "xb"):
+        pass
+    os.unlink("/var/tmp/.hyprlodr-readonly-probe")
+    result["host_filesystem_read_only"] = False
+except OSError as error:
+    result["host_filesystem_read_only"] = error.errno == errno.EROFS
+probe = sys.argv[8]
+with open(probe, "w", encoding="ascii") as stream:
+    stream.write("sandbox writable\n")
+result["sandbox_writable"] = open(probe, encoding="ascii").read().strip() == "sandbox writable"
+print(json.dumps(result, sort_keys=True))
+'''
+    host_net = os.stat("/proc/self/ns/net").st_ino
+    host_pid = os.stat("/proc/self/ns/pid").st_ino
+    home_stat = home.stat()
+    probe_file = sandbox / "isolation-probe.txt"
+    bwrap_args = [executable, "--die-with-parent", "--new-session",
+        "--unshare-net", "--unshare-pid", "--ro-bind", "/", "/",
+        "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/run",
+        "--tmpfs", "/tmp", "--dir", "/tmp/hyprlodr",
+        "--bind", str(sandbox), "/tmp/hyprlodr",
+        "--bind", str(home), home_mount, "--", sys.executable, "-c", code,
+        str(host_net), str(home_stat.st_dev), str(home_stat.st_ino), str(host_pid),
+        home_mount, "/tmp/hyprlodr/" + str(home.relative_to(sandbox)),
+        socket_name, "/tmp/hyprlodr/isolation-probe.txt"]
+    try:
+        completed = subprocess.run(bwrap_args, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=15, close_fds=True, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ValueError(f"Bubblewrap isolation probe failed: {error}") from error
+    finally:
+        host_socket.close()
+        probe_file.unlink(missing_ok=True)
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ValueError(f"Bubblewrap isolation probe exited {completed.returncode}: {detail}")
+    try:
+        evidence = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, IndexError) as error:
+        raise ValueError("Bubblewrap isolation probe returned no machine-readable evidence") from error
+    required = ("network_namespace_private", "no_default_network_route",
+        "pid_namespace_private", "host_root_read_only", "tmp_private_tmpfs",
+        "run_private_tmpfs", "persistent_writes_confined", "home_bound_to_disposable",
+        "host_abstract_ipc_unreachable", "host_filesystem_read_only", "sandbox_writable")
+    failed = [name for name in required if evidence.get(name) is not True]
+    if failed:
+        raise ValueError("Bubblewrap isolation guarantees not proven: " + ", ".join(failed))
+    return {"verified": True, "mechanism": "bubblewrap_private_pid_network_mount_namespaces",
+            "checks": evidence}
+
+
+def inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def reject_external_links(paths: dict[str, Path], sandbox: Path) -> None:
+    roots = list(paths.items())
+    for index, (left_name, left) in enumerate(roots):
+        for right_name, right in roots[index + 1:]:
+            if left == right or inside(left, right) or inside(right, left):
+                raise ValueError(f"writable roots overlap: {left_name} and {right_name}")
+        if left.is_symlink():
+            raise ValueError(f"{left_name} must not be a symlink: {left}")
+        for child in [left, *left.rglob("*")] if left.exists() else []:
+            if child.is_symlink():
+                raise ValueError(f"symlink in isolated writable tree: {child}")
+            if child.is_file() and child.stat().st_nlink != 1:
+                raise ValueError(f"hard-linked file in isolated writable tree: {child}")
+            if child.exists() and not inside(child, sandbox):
+                raise ValueError(f"writable path escapes isolated sandbox: {child}")
+
+
 def validate_isolated_paths(sandbox: Path, game_root: Path, compat_data: Path,
                             home: Path, temp: Path, steam_state: Path,
                             source_game: Path,
                             proc_root: Path = Path("/proc"),
-                            require_no_steam: bool = True) -> dict:
+                            bwrap: str | Path | None = None) -> dict:
     sandbox_real = sandbox.resolve()
     expected = ISOLATED_ROOT
     if sandbox_real != expected:
@@ -225,6 +397,7 @@ def validate_isolated_paths(sandbox: Path, game_root: Path, compat_data: Path,
                 if child.is_symlink():
                     raise ValueError(f"symlink in isolated writable tree is not allowed: {child}")
         resolved[name] = str(absolute)
+    reject_external_links({name: Path(value) for name, value in resolved.items()}, sandbox_real)
     source = source_game.resolve()
     copied_game = Path(resolved["game_root"])
     if source == copied_game or source in copied_game.parents or copied_game in source.parents:
@@ -232,12 +405,13 @@ def validate_isolated_paths(sandbox: Path, game_root: Path, compat_data: Path,
     if not (copied_game / "hyperdemon.exe").is_file():
         raise ValueError("isolated game root must contain hyperdemon.exe")
     steam = live_steam_processes(proc_root)
-    if require_no_steam and steam:
-        raise ValueError(f"Steam client is active (PID {', '.join(map(str, steam))}); cannot prove Cloud/client isolation")
+    isolation = probe_bubblewrap_isolation(sandbox_real, Path(resolved["home"]), bwrap)
     return {"schema": 1, "safe": True, "sandbox": str(sandbox_real),
             "paths": resolved, "source_game": str(source),
             "active_steam_pids": steam,
-            "cloud_isolation": "no client process" if not steam else "unproven"}
+            "isolation": isolation,
+            "steam_client_ipc": "blocked by private network namespace and private runtime mounts",
+            "steam_cloud": "blocked: game process has no client IPC or network route"}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -254,6 +428,7 @@ def main(argv: list[str] | None = None) -> int:
                  "steam-state", "source-game"):
         preflight.add_argument("--" + name, type=Path, required=True)
     preflight.add_argument("--proc-root", type=Path, default=Path("/proc"))
+    preflight.add_argument("--bwrap", type=Path, default=Path(shutil.which("bwrap") or ""))
     preflight.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -266,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
             result = validate_isolated_paths(args.sandbox, args.game_root,
                 args.compat_data, args.home, args.temp, args.steam_state,
                 args.source_game,
-                args.proc_root)
+                args.proc_root, args.bwrap)
         print(json.dumps(result, indent=2))
         return 0
     except (OSError, ValueError, json.JSONDecodeError) as error:
