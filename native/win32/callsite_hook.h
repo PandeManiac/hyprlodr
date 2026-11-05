@@ -39,7 +39,8 @@ typedef int (*hyprlodr_call_hook_flush_fn)(void *context, const void *address,
                                            size_t length);
 
 /* Optional platform operations allow deterministic failure-path tests. A NULL
- * ops pointer selects the real Windows APIs. Allocated relays are never freed. */
+ * ops pointer selects the real Windows APIs. Relay lookup probes at most 64
+ * nearby allocation-granularity addresses. Allocated relays are never freed. */
 typedef struct {
     void *context;
     hyprlodr_call_hook_alloc_near_fn alloc_near;

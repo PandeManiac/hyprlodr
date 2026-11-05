@@ -304,7 +304,7 @@ int main(int argc, char **argv) {
     static const unsigned expected_indices = 1191u;
     if (!check(expected_vertices == 239u && expected_indices == 1191u &&
                route.replacement_size == 22056u, "replacement fixture metadata changed")) return 1;
-    hyprlodr_record_route_hook_bind(&g_binding, &g_hook, &route);
+    hyprlodr_record_route_hook_set_original_target((void *)original_loader);
 
     game_context context = {0x1234u, 0, 0};
     msvc_string hand2 = make_name("hand2");
@@ -312,6 +312,13 @@ int main(int argc, char **argv) {
     unsigned char global_record[HYPRLODR_GAME_RECORD_SIZE];
     init_record(global_record, 1u);
     init_record(record, 1u);
+    uintptr_t no_binding_result = hyprlodr_record_route_hook_call(
+        &context, record, &hand2, 0x44u);
+    if (!check(no_binding_result == (((uintptr_t)0x1234u << 32u) | 0x44u) &&
+               atomic_load(&g_original_calls) == 1,
+               "unpublished binding did not forward to original loader")) return 1;
+    __atomic_store_n(&g_original_calls, 0l, __ATOMIC_SEQ_CST);
+    hyprlodr_record_route_hook_bind(&g_binding, &g_hook, NULL);
     uintptr_t original_result = g_thunk(&context, record, &hand2, 0x55u);
     if (!check(original_result == (((uintptr_t)0x1234u << 32u) | 0x55u),
                "unhooked original return mismatch") ||
@@ -353,6 +360,14 @@ int main(int argc, char **argv) {
               (void *)original_loader, far_bridge,
               HYPRLODR_CALL_HOOK_INSTALL_QUIESCENT, NULL) == HYPRLODR_CALL_HOOK_ALREADY,
               "same install was not idempotent")) return 1;
+    init_record(record, 1u);
+    uintptr_t dormant_result = g_thunk(&context, record, &hand2, 0x5au);
+    if (!check(dormant_result == (((uintptr_t)0x1234u << 32u) | 0x5au) &&
+               atomic_load(&g_original_calls) == 2 &&
+               get_u32(record, 0u) == route.original_offset &&
+               get_u32(record, 4u) == route.original_size,
+               "dormant hook did not pass through unchanged")) return 1;
+    hyprlodr_record_route_hook_publish_route(&g_binding, &route);
     hyprlodr_call_hook_set_enabled(&g_hook, 1);
     __atomic_store_n(&g_startup_release, 1l, __ATOMIC_RELEASE);
     if (!check(WaitForSingleObject(startup_thread, 30000u) == 0u,
@@ -368,7 +383,7 @@ int main(int argc, char **argv) {
     init_record(record, 1u);
     uintptr_t routed = g_thunk(&context, record, &hand2, 0x66u);
     if (!check(routed == (((uintptr_t)0x1234u << 32u) | 0x66u) &&
-               atomic_load(&g_original_calls) == 3 &&
+               atomic_load(&g_original_calls) == 4 &&
                get_u32(record, 0u) == route.original_offset &&
                get_u32(record, 4u) == route.original_size &&
                get_uptr(record, HYPRLODR_RECORD_OBJECT_FIELD) ==

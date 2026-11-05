@@ -8,12 +8,14 @@
 #define HOOK_PAGE_SIZE 4096u
 #define HOOK_ALLOC_GRANULARITY 0x10000u
 #define HOOK_RELAY_MAX_DISTANCE 0x7fff0000u
+#define HOOK_RELAY_PROBE_COUNT 64u
 
 static void *system_alloc_near(void *context, uintptr_t site) {
     (void)context;
     uintptr_t base = site & ~(uintptr_t)(HOOK_ALLOC_GRANULARITY - 1u);
-    for (uintptr_t distance = HOOK_ALLOC_GRANULARITY;
-         distance <= HOOK_RELAY_MAX_DISTANCE; distance += HOOK_ALLOC_GRANULARITY) {
+    for (uintptr_t probe = 1u; probe <= HOOK_RELAY_PROBE_COUNT; ++probe) {
+        uintptr_t distance = probe * HOOK_ALLOC_GRANULARITY;
+        if (distance > HOOK_RELAY_MAX_DISTANCE) break;
         uintptr_t candidates[2];
         candidates[0] = base <= ~(uintptr_t)0 - distance ? base + distance : 0u;
         candidates[1] = base >= distance ? base - distance : 0u;

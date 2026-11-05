@@ -19,6 +19,7 @@ FreeLibrary
 GetCommandLineA
 GetCurrentProcessId
 GetCurrentThreadId
+GetEnvironmentVariableA
 GetProcessHeap
 GetTickCount
 GetModuleFileNameA

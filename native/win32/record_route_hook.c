@@ -11,6 +11,7 @@ typedef struct {
 } original_call;
 
 static hyprlodr_game_route_binding *volatile g_binding;
+static void *volatile g_original_target;
 
 static int game_name_is_hand2(const void *name_object, char output[6]) {
     const unsigned char *object = (const unsigned char *)name_object;
@@ -41,8 +42,17 @@ void hyprlodr_record_route_hook_bind(hyprlodr_game_route_binding *binding,
                                     const hyprlodr_record_route *route) {
     if (!binding) return;
     binding->hook = hook;
-    binding->route = route;
+    __atomic_store_n(&binding->route, route, __ATOMIC_RELEASE);
     (void)__atomic_exchange_n(&g_binding, binding, __ATOMIC_RELEASE);
+}
+
+void hyprlodr_record_route_hook_set_original_target(void *target) {
+    __atomic_store_n(&g_original_target, target, __ATOMIC_RELEASE);
+}
+
+void hyprlodr_record_route_hook_publish_route(
+    hyprlodr_game_route_binding *binding, const hyprlodr_record_route *route) {
+    if (binding) __atomic_store_n(&binding->route, route, __ATOMIC_RELEASE);
 }
 
 static uintptr_t invoke_original(void *context, void *record,
@@ -58,17 +68,24 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
     game_loader_fn original;
     original_call call;
     char requested_name[6];
-    uintptr_t result = 0;
-    if (!binding || !binding->hook || !binding->hook->original_target)
-        return 0;
-    original = (game_loader_fn)binding->hook->original_target;
+    const hyprlodr_record_route *route = NULL;
+    uintptr_t result;
+    void *original_target = __atomic_load_n(&g_original_target, __ATOMIC_ACQUIRE);
+    if (binding && binding->hook && binding->hook->original_target)
+        original_target = binding->hook->original_target;
+    /* Installation publishes this target before modifying the call instruction.
+     * A null value is therefore only possible if the wrapper was misused. */
+    if (!original_target) return 0;
+    original = (game_loader_fn)original_target;
     call.function = original;
     call.game_context = context;
-    if (!hyprlodr_call_hook_is_enabled(binding->hook) ||
-        !game_name_is_hand2(name_object, requested_name) || !binding->route)
+    if (!binding || !binding->hook || !hyprlodr_call_hook_is_enabled(binding->hook))
+        return original(context, record, name_object, flags);
+    route = __atomic_load_n(&binding->route, __ATOMIC_ACQUIRE);
+    if (!game_name_is_hand2(name_object, requested_name) || !route)
         return original(context, record, name_object, flags);
     hyprlodr_route_status status = hyprlodr_record_route_invoke(
-        record, HYPRLODR_GAME_RECORD_SIZE, requested_name, binding->route,
+        record, HYPRLODR_GAME_RECORD_SIZE, requested_name, route,
         invoke_original, &call, name_object, flags, &result);
     if (status == HYPRLODR_ROUTE_BAD_ARGUMENT || status == HYPRLODR_ROUTE_BAD_MANIFEST)
         return original(context, record, name_object, flags);

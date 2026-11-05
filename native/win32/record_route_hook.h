@@ -9,7 +9,7 @@
 
 typedef struct {
     hyprlodr_call_hook *hook;
-    const hyprlodr_record_route *route;
+    const hyprlodr_record_route * volatile route;
 } hyprlodr_game_route_binding;
 
 /* Bind immutable state before installing the callsite. binding and route must
@@ -17,6 +17,12 @@ typedef struct {
 void hyprlodr_record_route_hook_bind(hyprlodr_game_route_binding *binding,
                                     hyprlodr_call_hook *hook,
                                     const hyprlodr_record_route *route);
+
+/* Must be published before installing the callsite. This allows an early,
+ * dormant callback to forward safely before any route binding is populated. */
+void hyprlodr_record_route_hook_set_original_target(void *target);
+void hyprlodr_record_route_hook_publish_route(
+    hyprlodr_game_route_binding *binding, const hyprlodr_record_route *route);
 
 /* Exact Windows x64 loader ABI: ctx, 0x58-byte descriptor, MSVC string*, flags. */
 uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,

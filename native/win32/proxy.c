@@ -39,9 +39,12 @@ static hyprlodr_loader *g_loader;
 static DWORD g_delay_ms = HYPRLODR_BOOTSTRAP_DELAY_MS;
 static int g_record_route_requested;
 static char g_record_route_status[64] = "disabled";
+static int g_early_hook_requested;
+static char g_early_hook_status[64] = "not_requested";
 static hyprlodr_manifest_result g_route_manifest;
 static hyprlodr_call_hook g_route_call_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
 static hyprlodr_game_route_binding g_route_binding;
+static char g_route_archive_path[1024];
 static char g_game_dir[1024];
 static char g_evidence_path[1024];
 
@@ -65,9 +68,10 @@ static void json_escape(FILE *file, const char *text) {
  * verifies the anchor table from native/win32/game_anchors.h against the mapped
  * main module and reports the result in the attach record.
  *
- * Nothing is hooked today, so a mismatch is reported rather than fatal. Any
- * address-dependent work must require build_matches. Nothing in the game is
- * assumed to be where the analysis said it was without this proof.
+ * The experimental record-call hook is installed only during an explicitly
+ * opted-in process-start attach after these mapped-image anchors and call bytes
+ * match. Worker-side manifest validation separately checks the full file hash.
+ * Address-dependent work requires its relevant build proof.
  */
 typedef struct {
     const uint8_t *base;
@@ -93,6 +97,19 @@ static uint32_t read_u32(const uint8_t *bytes) {
     return value;
 }
 
+static uint64_t read_u64(const uint8_t *bytes) {
+    uint64_t value;
+    memcpy(&value, bytes, sizeof value);
+    return value;
+}
+
+static int bytes_equal(const unsigned char *left, const unsigned char *right,
+                       size_t length) {
+    for (size_t index = 0; index < length; ++index)
+        if (left[index] != right[index]) return 0;
+    return 1;
+}
+
 static void inspect_main_module(void) {
     g_anchors_checked = 1;
     HMODULE handle = GetModuleHandleA(NULL);
@@ -113,6 +130,68 @@ static void inspect_main_module(void) {
     g_module.parsed = 1;
     hyprlodr_anchors_verify(base, (size_t)g_module.size_of_image, hyprlodr_game_anchors,
                             HYPRLODR_GAME_ANCHOR_COUNT, &g_anchors);
+}
+
+/* Early patching is accepted only when the executable proves the proxy is a
+ * static dependency and the executable itself has no TLS callback that could
+ * have run before the imported DLL's process attach. This bounded PE read uses
+ * the already mapped image and performs no allocation or file I/O. */
+static int startup_import_layout_supported(void) {
+    const uint8_t *base = g_module.base;
+    if (!base || g_module.size_of_image < 0x1000u) return 0;
+    uint32_t pe_offset = read_u32(base + 0x3cu);
+    if (pe_offset > g_module.size_of_image - 24u) return 0;
+    const uint8_t *pe = base + pe_offset;
+    if (pe[0] != 'P' || pe[1] != 'E' || pe[2] != 0 || pe[3] != 0) return 0;
+    const uint8_t *coff = pe + 4u;
+    const uint8_t *optional = coff + 20u;
+    uint16_t optional_size = read_u16(coff + 16u);
+    if (read_u16(optional) != 0x20bu || optional_size < 192u) return 0;
+    uint32_t directory_count = read_u32(optional + 108u);
+    if (directory_count <= 9u) return 0;
+
+    uint32_t import_rva = read_u32(optional + 120u);
+    uint32_t import_size = read_u32(optional + 124u);
+    if (!import_rva || import_size < 20u || import_rva > g_module.size_of_image ||
+        import_size > g_module.size_of_image - import_rva) return 0;
+    int found_openal = 0;
+    uint32_t descriptor_count = import_size / 20u;
+    if (descriptor_count > 2048u) descriptor_count = 2048u;
+    for (uint32_t index = 0; index < descriptor_count; ++index) {
+        const uint8_t *descriptor = base + import_rva + (size_t)index * 20u;
+        uint32_t name_rva = read_u32(descriptor + 12u);
+        if (!name_rva) break;
+        if (name_rva >= g_module.size_of_image) return 0;
+        const char *name = (const char *)(base + name_rva);
+        static const char expected[] = "openal32.dll";
+        size_t cursor = 0;
+        while (cursor < sizeof expected && name_rva + cursor < g_module.size_of_image) {
+            char actual = name[cursor];
+            if (actual >= 'A' && actual <= 'Z') actual = (char)(actual - 'A' + 'a');
+            if (actual != expected[cursor]) break;
+            if (actual == '\0') { found_openal = 1; break; }
+            ++cursor;
+        }
+        if (found_openal) break;
+        /* Reject unterminated or unreadable import names instead of guessing. */
+        size_t length = 0;
+        while (length < 260u && name_rva + length < g_module.size_of_image &&
+               name[length] != '\0') ++length;
+        if (length == 260u || name_rva + length >= g_module.size_of_image) return 0;
+    }
+    if (!found_openal) return 0;
+
+    uint32_t tls_rva = read_u32(optional + 184u);
+    uint32_t tls_size = read_u32(optional + 188u);
+    if (!tls_rva && !tls_size) return 1;
+    if (!tls_rva || tls_size < 40u || tls_rva > g_module.size_of_image ||
+        40u > g_module.size_of_image - tls_rva) return 0;
+    uint64_t callbacks_va = read_u64(base + tls_rva + 24u);
+    if (!callbacks_va) return 1;
+    uintptr_t image_base = (uintptr_t)base;
+    if (callbacks_va < image_base || callbacks_va - image_base > g_module.size_of_image - 8u)
+        return 0;
+    return read_u64(base + (size_t)(callbacks_va - image_base)) == 0u;
 }
 
 /* Page protection is the host's business: the image's .text and .rdata are
@@ -277,6 +356,16 @@ static int bootstrap_record_route_requested(void) {
     return requested;
 }
 
+/* This switch is intentionally separate from the ordinary config. It opts in
+ * only to a dormant pre-entry hook; the worker config and validated manifest
+ * remain authoritative for route activation. */
+static int early_record_route_requested(void) {
+    char value[8];
+    DWORD length = GetEnvironmentVariableA("HYPRLODR_EARLY_RECORD_HOOK", value,
+                                            (DWORD)sizeof value);
+    return length == 1u && value[0] == '1' && value[1] == '\0';
+}
+
 static int config_string(const char *key, char *out, size_t capacity) {
     char path[1024], line[1024];
     snprintf(path, sizeof path, "%s\\hyprlodr-config.json", g_game_dir);
@@ -324,6 +413,7 @@ static void preflight_record_route(int build_matches) {
         snprintf(g_record_route_status,sizeof g_record_route_status,"archive_mismatch");return;
     }
     if(!safe_route_path(archive)) { snprintf(g_record_route_status,sizeof g_record_route_status,"archive_mismatch");return; }
+    snprintf(g_route_archive_path, sizeof g_route_archive_path, "%s", archive);
     if(!GetModuleFileNameA(NULL,exe,(DWORD)sizeof exe)) {
         snprintf(g_record_route_status,sizeof g_record_route_status,"executable_unsupported");return;
     }
@@ -332,12 +422,72 @@ static void preflight_record_route(int build_matches) {
         "tbl-e91fb3b80004","rec-011a0ebc0-000055d4-0001",295758784u,21972u,1u};
     hyprlodr_manifest_status status=hyprlodr_manifest_validate(&input,&g_route_manifest);
     if(status!=HYPRLODR_MANIFEST_OK){snprintf(g_record_route_status,sizeof g_record_route_status,"%s",hyprlodr_manifest_status_name(status));return;}
-    /* This object is static and its route.name points into itself. The hook's
-     * process-lifetime contract permits publishing it permanently. The real
-     * callsite is deliberately not installed while game synchronization is
-     * unresolved. */
-    hyprlodr_record_route_hook_bind(&g_route_binding,&g_route_call_hook,&g_route_manifest.route);
-    snprintf(g_record_route_status,sizeof g_record_route_status,"validated_blocked_no_process_quiescence");
+    /* Route storage is immutable and process-lived. The early binding is
+     * already reachable in dormant mode; publish only the route pointer here. */
+    hyprlodr_record_route_hook_publish_route(&g_route_binding, &g_route_manifest.route);
+    if (!g_route_call_hook.installed) {
+        snprintf(g_record_route_status, sizeof g_record_route_status,
+                 "validated_early_hook_missing");
+        return;
+    }
+    snprintf(g_record_route_status,sizeof g_record_route_status,"manifest_validated_waiting_for_redirect");
+}
+
+static const char *call_hook_status_text(hyprlodr_call_hook_status status) {
+    switch (status) {
+        case HYPRLODR_CALL_HOOK_OK: return "installed_dormant";
+        case HYPRLODR_CALL_HOOK_ALREADY: return "already_installed";
+        case HYPRLODR_CALL_HOOK_BYTES_MISMATCH: return "callsite_mismatch";
+        case HYPRLODR_CALL_HOOK_TARGET_MISMATCH: return "target_mismatch";
+        case HYPRLODR_CALL_HOOK_RELAY_FAILED: return "relay_allocation_failed";
+        case HYPRLODR_CALL_HOOK_PROTECT_FAILED: return "protection_failed";
+        case HYPRLODR_CALL_HOOK_FLUSH_FAILED: return "instruction_cache_flush_failed";
+        case HYPRLODR_CALL_HOOK_NOT_QUIESCENT: return "install_not_quiescent";
+        default: return "install_failed";
+    }
+}
+
+/* Called only for an explicitly opted-in process-start DLL attachment. The
+ * non-NULL reserved argument distinguishes this path from LoadLibrary. */
+static void install_early_dormant_route_hook(LPVOID reserved) {
+    static const unsigned char expected_call[5] = {0xe8u, 0xa3u, 0x09u, 0x00u, 0x00u};
+    if (!g_early_hook_requested) return;
+    if (!reserved) {
+        snprintf(g_early_hook_status, sizeof g_early_hook_status,
+                 "rejected_dynamic_load");
+        return;
+    }
+    inspect_main_module();
+    if (!g_module.parsed || g_module.timestamp != HYPRLODR_GAME_BUILD_TIMESTAMP ||
+        g_module.size_of_image != HYPRLODR_GAME_SIZE_OF_IMAGE ||
+        g_anchors.total != HYPRLODR_GAME_ANCHOR_COUNT ||
+        g_anchors.matched != HYPRLODR_GAME_ANCHOR_COUNT ||
+        HYPRLODR_GAME_CALLSITE_RVA + sizeof expected_call > g_module.size_of_image) {
+        snprintf(g_early_hook_status, sizeof g_early_hook_status,
+                 "rejected_unsupported_executable");
+        return;
+    }
+    if (!startup_import_layout_supported()) {
+        snprintf(g_early_hook_status, sizeof g_early_hook_status,
+                 "rejected_startup_import_or_tls_layout");
+        return;
+    }
+    unsigned char *site = (unsigned char *)g_module.base + HYPRLODR_GAME_CALLSITE_RVA;
+    if (!bytes_equal(site, expected_call, sizeof expected_call)) {
+        snprintf(g_early_hook_status, sizeof g_early_hook_status,
+                 "rejected_callsite_mismatch");
+        return;
+    }
+    void *target = (void *)(g_module.base + HYPRLODR_GAME_LOADER_RVA);
+    hyprlodr_record_route_hook_set_original_target(target);
+    g_route_call_hook.original_target = target;
+    hyprlodr_record_route_hook_bind(&g_route_binding, &g_route_call_hook, NULL);
+    hyprlodr_call_hook_status status = hyprlodr_call_hook_install(
+        &g_route_call_hook, site, expected_call, target,
+        (void *)hyprlodr_record_route_hook_call,
+        HYPRLODR_CALL_HOOK_INSTALL_QUIESCENT, NULL);
+    snprintf(g_early_hook_status, sizeof g_early_hook_status, "%s",
+             call_hook_status_text(status));
 }
 
 
@@ -381,6 +531,10 @@ static void write_attach_record(const char *stage, int status) {
     fputs(g_record_route_requested ? "true" : "false", file);
     fputs(",\"experimental_record_route_status\":\"", file);
     json_escape(file, g_record_route_status);
+    fputs("\",\"experimental_early_hook_requested\":", file);
+    fputs(g_early_hook_requested ? "true" : "false", file);
+    fputs(",\"experimental_early_hook_status\":\"", file);
+    json_escape(file, g_early_hook_status);
     fputc('"', file);
     fprintf(file, ",\"anchors_total\":%lu,\"anchors_matched\":%lu,\"anchors_out_of_range\":%lu",
             (unsigned long)g_anchors.total, (unsigned long)g_anchors.matched,
@@ -512,6 +666,47 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     int status = hyprlodr_loader_resolve(g_loader);
     if (status == HYPRLODR_OK) status = hyprlodr_loader_init(g_loader);
 
+    /* The asset-open shim still holds the first archive open. Activate only
+     * after manifest validation and publication of the matching archive
+     * redirect, before waking any request that could perform a cold load. */
+    if (g_route_call_hook.installed &&
+        strcmp(g_record_route_status, "manifest_validated_waiting_for_redirect") == 0) {
+        if (status != HYPRLODR_OK) {
+            hyprlodr_call_hook_set_enabled(&g_route_call_hook, 0);
+            snprintf(g_record_route_status, sizeof g_record_route_status,
+                     "route_disabled_bootstrap_failed");
+        } else {
+            char redirected_archive[1024];
+            if (!hyprlodr_loader_redirect_path(g_loader, "asset/asset",
+                                                redirected_archive,
+                                                sizeof redirected_archive)) {
+                snprintf(g_record_route_status, sizeof g_record_route_status,
+                         "route_blocked_archive_redirect_missing");
+            } else {
+                int same_path = 1;
+                const char *left = g_route_archive_path;
+                const char *right = redirected_archive;
+                while (*left && *right) {
+                    char a = *left == '/' ? '\\' : *left;
+                    char b = *right == '/' ? '\\' : *right;
+                    if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+                    if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+                    if (a != b) { same_path = 0; break; }
+                    ++left; ++right;
+                }
+                if (*left || *right) same_path = 0;
+                if (!same_path) {
+                    snprintf(g_record_route_status, sizeof g_record_route_status,
+                             "route_blocked_archive_redirect_mismatch");
+                } else {
+                    hyprlodr_call_hook_set_enabled(&g_route_call_hook, 1);
+                    snprintf(g_record_route_status, sizeof g_record_route_status,
+                             "route_enabled");
+                }
+            }
+        }
+    }
+
     /* Wake an early asset open even when mod resolution or initialization
      * failed. The file shim then proceeds with the original path instead of
      * holding the game thread indefinitely. */
@@ -533,6 +728,8 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         trim_filename(g_game_dir);
         snprintf(g_evidence_path, sizeof g_evidence_path, "%s\\hyprlodr-attach.json", g_game_dir);
         DisableThreadLibraryCalls((HMODULE)instance);
+        g_early_hook_requested = early_record_route_requested();
+        install_early_dormant_route_hook(reserved);
         /* Chain, do not replace: Steam's crash handler stays in charge. */
         g_previous_filter = SetUnhandledExceptionFilter(hyprlodr_crash_filter);
         /* Patch the executable's own import slots *now*: hyperdemon.exe opens its

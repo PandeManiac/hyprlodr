@@ -1,0 +1,6 @@
+LIBRARY hyprlodr_startup_fixture.dll
+EXPORTS
+startup_fixture_hook_status
+startup_fixture_enable
+startup_fixture_disable
+startup_fixture_hook_site

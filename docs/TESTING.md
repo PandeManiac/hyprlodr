@@ -20,6 +20,21 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
+## Pre-entrypoint fixture (Windows x64 under Wine)
+
+`tools/build_windows.sh` creates a proxy-like DLL with the production
+`callsite_hook.c`, `record_route_hook.c`, and `record_route.c` linked into its
+`DllMain`. A statically importing client contains an assembly-authored
+`CALL rel32` and verifies that `reserved != NULL` leads to dormant installation
+before its executable entry function runs. It checks unchanged forwarding,
+manifest-style route publication and activation, tag-2/unrelated pass-through,
+logical disable without code rewrite, no early opt-in, wrong expected bytes,
+failed route publication, and a separate late `LoadLibrary` rejection.
+
+The fixture proves behavior for its generated executable and Wine's startup
+loader path. It does not substitute for the pinned game executable's runtime
+anchor/import/TLS checks, which remain fail-closed in the proxy.
+
 ## Managed callsite fixture (Windows x64 under Wine)
 
 `tools/build_windows.sh` builds `tests/callsite_hook_client.exe` from the same
@@ -56,11 +71,11 @@ changed ciphertext, wrong record/table/tag, truncation, missing fields,
 unsupported schema, overflow and concurrent reads of process-lifetime route
 state. The proxy regression run checks that `experimental_record_route` is off
 by default. On the unsupported Wine stand-in an opt-in request is reported as
-`executable_unsupported`. Successful preflight reports
-`validated_blocked_no_process_quiescence`; the proxy still does not install
-the callsite because the archive-open gate does not prove process-wide
-quiescence. The fixture establishes quiescence only for its controlled single
-resource thread.
+`executable_unsupported`. A valid manifest with no early process-start hook reports
+`validated_early_hook_missing`. With the early environment opt-in, only the
+static-import startup fixture reports a dormant installed hook; an unsupported
+stand-in executable still fails fingerprint validation and cannot enable the
+route. The real game has not been launched with this path.
 
 ## Loader scenarios (native, 41/41 passing)
 
@@ -282,7 +297,10 @@ python3 tools/re/analyze_pe.py "$GAME/hyperdemon.exe" --verify native/win32/game
 cat "$GAME/hyprlodr-attach.json"   # expect build_matches=true, anchors_matched == anchors_total
 ```
 
-A mismatch is reported, never optimised away. Nothing is hooked today, so `build_matches=false` still loads mods; any future address-dependent hook must require it.
+A mismatch is reported, never optimised away. `build_matches=false` still loads
+ordinary mods, but the experimental callsite hook fails closed unless its
+process-start anchors and call bytes match; route activation additionally
+requires the full manifest preflight and archive redirect match.
 
 Note on the 2026-10-31 re-runs: the game process exits a few seconds after start-up in this session (it also exits with the stock `OpenAL32.dll`, so this is environmental, not caused by the proxy), and it writes **no** `hyprlodr-crash.json`, so the exit is not an unhandled exception inside the game process. With the default 2500 ms delay that exit arrives first and no mod ever starts; the attach record then still reads `stage: "initializing"` or `"attached"`. Setting `delay_ms: 0` closes the gap: `docs/evidence/2026-10-31-initializing.json` records 35 events and all five mods initialized, in order, inside `hyperdemon.exe` with `build_matches=true`. Shutdown events are absent by design — process termination runs no mod code.
 

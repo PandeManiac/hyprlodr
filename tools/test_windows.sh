@@ -32,6 +32,22 @@ status=0
 echo "== wine: compiled CALL rel32 interception fixture =="
 timeout 45 wine "$OUT/tests/callsite_hook_client.exe" || status=1
 
+echo "== wine: pre-entrypoint dormant hook and deferred activation fixture =="
+PREENTRY="$OUT/preentry-fixture"
+mkdir -p "$PREENTRY"
+cp "$OUT/tests/hyprlodr_startup_fixture.dll" "$PREENTRY/"
+(
+  cd "$PREENTRY"
+  HYPRLODR_FIXTURE_EARLY=1 timeout 30 wine "$OUT/tests/preentry_fixture_client.exe"
+  env -u HYPRLODR_FIXTURE_EARLY timeout 30 wine "$OUT/tests/preentry_fixture_client.exe"
+  HYPRLODR_FIXTURE_EARLY=1 HYPRLODR_FIXTURE_BAD_BYTES=1 \
+    timeout 30 wine "$OUT/tests/preentry_fixture_client.exe"
+  HYPRLODR_FIXTURE_EARLY=1 HYPRLODR_FIXTURE_SKIP_ROUTE=1 \
+    timeout 30 wine "$OUT/tests/preentry_fixture_client.exe"
+  HYPRLODR_FIXTURE_EARLY=1 timeout 30 \
+    wine "$OUT/tests/preentry_fixture_dynamic_client.exe"
+) || status=1
+
 if [[ -f "$OUT/tests/route_manifest_client.exe" \
      && -f "$ROOT/.tmp/archive-tests/asset-hand2-appended" \
      && -f "$ROOT/.tmp/archive-tests/hand2-override.json" ]]; then

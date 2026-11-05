@@ -14,6 +14,8 @@
 
 #define HYPRLODR_GAME_BUILD_TIMESTAMP 0x66ecd8b5u
 #define HYPRLODR_GAME_SIZE_OF_IMAGE 0x405000u
+#define HYPRLODR_GAME_CALLSITE_RVA 0x211f78u
+#define HYPRLODR_GAME_LOADER_RVA 0x212920u
 
 /* Stream-cipher tables read by the asset loader (see docs/RESEARCH.md).
  * The proxy copies them out of the running image so the live bytes can be

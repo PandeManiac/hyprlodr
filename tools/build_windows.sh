@@ -113,6 +113,31 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "$OUT/obj/callsite_hook_client.obj" "$OUT/obj/callsite_hook.obj" \
   "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
   "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+echo "== pre-entrypoint dormant hook fixture =="
+llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/tests/preentry_fixture_proxy.def" \
+  -l "$OUT/lib/preentry_fixture_proxy.lib"
+compile "$ROOT/native/win32/tests/preentry_fixture_proxy.c" "$OUT/obj/preentry_fixture_proxy.obj"
+lld-link /nologo /dll /nodefaultlib /entry:startup_fixture_dllmain \
+  "/out:$OUT/tests/hyprlodr_startup_fixture.dll" \
+  /def:"$ROOT/native/win32/tests/preentry_fixture_proxy.def" \
+  "$OUT/obj/preentry_fixture_proxy.obj" "$OUT/obj/callsite_hook.obj" \
+  "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" "$CRT_OBJ" "$K32"
+"$CC" --target="$TARGET" -c "$ROOT/native/win32/tests/preentry_fixture_thunk.s" \
+  -o "$OUT/obj/preentry_fixture_thunk.obj"
+compile "$ROOT/native/win32/tests/preentry_fixture_client.c" "$OUT/obj/preentry_fixture_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  /export:startup_fixture_callsite /export:startup_fixture_original \
+  "/out:$OUT/tests/preentry_fixture_client.exe" \
+  "$OUT/obj/preentry_fixture_client.obj" "$OUT/obj/preentry_fixture_thunk.obj" \
+  "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" "$OUT/lib/preentry_fixture_proxy.lib"
+"$CC" "${CFLAGS[@]}" -DHYPRLODR_FIXTURE_DYNAMIC -c \
+  "$ROOT/native/win32/tests/preentry_fixture_client.c" \
+  -o "$OUT/obj/preentry_fixture_dynamic_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  /export:startup_fixture_callsite /export:startup_fixture_original \
+  "/out:$OUT/tests/preentry_fixture_dynamic_client.exe" \
+  "$OUT/obj/preentry_fixture_dynamic_client.obj" "$OUT/obj/preentry_fixture_thunk.obj" \
+  "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 echo "== native append-manifest fixture =="
 compile "$ROOT/native/win32/tests/route_manifest_client.c" "$OUT/obj/route_manifest_client.obj"
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \

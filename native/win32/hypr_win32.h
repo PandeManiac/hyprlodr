@@ -114,6 +114,7 @@ FARPROC WINAPI GetProcAddress(HMODULE module, LPCSTR name);
 BOOL WINAPI FreeLibrary(HMODULE module);
 HMODULE WINAPI GetModuleHandleA(LPCSTR name);
 DWORD WINAPI GetModuleFileNameA(HMODULE module, LPSTR buffer, DWORD size);
+DWORD WINAPI GetEnvironmentVariableA(LPCSTR name, LPSTR buffer, DWORD size);
 HANDLE WINAPI CreateThread(void *attributes, size_t stack_size, LPTHREAD_START_ROUTINE start,
                            LPVOID parameter, DWORD flags, DWORD *thread_id);
 BOOL WINAPI DisableThreadLibraryCalls(HMODULE module);

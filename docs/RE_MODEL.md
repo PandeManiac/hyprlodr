@@ -249,23 +249,48 @@ object pointer after return when it copies the record into the name cache. The
 five call bytes are now an additional build anchor (`call:record_loader`), so
 the fingerprint also rejects a changed call instruction.
 
-The evidence establishes the instruction form and wrapper ABI; it does not
-establish a safe time to patch it concurrently. Current Ghidra evidence does
-not identify an outer lock protecting the name cache or prove that the archive
-stream's seek/read sequence is serialized. Nested resource loads and objects
-cached before route activation also remain possible. The live callsite remains
-uninstalled because no process-wide quiescent installation point is known. The
-exact five-byte anchor is detection, not permission to patch a live instruction.
+The executable imports `OpenAL32.dll` directly (PE import descriptor name at
+RVA `0x3cfcc0`) and has no delay-import directory. Its TLS data directory is
+present, but the callback pointer array at RVA `0x3153a0` begins with a null
+pointer. The process image is already mapped when an imported DLL receives
+`DLL_PROCESS_ATTACH`; Windows documents `reserved != NULL` for process
+initialization and `reserved == NULL` for a dynamic `LoadLibrary` attach. This
+lets the proxy reject late loads rather than trying to infer timing from a
+thread count. The Windows x64 loader keeps process initialization ahead of the
+main executable entrypoint; newly created threads cannot finish their DLL
+initialization while the loader lock is held. Wine exhibits the same attach
+argument distinction in the compiled fixture.
 
-The generic Windows facility is now implemented in
-`native/win32/callsite_hook.c` and linked into the proxy, but proxy startup does
-not install it. Its only supported write mode requires a caller-supplied
-quiescence assertion and retains the relay/callback state to process exit;
-logical disablement never rewrites the instruction. `record_route_hook.c`
-adapts the verified MSVC string object to the route helper without treating the
-object pointer as a C string. The Wine fixture exercises this wrapper through
-an actual emitted call instruction. This is synthetic evidence, not a real
-game interception.
+HYPRLODR now supports an explicit `HYPRLODR_EARLY_RECORD_HOOK=1` launch
+opt-in. Before writing the callsite, DllMain checks the exact timestamp/image
+size, all nine in-memory anchors, the complete five call bytes and decoded
+original target, confirms a static OpenAL32 import, and rejects a nonempty main
+image TLS callback list. It performs no manifest/file hashing, JSON parsing,
+mod loading, or wait in this path. The hook installer uses a bounded 64-address
+near-relay probe, then VirtualAlloc/VirtualProtect/FlushInstructionCache; any
+failure leaves the original callsite intact. The original loader pointer and
+null-route binding are published before the patch. The hook starts disabled,
+so calls before manifest validation transparently invoke the original loader
+once.
+
+This supports a pre-entry installation point for the pinned executable under
+Windows loader initialization and the corresponding Wine fixture. It does not
+prove that dependency DLL initialization code cannot synchronously call into
+private game code, nor does `reserved != NULL` alone prove the process has no
+externally created thread. The executable's empty TLS callback list and static
+import establish the ordinary loader path, while dynamic proxy loads are
+explicitly refused. There is no fallback late patch.
+
+The generic Windows facility is implemented in
+`native/win32/callsite_hook.c` and is installed only when
+`HYPRLODR_EARLY_RECORD_HOOK=1` is present during a verified process-start
+attach. Its supported mode requires the caller's quiescence assertion and
+retains relay/callback state until process exit; logical disablement never
+rewrites the instruction. `record_route_hook.c` adapts the verified MSVC string
+object to the route helper without treating the object pointer as a C string.
+The Wine fixture exercises dormant forwarding and deferred routing through an
+actual emitted call instruction. This is synthetic evidence, not a real game
+interception.
 
 The proxy config accepts an opt-in `"experimental_record_route": true` flag
 plus `experimental_record_route_manifest` and
@@ -285,13 +310,15 @@ On successful preflight, the route and its `hand2` name are stored in static
 proxy storage. The route's name pointer refers to its owner, and the hook
 binding points to the static callsite state and route for process lifetime.
 The binding pointer is published and read with Windows interlocked pointer
-operations, so a future authorized installation has an explicit release/acquire
-publication edge before a wrapper can observe the immutable state.
+operations, so the early installer publishes callback state before changing
+the callsite and the worker publishes the route before enabling it.
 Failures free only temporary parser storage; no published route is reclaimed.
 `hyprlodr-attach.json` reports `experimental_record_route_requested` and a
 specific preflight status. A successful result is reported as
-`validated_blocked_no_process_quiescence`: it proves the replacement inputs,
-not permission to write the live callsite. The proxy still never installs it.
+`manifest_validated_waiting_for_redirect`: when a dormant early hook exists,
+this means the inputs are validated but routing remains disabled. Otherwise a
+valid route reports `validated_early_hook_missing`; malformed or stale inputs
+retain the validator-specific failure status.
 
 The Wine fixture executes this compiled validator against the real 306,816,425
 byte appended archive and the installed executable. It also exercises stale
@@ -358,30 +385,40 @@ compiled helper also ran under Wine and verified the 22,056-byte replacement
 extent plus rejection of the tag-2 `hand2` request. These are tests of the
 request-level component, not of a game callsite detour.
 
-The runtime preflight constructs and binds this route state, but leaves the
-permanent callsite hook uninstalled with status
-`validated_blocked_no_process_quiescence`. The compiled Wine fixture now models
-the archive-open ordering: its only resource thread is blocked before the
-callsite while installation occurs, then is released and exercises the route.
-That proves the contract for the fixture, not for HYPER DEMON. The actual
-redirect gate only blocks threads that reached the intercepted archive open;
-it does not establish that other game threads cannot reach the callsite. This is
-the concrete interception-specific blocker. Unknown stream/cache locking and
-cache timing remain properties to investigate in the game, but the wrapper adds
-no shared descriptor, loader lock, wait, or additional I/O. No global mutex was
-introduced. A real-game callsite patch or launch is not justified until a
-process-wide startup exclusion (or a different safe interception boundary) is
-verified.
+The early environment opt-in installs a dormant hook during process-start
+attach, before the executable entrypoint. Calls during bootstrap pass through
+to the original loader exactly once; the worker enables routing only after
+manifest validation and confirmation that the registered `asset/asset`
+redirect matches the manifest archive. Route and callback state remain in
+static process-lifetime storage, and disablement is atomic without unpatching.
+The compiled Wine startup fixture exercises this lifecycle. It proves loader
+ordering for its generated static-import client, not every initialization path
+in the game.
+
+Live activation remains unverified for a timing reason distinct from the
+five-byte patch race. DllMain patches the main executable's import slots and
+installs the dormant callsite hook; the worker later enumerates and patches
+other loaded modules, validates the manifest, and publishes redirects. The
+first observed game archive open uses `_Fiopen` in MSVCP, so the early main-image
+patch alone does not prove that this open is gated before the worker reaches
+the MSVCP import table. If a cold `hand2` load completes while the hook is
+dormant, the original object may be cached and later requests can bypass the
+callsite. The ordinary game stream/cache synchronization remains a separate
+pre-existing uncertainty; the wrapper adds no shared descriptor, lock, wait,
+or additional I/O. A real-game run is not justified until the first cold load is
+shown to wait for route activation or an equivalent pre-load barrier is
+established.
 
 The append archive still cannot route itself: record offsets live in runtime
 resolver tables, not a self-contained directory. Native preflight validates
 hashes and range/resource identity; offline Python tooling separately verifies
-decryption and parsed mesh counts. The remaining activation blocker is concrete:
-establish a process-wide quiescent point before the five-byte write and determine
-whether cache timing or archive-stream access can invalidate request-local
-routing. The current evidence does not show that these game-level properties
-are newly made unsafe by the wrapper, but it also does not establish their
-behavior for the replacement extent.
+decryption and parsed mesh counts. Remaining runtime questions are whether the
+pinned game's dependency initialization can reach the callsite before the
+proxy's attach completes, whether every first archive-open path is gated before
+worker activation, whether stream/cache behavior can affect the replacement
+extent, and whether the enlarged object parses and reaches rendering. The
+proxy remains opt-in and fails closed when any early install or archive
+identity check fails.
 
 `Group8673` remains an unknown 8-byte graph value (`00000000a4040000`); its
 upper u32 numerically matches the original index count 1,188, but no consumer
