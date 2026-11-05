@@ -31,6 +31,8 @@ static const hyprlodr_anchor hyprlodr_game_anchors[] = {
     {"xref:shader_directory", 0x0007199du, 16u, 0xb5c631c617d4662full},
     {"xref:resource_path", 0x0021257eu, 16u, 0x71e77d1d2d631976ull},
     {"xref:missing_resource_message", 0x00213ce6u, 16u, 0xaf75e886373846b3ull},
+    /* E8 A3 09 00 00: direct call to FUN_140212920 at RVA 0x211f78. */
+    {"call:record_loader", 0x00211f78u, 5u, 0x179a87d81de66887ull},
 };
 
 #define HYPRLODR_GAME_ANCHOR_COUNT \

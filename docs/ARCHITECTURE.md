@@ -98,14 +98,15 @@ Six targets are attempted independently: `CreateFileA` from `KERNEL32.dll`; `fop
 Patching the main module alone proved insufficient: a run that patched the file targets there still logged no asset opens, because a module's import table belongs to that module. The installer therefore walks the loaded-module list (`CreateToolhelp32Snapshot`), parses each image's import directory and patches the same slots in every one, skipping the proxy's own module so its start-up I/O is never redirected or reported as game activity. The controlled real-game run reports `CreateFileA=patched(7) fopen=patched(1) fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1) modules=39`; `_wfopen_s` was absent. `_wfopen` converts its UTF-16 path to UTF-8 for registry matching and converts a replacement back to UTF-16 before calling the original; a path that does not convert is passed through unchanged.
 
 Variable-size model routing remains experimental and is not installed by the
-proxy. Ghidra confirms the record loader is called with a stack-local 0x58-byte
-descriptor, making a per-request offset/size override possible without writing
-the resolver's source record. The reusable `hyprlodr_record_route_invoke`
-helper does that substitution and restores the two fields after the original
-loader returns. A live route still requires a managed relative-call relay and a
-code-patch lifecycle with instruction-cache synchronization and safe teardown;
-the existing generic image writer does not provide those guarantees. See
-`docs/RE_MODEL.md` for the exact boundary and verified limitations.
+proxy. Ghidra and fresh disassembly of the pinned executable identify the
+five-byte direct loader call at RVA `0x211f78` (`E8 A3 09 00 00`), and the call
+instruction is included in the runtime build fingerprint. The reusable
+`hyprlodr_record_route_invoke` helper changes only a request-local descriptor,
+then restores its offset and size while preserving loader-owned fields. No
+managed callsite interception lifecycle is implemented yet: neither concurrent
+patch safety nor the game's cache/archive-stream synchronization has been
+established. A fingerprint match alone does not make live patching safe. See
+`docs/RE_MODEL.md` for the instruction evidence and remaining boundaries.
 
 Safety properties:
 

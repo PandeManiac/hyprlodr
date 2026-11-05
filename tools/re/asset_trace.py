@@ -39,6 +39,9 @@ HOOK_SIGNATURES = {
     0x213370: bytes.fromhex("48895c2408488974"),
     0x205ec0: bytes.fromhex("44894c2420448944"),
     0x21a710: bytes.fromhex("488bc45541564157"),
+    # Exact five-byte call instruction in FUN_140211e70; the rel32 resolves to
+    # FUN_140212920. Keep this independent of the function-entry signatures.
+    0x211f78: bytes.fromhex("e8a3090000"),
 }
 TRACE_SCRIPT = pathlib.Path(__file__).with_name("asset_trace_frida.js")
 
@@ -62,7 +65,7 @@ def expected_hand2(archive: pathlib.Path, exe: pathlib.Path) -> dict[str, Any]:
     for rva, signature in HOOK_SIGNATURES.items():
         file_offset = rva_to_offset(exe_bytes, rva)
         if exe_bytes[file_offset:file_offset + len(signature)] != signature:
-            raise ValueError(f"executable function signature mismatch at RVA 0x{rva:x}")
+            raise ValueError(f"executable signature mismatch at RVA 0x{rva:x}")
     tables = load_tables(exe)
     with archive.open("rb") as handle:
         if archive.stat().st_size < HAND2_OFFSET + HAND2_SIZE:

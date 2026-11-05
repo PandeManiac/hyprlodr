@@ -229,6 +229,36 @@ offset/size fields are then left at their original values. The pair is coherent
 for the duration of the call because both fields are substituted before it and
 restored only after it returns.
 
+### Exact loader call instruction (installed executable, 2026-11-04)
+
+The installed `hyperdemon.exe` was freshly hashed as
+`7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`, matching
+the pinned build. `llvm-objdump` disassembly at RVA `0x211f78` gives:
+
+```text
+140211f71  4c 8d 55 c7       lea  rdx, [rbp - 0x39] ; request-local 0x58 record
+140211f75  49 8b cd          mov  rcx, r13         ; ctx
+140211f78  e8 a3 09 00 00    call 0x140212920      ; FUN_140212920
+140211f7d  48 8d 55 6f       lea  rdx, [rbp + 0x6f] ; cache key setup follows
+```
+
+This is a five-byte direct `call rel32`; the Windows x64 ABI arguments are
+`RCX=ctx`, `RDX=record`, `R8=name`, and `R9D=flags`. The local record is
+materialized immediately before the call and the caller consumes its parsed
+object pointer after return when it copies the record into the name cache. The
+five call bytes are now an additional build anchor (`call:record_loader`), so
+the fingerprint also rejects a changed call instruction.
+
+The evidence establishes the instruction form and wrapper ABI; it does not
+establish a safe time to patch it concurrently. Current Ghidra evidence does
+not identify an outer lock protecting the name cache or prove that the archive
+stream's seek/read sequence is serialized. Nested resource loads and objects
+cached before route activation also remain possible. Therefore the live
+callsite is still not installed. Routing must remain disabled pending a
+separately tested managed interception lifecycle and evidence for the game's
+cache/stream synchronization model. The exact five-byte anchor is detection,
+not permission to patch a live instruction.
+
 That operation is implemented as the allocation-free helper
 `native/src/record_route.c` (`hyprlodr_record_route_invoke`). It requires an
 already validated immutable route descriptor, checks exact logical name,
