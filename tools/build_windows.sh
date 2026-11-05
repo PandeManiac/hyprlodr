@@ -75,7 +75,9 @@ compile "$ROOT/native/win32/crt_impl.c" "$OUT/obj/crt_impl.obj" -fno-builtin
 # Executable-only entry shim; the DLL uses dll_main instead.
 compile "$ROOT/native/win32/entry.c" "$OUT/obj/entry.obj"
 compile "$ROOT/native/win32/tests/startup_diag_client.c" \
-  "$OUT/obj/startup_diag_client.obj"
+  "$OUT/obj/startup_diag_client.obj" -DHYPRLODR_STARTUP_DIAG_TESTING
+compile "$ROOT/native/win32/startup_diag.c" \
+  "$OUT/obj/startup_diag_test.obj" -DHYPRLODR_STARTUP_DIAG_TESTING
 
 CRT_OBJ="$OUT/obj/crt_impl.obj"
 K32="$OUT/lib/kernel32.lib"
@@ -90,8 +92,9 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
 echo "== bounded startup diagnostic writer fixture =="
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/tests/startup_diag_client.exe" \
-  "$OUT/obj/startup_diag_client.obj" "$OUT/obj/startup_diag.obj" \
-  "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+  "$OUT/obj/startup_diag_client.obj" "$OUT/obj/startup_diag_test.obj" \
+  "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+  "$OUT/obj/callsite_hook.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 
 echo "== sample mods =="
 link_mod() { # link_mod <source> <mod-id>

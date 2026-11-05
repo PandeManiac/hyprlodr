@@ -87,7 +87,6 @@ static volatile unsigned g_asset_waiters;
 static volatile LONG g_archive_gate_state = HYPRLODR_ARCHIVE_GATE_PENDING;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static unsigned g_logged;
-static unsigned g_event_sequence;
 /* Tick when the hook was installed, so every record carries a relative time:
  * a long session then says *when* the game touches a file, not just that it did. */
 static DWORD g_start_tick;
@@ -198,16 +197,18 @@ static void record_open(const char *requested, const char *opened, const char *v
      * once the cap is reached. */
     unsigned open_index = __atomic_add_fetch(&g_logged, 1u, __ATOMIC_RELAXED);
     if (open_index > (unsigned)HYPRLODR_FILE_LOG_LIMIT) return;
-    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
+    unsigned sequence = hyprlodr_startup_diag_next_sequence();
     escape_into(requested_json, sizeof requested_json, requested);
     escape_into(opened_json, sizeof opened_json, opened);
     DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
     unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"seq\":%u,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"file_open\","
+             "{\"seq\":%u,\"run_id\":\"%016llx\",\"pid\":%lu,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"file_open\","
              "\"via\":\"%s\",\"redirected\":%s,\"ok\":%s,"
              "\"requested\":\"%s\",\"opened\":\"%s\"}\n",
-             sequence, elapsed_ms, (unsigned long)GetCurrentThreadId(), via,
+             sequence, (unsigned long long)hyprlodr_startup_diag_run_id(),
+             (unsigned long)GetCurrentProcessId(), elapsed_ms,
+             (unsigned long)GetCurrentThreadId(), via,
              redirected ? "true" : "false", ok ? "true" : "false", requested_json, opened_json);
     /* The handle is opened for append, so each WriteFile lands at end-of-file
      * without a lock: game threads may interleave records but never corrupt the
@@ -238,13 +239,15 @@ static void record_redirect_wait(const char *requested, const char *stage, DWORD
     char line[1200];
     DWORD written = 0;
     escape_into(requested_json, sizeof requested_json, requested);
-    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
+    unsigned sequence = hyprlodr_startup_diag_next_sequence();
     DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
     unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"seq\":%u,\"event\":\"redirect_wait\",\"stage\":\"%s\",\"t_ms\":%lu,"
+             "{\"seq\":%u,\"run_id\":\"%016llx\",\"pid\":%lu,\"event\":\"redirect_wait\",\"stage\":\"%s\",\"t_ms\":%lu,"
              "\"thread\":%lu,\"waited_ms\":%lu,\"requested\":\"%s\"}\n",
-             sequence, stage, elapsed_ms, (unsigned long)GetCurrentThreadId(), (unsigned long)waited_ms,
+             sequence, (unsigned long long)hyprlodr_startup_diag_run_id(),
+             (unsigned long)GetCurrentProcessId(), stage, elapsed_ms,
+             (unsigned long)GetCurrentThreadId(), (unsigned long)waited_ms,
              requested_json);
     WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
 }
@@ -254,13 +257,15 @@ static void record_hook_install(const char *phase, unsigned patched) {
     if (log == INVALID_HANDLE_VALUE) return;
     char line[512];
     DWORD written = 0;
-    unsigned sequence = __atomic_add_fetch(&g_event_sequence, 1u, __ATOMIC_RELAXED);
+    unsigned sequence = hyprlodr_startup_diag_next_sequence();
     DWORD start_tick = __atomic_load_n(&g_start_tick, __ATOMIC_ACQUIRE);
     unsigned long elapsed_ms = start_tick ? (unsigned long)(GetTickCount() - start_tick) : 0ul;
     snprintf(line, sizeof line,
-             "{\"seq\":%u,\"event\":\"file_hook_install\",\"phase\":\"%s\",\"t_ms\":%lu,"
+             "{\"seq\":%u,\"run_id\":\"%016llx\",\"pid\":%lu,\"event\":\"file_hook_install\",\"phase\":\"%s\",\"t_ms\":%lu,"
              "\"thread\":%lu,\"patched_targets\":%u}\n",
-             sequence, phase, elapsed_ms, (unsigned long)GetCurrentThreadId(), patched);
+             sequence, (unsigned long long)hyprlodr_startup_diag_run_id(),
+             (unsigned long)GetCurrentProcessId(), phase, elapsed_ms,
+             (unsigned long)GetCurrentThreadId(), patched);
     WriteFile(log, line, (DWORD)strlen(line), &written, NULL);
 }
 

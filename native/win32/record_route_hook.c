@@ -12,6 +12,7 @@ typedef struct {
     uint32_t original_tag;
     uint32_t original_offset;
     uint32_t original_size;
+    const hyprlodr_record_route *route;
 } original_call;
 
 static hyprlodr_game_route_binding *volatile g_binding;
@@ -102,16 +103,21 @@ static uintptr_t invoke_original(void *context, void *record,
             uint32_t size = record_u32(record, HYPRLODR_RECORD_SIZE_FIELD);
             hyprlodr_game_route_binding *binding =
                 __atomic_load_n(&g_binding, __ATOMIC_ACQUIRE);
+            int routed = call->route && call->original_tag == call->route->tag &&
+                call->original_offset == call->route->original_offset &&
+                call->original_size == call->route->original_size &&
+                tag == call->route->tag && offset == call->route->replacement_offset &&
+                size == call->route->replacement_size;
             hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_HAND2_LOADER_CALL,
                 tag, offset, size, binding_gate_state(binding),
-                hand2_diag_flags(1, tag, offset, size, binding, 0), 0u, 0u,
+                hand2_diag_flags(1, tag, offset, size, binding, routed), 0u, 0u,
                 "original loader entered");
             if (call->original_tag == 1u &&
                 call->original_offset == 295758784u &&
                 call->original_size == 21972u)
                 hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_TARGET_LOADER_CALL,
                     tag, offset, size, binding_gate_state(binding),
-                    hand2_diag_flags(1, tag, offset, size, binding, 0), 0u, 0u,
+                    hand2_diag_flags(1, tag, offset, size, binding, routed), 0u, 0u,
                     "original loader entered for verified tag-1 hand2");
         }
     }
@@ -173,6 +179,7 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
     call.original_tag = tag;
     call.original_offset = original_offset;
     call.original_size = original_size;
+    call.route = NULL;
     if (!binding || !binding->hook || !hyprlodr_call_hook_is_enabled(binding->hook)) {
         result = invoke_original(&call, record, name_object, flags);
         goto report_hand2;
@@ -187,10 +194,12 @@ uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
         result = invoke_original(&call, record, name_object, flags);
         goto report_hand2;
     }
+    call.route = route;
     hyprlodr_route_status status = hyprlodr_record_route_invoke(
         record, HYPRLODR_GAME_RECORD_SIZE, requested_name, route,
         invoke_original, &call, name_object, flags, &result);
     if (status == HYPRLODR_ROUTE_BAD_ARGUMENT || status == HYPRLODR_ROUTE_BAD_MANIFEST) {
+        call.route = NULL;
         result = invoke_original(&call, record, name_object, flags);
         status = HYPRLODR_ROUTE_PASSTHROUGH;
     }

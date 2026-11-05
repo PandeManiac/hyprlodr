@@ -42,6 +42,7 @@ static int g_record_route_requested;
 static char g_record_route_status[64] = "disabled";
 static int g_early_hook_requested;
 static int g_startup_diag_requested;
+static int g_diag_writer_start_result = -1;
 static char g_early_hook_status[64] = "not_requested";
 static hyprlodr_manifest_result g_route_manifest;
 static hyprlodr_call_hook g_route_call_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
@@ -523,6 +524,14 @@ static void write_attach_record(const char *stage, int status) {
             HYPRLODR_BUILD_REVISION, HYPRLODR_BUILD_CLEAN ? "true" : "false",
             (unsigned)HYPRLODR_PROXY_CAPABILITIES, HYPRLODR_PROXY_CAPABILITY_NAMES);
 
+    fprintf(file, ",\"run_id\":\"%016llx\",\"diagnostics_requested\":%s,"
+                  "\"diagnostic_writer_start_result\":%d,\"diagnostic_writer_status\":%d,"
+                  "\"diagnostic_events_dropped\":%u",
+            (unsigned long long)hyprlodr_startup_diag_run_id(),
+            g_startup_diag_requested ? "true" : "false",
+            g_diag_writer_start_result, hyprlodr_startup_diag_writer_status(),
+            hyprlodr_startup_diag_dropped());
+
     fprintf(file, ",\"delay_ms\":%lu,\"module_parsed\":", (unsigned long)g_delay_ms);
     fputs(g_module.parsed ? "true" : "false", file);
     fputs(",\"module_base\":\"", file);
@@ -546,7 +555,9 @@ static void write_attach_record(const char *stage, int status) {
     fputs(g_early_hook_requested ? "true" : "false", file);
     fputs(",\"experimental_early_hook_status\":\"", file);
     json_escape(file, g_early_hook_status);
-    fputc('"', file);
+    fprintf(file, "\",\"early_hook_install_attempted\":%s,\"early_hook_installed\":%s",
+            g_early_hook_requested ? "true" : "false",
+            g_route_call_hook.installed ? "true" : "false");
     fprintf(file, ",\"anchors_total\":%lu,\"anchors_matched\":%lu,\"anchors_out_of_range\":%lu",
             (unsigned long)g_anchors.total, (unsigned long)g_anchors.matched,
             (unsigned long)g_anchors.out_of_range);
@@ -588,8 +599,14 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     (void)unused;
 
     char startup_log[1024];
-    snprintf(startup_log, sizeof startup_log, "%s\\hyprlodr-startup.jsonl", g_game_dir);
-    (void)hyprlodr_startup_diag_start(startup_log);
+    if (g_startup_diag_requested) {
+        snprintf(startup_log, sizeof startup_log,
+                 "%s\\hyprlodr-startup-%016llx.jsonl", g_game_dir,
+                 (unsigned long long)hyprlodr_startup_diag_run_id());
+    } else {
+        snprintf(startup_log, sizeof startup_log, "%s\\hyprlodr-startup.jsonl", g_game_dir);
+    }
+    g_diag_writer_start_result = hyprlodr_startup_diag_start(startup_log);
     hyprlodr_startup_diag_drain();
 
     /* Evidence and build identity first. A game that exits during start-up can
@@ -608,7 +625,12 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
     snprintf(disabled_file, sizeof disabled_file, "%s\\mods\\disabled.txt", g_game_dir);
     snprintf(log_path, sizeof log_path, "%s\\hyprlodr-events.jsonl", g_game_dir);
     snprintf(state_root, sizeof state_root, "%s\\hyprlodr-state", g_game_dir);
-    snprintf(files_log, sizeof files_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
+    if (g_startup_diag_requested) {
+        snprintf(files_log, sizeof files_log, "%s\\hyprlodr-files-%016llx.jsonl",
+                 g_game_dir, (unsigned long long)hyprlodr_startup_diag_run_id());
+    } else {
+        snprintf(files_log, sizeof files_log, "%s\\hyprlodr-files.jsonl", g_game_dir);
+    }
     snprintf(gl_log, sizeof gl_log, "%s\\hyprlodr-gl.jsonl", g_game_dir);
 
     g_loader = hyprlodr_loader_create();
@@ -776,15 +798,25 @@ BOOL WINAPI dll_main(HINSTANCE instance, DWORD reason, LPVOID reserved) {
         GetModuleFileNameA((HMODULE)instance, module_path, (DWORD)sizeof module_path);
         snprintf(g_game_dir, sizeof g_game_dir, "%s", module_path);
         trim_filename(g_game_dir);
-        snprintf(g_evidence_path, sizeof g_evidence_path, "%s\\hyprlodr-attach.json", g_game_dir);
         DisableThreadLibraryCalls((HMODULE)instance);
+        uint64_t run_id = ((uint64_t)GetCurrentProcessId() << 32) | GetTickCount();
+        hyprlodr_startup_diag_set_run_id(run_id);
         g_startup_diag_requested = startup_diag_requested();
         hyprlodr_startup_diag_enable(g_startup_diag_requested);
+        if (g_startup_diag_requested) {
+            snprintf(g_evidence_path, sizeof g_evidence_path,
+                     "%s\\hyprlodr-attach-%016llx.json", g_game_dir,
+                     (unsigned long long)run_id);
+        } else {
+            snprintf(g_evidence_path, sizeof g_evidence_path,
+                     "%s\\hyprlodr-attach.json", g_game_dir);
+        }
         g_early_hook_requested = early_record_route_requested();
         install_early_dormant_route_hook(reserved);
         hyprlodr_startup_diag_emit_once(HYPRLODR_DIAG_EARLY_HOOK, 0u, 0u, 0u,
             (uint32_t)hyprlodr_file_hook_archive_gate_state(),
-            g_route_call_hook.installed ? 1u : 0u,
+            (g_early_hook_requested ? 1u : 0u) |
+                (g_route_call_hook.installed ? 2u : 0u),
             0u, 0u, g_early_hook_status);
         /* Chain, do not replace: Steam's crash handler stays in charge. */
         g_previous_filter = SetUnhandledExceptionFilter(hyprlodr_crash_filter);

@@ -30,16 +30,41 @@ mkdir -p "$WORK/mods" "$WORK/proxy/mods"
 status=0
 
 echo "== wine: bounded startup diagnostic ring and background drain =="
-timeout 15 wine "$OUT/tests/startup_diag_client.exe" || status=1
-python3 - "$OUT/tests/startup-diag.jsonl" <<'PY' || status=1
+DIAG_FIXTURE="$OUT/tests/startup-diagnostic-fixture"
+mkdir -p "$DIAG_FIXTURE"
+for mode in normal writer-fail overflow; do
+  timeout 20 wine "$OUT/tests/startup_diag_client.exe" "$mode" || status=1
+  cp "$OUT/tests/startup-diag.jsonl" "$DIAG_FIXTURE/$mode.jsonl"
+done
+python3 - "$DIAG_FIXTURE" <<'PY' || status=1
 import json, pathlib, sys
-events = [json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
-assert [event["seq"] for event in events] == [1, 2, 3], events
-assert [event["event"] for event in events] == [
-    "early_hook_install", "bootstrap_start", "first_archive_attempt"
-], events
-assert len({event["thread"] for event in events}) >= 2, events
-print("startup diagnostics: early and worker events drained in shared sequence order")
+root = pathlib.Path(sys.argv[1])
+def read(name):
+    return [json.loads(line) for line in (root / f"{name}.jsonl").read_text().splitlines()]
+normal = read("normal")
+assert len({event["seq"] for event in normal}) == len(normal), normal
+assert len({event["run_id"] for event in normal}) == 1, normal
+assert len({event["pid"] for event in normal}) == 1, normal
+assert len({read(name)[0]["run_id"] for name in ("normal", "writer-fail", "overflow")}) == 3
+by_name = {event["event"]: event for event in normal}
+assert by_name["early_hook_install"]["text"] == "rejected_callsite_mismatch", normal
+assert by_name["first_hand2_request"]["tag"] == 2, normal
+assert by_name["first_hand2_request"]["flags"] & 4, normal
+assert by_name["first_tag1_hand2_request"]["tag"] == 1, normal
+assert by_name["first_tag1_hand2_request"]["thread"] != by_name["first_hand2_request"]["thread"], normal
+target_call = next(event for event in normal if event["event"] == "tag1_hand2_loader_call")
+assert target_call["offset"] == 295800000 and target_call["size"] == 22056, target_call
+assert target_call["flags"] & 32, target_call
+assert by_name["tag1_hand2_loader_return"]["flags"] & 64, normal
+assert any(event["event"] == "route_activation" and event["text"] == "route_disabled" and
+           event["flags"] == 0 for event in normal), normal
+assert "diagnostic_events_dropped" not in by_name, normal
+failed = read("writer-fail")
+assert any(event["event"] == "diagnostic_writer_status" and event["flags"] == 0 for event in failed), failed
+assert any(event.get("text") == "writer thread creation failed" for event in failed), failed
+overflow = read("overflow")
+assert any(event["event"] == "diagnostic_events_dropped" and event["count"] > 0 for event in overflow), overflow
+print("startup diagnostics: early/worker/wrapper events, run identity, safe final drain, writer failure and overflow passed")
 PY
 
 echo "== wine: compiled CALL rel32 interception fixture =="

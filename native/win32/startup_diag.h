@@ -21,6 +21,7 @@ typedef enum {
     HYPRLODR_DIAG_HAND2_LOADER_RETURN,
     HYPRLODR_DIAG_TARGET_LOADER_CALL,
     HYPRLODR_DIAG_TARGET_LOADER_RETURN,
+    HYPRLODR_DIAG_WRITER_STATUS,
     HYPRLODR_DIAG_KIND_COUNT
 } hyprlodr_startup_diag_kind;
 
@@ -28,6 +29,14 @@ typedef enum {
  * fixed process storage; JSON formatting and file I/O happen on the worker. */
 void hyprlodr_startup_diag_enable(int enabled);
 int hyprlodr_startup_diag_enabled(void);
+void hyprlodr_startup_diag_set_run_id(uint64_t run_id);
+uint64_t hyprlodr_startup_diag_run_id(void);
+uint32_t hyprlodr_startup_diag_next_sequence(void);
+uint32_t hyprlodr_startup_diag_dropped(void);
+int hyprlodr_startup_diag_writer_status(void);
+#if defined(HYPRLODR_STARTUP_DIAG_TESTING)
+void hyprlodr_startup_diag_test_fail_next_writer(void);
+#endif
 void hyprlodr_startup_diag_emit(hyprlodr_startup_diag_kind kind,
                                 uint32_t tag, uint32_t offset, uint32_t size,
                                 uint32_t gate_state, uint32_t flags,
@@ -41,6 +50,7 @@ void hyprlodr_startup_diag_emit_once(hyprlodr_startup_diag_kind kind,
 int hyprlodr_startup_diag_start(const char *path);
 void hyprlodr_startup_diag_drain(void);
 void hyprlodr_startup_diag_request_stop(void);
+int hyprlodr_startup_diag_finish(uint32_t timeout_ms);
 void hyprlodr_startup_diag_pump(void);
 
 #endif

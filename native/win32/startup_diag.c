@@ -5,12 +5,14 @@
 #include <stdio.h>
 #include <string.h>
 
-#define HYPRLODR_STARTUP_DIAG_CAPACITY 128u
+#define HYPRLODR_STARTUP_DIAG_CAPACITY 1024u
 #define HYPRLODR_STARTUP_DIAG_TEXT 512u
 
 typedef struct {
     volatile LONG ready;
     uint32_t sequence;
+    uint32_t process_id;
+    uint64_t run_id;
     DWORD tick;
     DWORD thread;
     uint32_t kind;
@@ -27,9 +29,16 @@ typedef struct {
 static volatile LONG g_enabled;
 static volatile LONG g_reserved;
 static volatile LONG g_dropped;
+static volatile LONG g_total_dropped;
 static volatile LONG g_stop;
 static volatile LONG g_once_mask;
 static volatile LONG g_drain_lock;
+static volatile LONG g_writer_status;
+static volatile LONG g_sequence;
+#if defined(HYPRLODR_STARTUP_DIAG_TESTING)
+static volatile LONG g_test_fail_writer;
+#endif
+static uint64_t g_run_id;
 static uint32_t g_drained;
 static HANDLE g_log = INVALID_HANDLE_VALUE;
 static HANDLE g_writer_thread;
@@ -44,7 +53,7 @@ static const char *kind_name(uint32_t kind) {
         "redirect_publication", "route_preflight", "route_activation",
         "archive_gate_release", "first_loader_callsite", "first_hand2_request",
         "first_tag1_hand2_request", "hand2_loader_call", "hand2_loader_return",
-        "tag1_hand2_loader_call", "tag1_hand2_loader_return"
+        "tag1_hand2_loader_call", "tag1_hand2_loader_return", "diagnostic_writer_status"
     };
     return kind < HYPRLODR_DIAG_KIND_COUNT ? names[kind] : "unknown";
 }
@@ -68,6 +77,32 @@ int hyprlodr_startup_diag_enabled(void) {
     return __atomic_load_n(&g_enabled, __ATOMIC_ACQUIRE) != 0;
 }
 
+void hyprlodr_startup_diag_set_run_id(uint64_t run_id) {
+    __atomic_store_n(&g_run_id, run_id, __ATOMIC_RELEASE);
+}
+
+uint64_t hyprlodr_startup_diag_run_id(void) {
+    return __atomic_load_n(&g_run_id, __ATOMIC_ACQUIRE);
+}
+
+uint32_t hyprlodr_startup_diag_next_sequence(void) {
+    return (uint32_t)__atomic_add_fetch(&g_sequence, 1l, __ATOMIC_RELAXED);
+}
+
+uint32_t hyprlodr_startup_diag_dropped(void) {
+    return (uint32_t)__atomic_load_n(&g_total_dropped, __ATOMIC_ACQUIRE);
+}
+
+int hyprlodr_startup_diag_writer_status(void) {
+    return (int)__atomic_load_n(&g_writer_status, __ATOMIC_ACQUIRE);
+}
+
+#if defined(HYPRLODR_STARTUP_DIAG_TESTING)
+void hyprlodr_startup_diag_test_fail_next_writer(void) {
+    __atomic_store_n(&g_test_fail_writer, 1l, __ATOMIC_RELEASE);
+}
+#endif
+
 void hyprlodr_startup_diag_emit(hyprlodr_startup_diag_kind kind,
                                 uint32_t tag, uint32_t offset, uint32_t size,
                                 uint32_t gate_state, uint32_t flags,
@@ -78,10 +113,13 @@ void hyprlodr_startup_diag_emit(hyprlodr_startup_diag_kind kind,
     LONG index = __atomic_fetch_add(&g_reserved, 1l, __ATOMIC_RELAXED);
     if ((unsigned long)index >= HYPRLODR_STARTUP_DIAG_CAPACITY) {
         __atomic_add_fetch(&g_dropped, 1l, __ATOMIC_RELAXED);
+        __atomic_add_fetch(&g_total_dropped, 1l, __ATOMIC_RELAXED);
         return;
     }
     diag_event *event = &g_events[index];
-    event->sequence = (uint32_t)index + 1u;
+    event->sequence = hyprlodr_startup_diag_next_sequence();
+    event->process_id = GetCurrentProcessId();
+    event->run_id = hyprlodr_startup_diag_run_id();
     event->tick = GetTickCount();
     event->thread = GetCurrentThreadId();
     event->kind = (uint32_t)kind;
@@ -120,10 +158,12 @@ static void write_event(const diag_event *event) {
     }
     escaped[used] = '\0';
     int length = snprintf(line, sizeof line,
-        "{\"seq\":%u,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"%s\","
+        "{\"seq\":%u,\"run_id\":\"%016llx\",\"pid\":%lu,\"t_ms\":%lu,\"thread\":%lu,\"event\":\"%s\","
         "\"tag\":%u,\"offset\":%u,\"size\":%u,\"gate_state\":%u,\"flags\":%u,"
         "\"result\":\"0x%llx\",\"parsed_object\":\"0x%llx\",\"text\":\"%s\"}\n",
-        event->sequence, (unsigned long)event->tick, (unsigned long)event->thread,
+        event->sequence, (unsigned long long)event->run_id,
+        (unsigned long)event->process_id, (unsigned long)event->tick,
+        (unsigned long)event->thread,
         kind_name(event->kind), event->tag, event->offset, event->size,
         event->gate_state, event->flags,
         (unsigned long long)event->result,
@@ -133,19 +173,46 @@ static void write_event(const diag_event *event) {
 }
 
 int hyprlodr_startup_diag_start(const char *path) {
-    if (!__atomic_load_n(&g_enabled, __ATOMIC_ACQUIRE)) return 0;
+    if (!__atomic_load_n(&g_enabled, __ATOMIC_ACQUIRE)) {
+        __atomic_store_n(&g_writer_status, 4l, __ATOMIC_RELEASE); /* disabled */
+        return 0;
+    }
+    if (__atomic_load_n(&g_writer_status, __ATOMIC_ACQUIRE) == 5l) return -1;
     if (g_log != INVALID_HANDLE_VALUE) return g_writer_thread ? 0 : -1;
-    if (!path || !*path) return -1;
+    if (!path || !*path) {
+        __atomic_store_n(&g_writer_status, 2l, __ATOMIC_RELEASE); /* invalid path */
+        return -1;
+    }
     HANDLE log = CreateFileA(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (log == INVALID_HANDLE_VALUE) return -1;
+    if (log == INVALID_HANDLE_VALUE) {
+        __atomic_store_n(&g_writer_status, 2l, __ATOMIC_RELEASE); /* log open failed */
+        return -1;
+    }
     g_log = log;
     hyprlodr_startup_diag_drain();
     hyprlodr_startup_diag_emit(HYPRLODR_DIAG_BOOTSTRAP_START, 0u, 0u, 0u,
                                0u, 0u, 0u, 0u, "bootstrap worker started");
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_WRITER_STATUS, 0u, 0u, 0u,
+                               0u, 1u, 0u, 0u, "writer starting");
     hyprlodr_startup_diag_drain();
-    g_writer_thread = CreateThread(NULL, 0, diagnostic_writer, NULL, 0, NULL);
-    return g_writer_thread ? 0 : -1;
+#if defined(HYPRLODR_STARTUP_DIAG_TESTING)
+    if (__atomic_exchange_n(&g_test_fail_writer, 0l, __ATOMIC_ACQ_REL))
+        g_writer_thread = NULL;
+    else
+#endif
+        g_writer_thread = CreateThread(NULL, 0, diagnostic_writer, NULL, 0, NULL);
+    if (!g_writer_thread) {
+        __atomic_store_n(&g_writer_status, 3l, __ATOMIC_RELEASE); /* thread creation failed */
+        hyprlodr_startup_diag_emit(HYPRLODR_DIAG_WRITER_STATUS, 0u, 0u, 0u,
+                                   0u, 0u, 0u, 0u, "writer thread creation failed");
+        hyprlodr_startup_diag_drain();
+        return -1;
+    }
+    __atomic_store_n(&g_writer_status, 1l, __ATOMIC_RELEASE); /* running */
+    hyprlodr_startup_diag_emit(HYPRLODR_DIAG_WRITER_STATUS, 0u, 0u, 0u,
+                               0u, 2u, 0u, 0u, "writer running");
+    return 0;
 }
 
 void hyprlodr_startup_diag_drain(void) {
@@ -168,8 +235,11 @@ void hyprlodr_startup_diag_drain(void) {
         char line[160];
         DWORD written = 0;
         int length = snprintf(line, sizeof line,
-                              "{\"seq\":%u,\"event\":\"diagnostic_events_dropped\",\"count\":%ld}\n",
-                              limit + 1u, dropped);
+                              "{\"seq\":%u,\"run_id\":\"%016llx\",\"pid\":%lu,"
+                              "\"event\":\"diagnostic_events_dropped\",\"count\":%ld}\n",
+                              hyprlodr_startup_diag_next_sequence(),
+                              (unsigned long long)hyprlodr_startup_diag_run_id(),
+                              (unsigned long)GetCurrentProcessId(), dropped);
         if (length > 0) WriteFile(g_log, line, (DWORD)length, &written, NULL);
     }
     __atomic_store_n(&g_drain_lock, 0l, __ATOMIC_RELEASE);
@@ -177,6 +247,22 @@ void hyprlodr_startup_diag_drain(void) {
 
 void hyprlodr_startup_diag_request_stop(void) {
     __atomic_store_n(&g_stop, 1l, __ATOMIC_RELEASE);
+}
+
+int hyprlodr_startup_diag_finish(uint32_t timeout_ms) {
+    hyprlodr_startup_diag_request_stop();
+    if (g_writer_thread) {
+        if (WaitForSingleObject(g_writer_thread, timeout_ms) != 0u) return -1;
+        CloseHandle(g_writer_thread);
+        g_writer_thread = NULL;
+    }
+    hyprlodr_startup_diag_drain();
+    if (g_log != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_log);
+        g_log = INVALID_HANDLE_VALUE;
+    }
+    __atomic_store_n(&g_writer_status, 5l, __ATOMIC_RELEASE); /* stopped */
+    return 0;
 }
 
 void hyprlodr_startup_diag_pump(void) {

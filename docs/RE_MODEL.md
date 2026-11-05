@@ -562,10 +562,10 @@ game content and must not be committed.
 
 `HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` enables a passive, bounded event recorder.
 The early proxy attach and intercepted loader callbacks only copy fixed-size
-records into a 128-entry static ring. The bootstrap worker creates
-`hyprlodr-startup.jsonl`, drains the ring, and starts a dedicated writer thread;
-each JSONL event has a shared
-`seq`, monotonic process tick, thread ID, event kind, archive gate state, and
+records into a 1,024-entry static ring. The bootstrap worker creates per-run
+startup and file JSONL logs, drains the ring, and starts a dedicated writer thread;
+each JSONL event has a shared atomic `seq`, PID, run ID, monotonic process tick,
+thread ID, event kind, archive gate state, and
 the relevant resource tag/extent/route flags. The first archive open record
 includes the actual path selected. First loader-entry and return events retain
 the original descriptor values and parsed-object pointer. A drop marker means
@@ -577,6 +577,14 @@ original loader unchanged. The trace answers whether the first cold target
 request follows archive and route readiness; an absent target event is only
 meaningful if the first general callsite event and complete, non-overflowed
 trace establish that the instrumentation ran.
+
+The attach record reports requested/attempted/installed hook states, writer
+startup status, and total ring drops. The proxy keeps its writer for process
+lifetime; it does not wait for it in `DllMain`. A safe explicit finish API is
+used by the compiled fixture to verify final draining. The offline report
+generator correlates per-run startup and `_Fiopen` logs and marks missing
+instrumentation as unknown unless the process exited with a complete,
+non-overflowed trace and an observed intercepted callsite.
 
 ### Controlled diagnostic-only run (2026-11-05)
 
@@ -607,6 +615,26 @@ runtime logs, and prior GL captures were restored, and executable/archive
 hashes remained unchanged. The pre-run AppData contents were not snapshotted,
 so their exact original contents could not be restored. This is a remaining
 runtime-testing limitation.
+
+### Follow-up trace and isolation audit (2026-11-05)
+
+The previous attach, startup, and file artifacts had no common run ID; their
+local sequence counters also collided. Startup reports `installed_dormant`,
+while the final attach JSON says the early hook was not requested and has
+`not_requested` status. The saved files cannot be proved to belong to one
+proxy instance, so the exact historical cause is unresolved. Unique per-run
+filenames and IDs now make this ambiguity detectable. The machine-readable
+review at `.tmp/first-load-diagnostic/evidence/first-attempt/coverage-review.json`
+confirms the original `asset/asset` open in the file log, but correctly marks
+hook execution and tag-1 `hand2` ordering unknown.
+
+No second launch was made. The preflight rejected launch because Steam was
+active; Xvfb `:99` was unavailable and network namespace isolation was denied.
+Game files, Proton compatdata, HOME, temporary/cache state, and Steam state
+must now all be rooted in `.tmp/first-load-diagnostic/isolated`; symlinked
+writable roots and the installed game tree are rejected. This avoids changing
+the existing profile or relying on an incomplete restoration journal. No
+variable-size replacement was attempted.
 
 ## Native replacement experiment (2026-11-03)
 

@@ -58,18 +58,44 @@ path or that the first cold `hand2` lookup occurs after activation.
 Set `HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` for one explicitly opted-in run. The
 proxy stores attach-time, first archive attempt/wait/open, gate release,
 bootstrap/preflight/redirect/activation, first callsite, first `hand2`, exact
-tag-1 target, original loader entry, and first loader return in a fixed 128
+tag-1 target, original loader entry, and first loader return in a fixed 1,024
 record process ring. Separate `tag1_hand2_loader_call` and
 `tag1_hand2_loader_return` events retain the exact target's outcome even if
 the distinct tag-2 `hand2` request occurred first. The worker writes
-`hyprlodr-startup.jsonl` after attach returns and starts a dedicated ring
-writer; bootstrap transitions also drain from the safe worker context. Sort by
-`seq`, not timestamps across files;
+per-run startup and file JSONL logs after attach returns and starts a dedicated
+ring writer; bootstrap transitions also drain from the safe worker context.
+Startup and `_Fiopen` file events share the sequence source and include PID and
+run ID. Sort by `seq`, not timestamps;
 `t_ms` is a monotonic `GetTickCount` sample and `thread` is the Windows thread
 ID. A `diagnostic_events_dropped` record invalidates completeness. No event
 from the loader callback is formatted or written to disk. This diagnostic mode
 does not enable route validation or replacement by itself; the ordinary
 configuration remains authoritative.
+
+The diagnostic fixture runs the actual C recorder/writer and record-routing
+wrapper under Wine. It checks pre-writer events, tag-2 rejection versus the
+verified tag-1 metadata, original forwarding and parsed-object retention on a
+second thread, concurrent drains, safe final drain, writer-creation failure,
+and ring overflow reporting. `hyprlodr_startup_diag_finish()` is only used from
+the fixture's safe main thread, never from `DllMain`.
+
+Generate a machine-readable coverage report only after process exit:
+
+```sh
+python3 tools/re/first_load_diagnostics.py coverage \
+  --startup /path/to/hyprlodr-startup-<run-id>.jsonl \
+  --files /path/to/hyprlodr-files-<run-id>.jsonl \
+  --attach /path/to/hyprlodr-attach-<run-id>.json \
+  --output .tmp/first-load-diagnostic/coverage.json --process-exited
+```
+
+Missing instrumentation, mismatched identities, sequence gaps, overflow, or a
+missing callsite event leave resource absence classified as unknown. The deployment
+preflight in `tools/re/first_load_diagnostics.py preflight` requires the game
+copy, Proton compatdata, HOME, temp/cache, and Steam state roots under
+`.tmp/first-load-diagnostic/isolated`, rejects symlinked writable roots and
+the installed game tree, and fails while a Steam client process is active.
+Do not launch if this check fails.
 
 ## Managed callsite fixture (Windows x64 under Wine)
 
