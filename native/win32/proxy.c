@@ -34,6 +34,7 @@
 
 static hyprlodr_loader *g_loader;
 static DWORD g_delay_ms = HYPRLODR_BOOTSTRAP_DELAY_MS;
+static int g_record_route_requested;
 static char g_game_dir[1024];
 static char g_evidence_path[1024];
 
@@ -247,6 +248,28 @@ static DWORD bootstrap_delay_ms(void) {
     return result;
 }
 
+static int bootstrap_record_route_requested(void) {
+    char path[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-config.json", g_game_dir);
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    int requested = 0;
+    char line[512];
+    while (fgets(line, (int)sizeof line, file)) {
+        const char *key = find_literal(line, "\"experimental_record_route\"");
+        if (!key) continue;
+        const char *cursor = key + strlen("\"experimental_record_route\"");
+        while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') ++cursor;
+        if (*cursor++ != ':') continue;
+        while (*cursor == ' ' || *cursor == '\t') ++cursor;
+        if (strncmp(cursor, "true", 4u) == 0) requested = 1;
+        else if (strncmp(cursor, "false", 5u) == 0) requested = 0;
+        break;
+    }
+    fclose(file);
+    return requested;
+}
+
 
 static void write_attach_record(const char *stage, int status) {
     if (!g_anchors_checked) inspect_main_module();
@@ -284,6 +307,13 @@ static void write_attach_record(const char *stage, int status) {
                         g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
     fputs("\",\"build_matches\":", file);
     fputs(build_matches ? "true" : "false", file);
+    fputs(",\"experimental_record_route_requested\":", file);
+    fputs(g_record_route_requested ? "true" : "false", file);
+    fputs(",\"experimental_record_route_status\":\"", file);
+    json_escape(file, !g_record_route_requested ? "disabled" :
+                (build_matches ? "blocked_runtime_manifest_and_cache_stream_unverified" :
+                                 "rejected_unsupported_executable"));
+    fputc('"', file);
     fprintf(file, ",\"anchors_total\":%lu,\"anchors_matched\":%lu,\"anchors_out_of_range\":%lu",
             (unsigned long)g_anchors.total, (unsigned long)g_anchors.matched,
             (unsigned long)g_anchors.out_of_range);
@@ -328,6 +358,7 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * still prove which executable ran and whether it matches the analysis; the
      * mod start-up delay below is about the game being ready, not about us. */
     g_delay_ms = bootstrap_delay_ms();
+    g_record_route_requested = bootstrap_record_route_requested();
 
     char mods_dir[1024];
     char disabled_file[1024];

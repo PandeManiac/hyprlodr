@@ -27,6 +27,9 @@ mkdir -p "$WORK/mods" "$WORK/proxy/mods"
 
 status=0
 
+echo "== wine: compiled CALL rel32 interception fixture =="
+timeout 45 wine "$OUT/tests/callsite_hook_client.exe" || status=1
+
 echo "== native hand dispatch readiness state tests =="
 cc -std=c17 -Wall -Wextra -Werror "$ROOT/native/tests/hand_dispatch_test.c" \
   -o "$OUT/hand-dispatch-test"
@@ -112,6 +115,8 @@ assert attach["module_parsed"] is True, attach
 assert attach["anchors_total"] > 0, attach
 assert attach["build_matches"] is False, attach
 assert attach["anchors_matched"] < attach["anchors_total"], attach
+assert attach["experimental_record_route_requested"] is False, attach
+assert attach["experimental_record_route_status"] == "disabled", attach
 print(f"build fingerprint: {attach['anchors_matched']}/{attach['anchors_total']} anchors, "
       f"build_matches={attach['build_matches']}." )
 # The stand-in host has no asset tables at those RVAs, so the dump must decline
@@ -156,7 +161,7 @@ assert ready and ready[0]["waited_ms"] > 0, waits
 print(f"early asset open: waited {ready[0]['waited_ms']} ms, redirected, and returned readable replacement bytes")
 PY
   echo "== wine proxy: hyprlodr-config.json overrides the delay =="
-  printf '{\n  "delay_ms": 0\n}\n' > "$WORK/proxy/hyprlodr-config.json"
+  printf '{\n  "delay_ms": 0,\n  "experimental_record_route": true\n}\n' > "$WORK/proxy/hyprlodr-config.json"
   rm -f "$WORK/proxy/hyprlodr-attach.json" "$WORK/proxy/hyprlodr-events.jsonl"
   ( cd "$WORK/proxy" && timeout 90 wine ./proxy_client.exe ) | tee "$WORK/proxy/client.log" || status=1
 
@@ -166,12 +171,14 @@ base = pathlib.Path(sys.argv[1])
 attach = json.loads((base / "hyprlodr-attach.json").read_text())
 assert attach["delay_ms"] == 0, attach
 assert attach["stage"] == "mods_loaded", attach
+assert attach["experimental_record_route_requested"] is True, attach
+assert attach["experimental_record_route_status"] == "rejected_unsupported_executable", attach
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 samples = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
 assert [mod for mod in init if mod != "r.redirect"] == samples, init
 assert "r.redirect" in init, init
-print("config: delay_ms=0 honoured, all five mods still initialized")
+print("config: delay_ms=0 honoured, route opt-in rejected on the unsupported Wine host")
 assert attach["file_redirects"] == 2, attach
 
 # The first CreateFileA call opens "asset/asset" before the client waits for

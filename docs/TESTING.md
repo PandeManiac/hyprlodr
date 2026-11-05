@@ -20,6 +20,36 @@ python3 tools/hyprl_diagnose.py --json report.json
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
 
+## Managed callsite fixture (Windows x64 under Wine)
+
+`tools/build_windows.sh` builds `tests/callsite_hook_client.exe` from the same
+`callsite_hook.c` and `record_route_hook.c` sources linked into the proxy.
+`tools/test_windows.sh` always executes it, even when no original OpenAL DLL is
+provided. The fixture emits executable Windows x64 machine code with a known
+five-byte `CALL rel32`, first calls the original target, then installs before
+worker threads start and calls through the patched instruction.
+
+The fixture checks direct and relayed replacement targets, the four argument
+registers and return value, the tag-1 enlarged record route (239 vertices,
+1,191 indices, 22,056-byte replacement extent), tag-2 and unrelated pass-through,
+MSVC short and long string layouts, request metadata restoration and the
+parsed-object pointer, plus unchanged source-record metadata. It also exercises
+repeated install, quiescence rejection, expected-byte/original-target mismatch,
+relay allocation failure, page-protection failure, instruction-cache-flush
+rollback, nested invocation, concurrent independent requests and enable-state
+toggling, and disablement while a call remains in flight. It never unpatches or
+frees the relay; that is the tested lifetime contract.
+
+This fixture demonstrates execution of the compiled hook implementation under
+Wine. Its quiescent installation is established by construction in the fixture;
+it does not prove the game has an equivalent safe install phase.
+
+The proxy regression run also checks that `experimental_record_route` is false
+by default and that an explicit request on the unsupported Wine stand-in is
+reported as `rejected_unsupported_executable`. A fingerprint match is reported
+as blocked until the runtime manifest, cache/stream serialization and a live
+quiescent point are established; the proxy does not install the callsite.
+
 ## Loader scenarios (native, 41/41 passing)
 
 | Scenario | Asserts |

@@ -161,11 +161,16 @@ BOOL WINAPI WriteFile(HANDLE file, LPCVOID buffer, DWORD bytes, DWORD *written, 
 BOOL WINAPI ReadFile(HANDLE file, LPVOID buffer, DWORD bytes, DWORD *read, void *overlapped);
 BOOL WINAPI CloseHandle(HANDLE handle);
 BOOL WINAPI VirtualProtect(LPVOID address, size_t size, DWORD new_protect, DWORD *old_protect);
+LPVOID WINAPI VirtualAlloc(LPVOID address, size_t size, DWORD allocation_type,
+                           DWORD protection);
+HANDLE WINAPI GetCurrentProcess(void);
+BOOL WINAPI FlushInstructionCache(HANDLE process, LPCVOID address, size_t size);
 
 /* --- address-space queries: the asset-record probe --------------------------
  * The probe walks committed, readable regions looking for the game's asset
  * records, so it needs VirtualQuery and the page constants, nothing more. */
 #define MEM_COMMIT 0x00001000u
+#define MEM_RESERVE 0x00002000u
 #define MEM_PRIVATE 0x00020000u
 #define MEM_MAPPED 0x00040000u
 #define PAGE_NOACCESS 0x00000001u

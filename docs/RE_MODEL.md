@@ -254,10 +254,47 @@ establish a safe time to patch it concurrently. Current Ghidra evidence does
 not identify an outer lock protecting the name cache or prove that the archive
 stream's seek/read sequence is serialized. Nested resource loads and objects
 cached before route activation also remain possible. Therefore the live
-callsite is still not installed. Routing must remain disabled pending a
-separately tested managed interception lifecycle and evidence for the game's
-cache/stream synchronization model. The exact five-byte anchor is detection,
-not permission to patch a live instruction.
+callsite is still not installed. The managed facility now has a synthetic Wine
+fixture, but the game still lacks a demonstrated quiescent installation point
+and verified cache/stream synchronization. The exact five-byte anchor is
+detection, not permission to patch a live instruction.
+
+The generic Windows facility is now implemented in
+`native/win32/callsite_hook.c` and linked into the proxy, but proxy startup does
+not install it. Its only supported write mode requires a caller-supplied
+quiescence assertion and retains the relay/callback state to process exit;
+logical disablement never rewrites the instruction. `record_route_hook.c`
+adapts the verified MSVC string object to the route helper without treating the
+object pointer as a C string. The Wine fixture exercises this wrapper through
+an actual emitted call instruction. This is synthetic evidence, not a real
+game interception.
+
+The proxy config accepts an opt-in `"experimental_record_route": true` flag,
+but treats it as a request only. `hyprlodr-attach.json` reports
+`experimental_record_route_requested` and a status: unsupported builds are
+rejected; a fingerprint match remains blocked on runtime manifest and
+cache/stream synchronization validation.
+This makes the experimental intent visible without silently activating an
+unproven patch.
+
+### Resolver/cache/stream concurrency status
+
+Fresh disassembly of the pinned executable finds 341 direct call instructions
+to `FUN_140211e70`, spread across many caller regions. The resolver performs a
+tree lookup, materializes a local record, calls the loader, then calls the
+name-map slot helper to copy the record. The available Ghidra decompilation
+does not show a lock around that sequence. The loader uses the manager's shared
+stream for seek/read/decrypt, and no lock around the combined seek/read extent
+has been identified. Standard iostream operations do not by themselves prove
+that a multi-call seek-plus-read transaction is serialized.
+
+The static evidence also does not establish whether higher-level callers can
+serve a cached model without entering this resolver, or whether first-time
+resource loads are confined to initialization. Thus cache insertion
+serialization, stream serialization, nested-load interactions, and the real
+installation window remain unresolved. Do not enable a live route or install
+the callsite in the game until those conditions are established. No global
+loader mutex is added.
 
 That operation is implemented as the allocation-free helper
 `native/src/record_route.c` (`hyprlodr_record_route_invoke`). It requires an

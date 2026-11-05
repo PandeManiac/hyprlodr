@@ -57,6 +57,8 @@ compile() { # compile <source> <object> [extra flags...]
 compile "$ROOT/native/src/loader.c" "$OUT/obj/loader.obj"
 compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
 compile "$ROOT/native/src/record_route.c" "$OUT/obj/record_route.obj"
+compile "$ROOT/native/win32/callsite_hook.c" "$OUT/obj/callsite_hook.obj"
+compile "$ROOT/native/win32/record_route_hook.c" "$OUT/obj/record_route_hook.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
 compile "$ROOT/native/win32/file_hook.c" "$OUT/obj/file_hook.obj"
@@ -100,6 +102,13 @@ compile "$ROOT/native/win32/tests/record_route_client.c" "$OUT/obj/record_route_
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "/out:$OUT/tests/record_route_client.exe" \
   "$OUT/obj/record_route_client.obj" "$OUT/obj/record_route.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+echo "== synthetic CALL rel32 interception fixture =="
+compile "$ROOT/native/win32/tests/callsite_hook_client.c" "$OUT/obj/callsite_hook_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/callsite_hook_client.exe" \
+  "$OUT/obj/callsite_hook_client.obj" "$OUT/obj/callsite_hook.obj" \
+  "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+  "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" \
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
@@ -198,6 +207,7 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
   lld-link /nologo /dll /nodefaultlib /entry:dll_main "/out:$OUT/OpenAL32.dll" \
     /def:"$OUT/OpenAL32.def" \
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" "$OUT/obj/file_hook.obj" \
+    "$OUT/obj/callsite_hook.obj" "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
     "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32" "$U32" "$G32"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
   PROXY_SHA256="$(sha256sum "$OUT/OpenAL32.dll" | cut -d ' ' -f 1)"

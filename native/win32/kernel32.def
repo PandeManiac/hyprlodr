@@ -36,6 +36,9 @@ MultiByteToWideChar
 ReadFile
 WideCharToMultiByte
 VirtualProtect
+VirtualAlloc
+GetCurrentProcess
+FlushInstructionCache
 VirtualQuery
 SetUnhandledExceptionFilter
 SetEvent
