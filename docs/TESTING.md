@@ -44,11 +44,19 @@ This fixture demonstrates execution of the compiled hook implementation under
 Wine. Its quiescent installation is established by construction in the fixture;
 it does not prove the game has an equivalent safe install phase.
 
-The proxy regression run also checks that `experimental_record_route` is false
-by default and that an explicit request on the unsupported Wine stand-in is
-reported as `rejected_unsupported_executable`. A fingerprint match is reported
-as blocked until the runtime manifest, cache/stream serialization and a live
-quiescent point are established; the proxy does not install the callsite.
+The compiled `tests/route_manifest_client.exe` runs the native manifest reader
+under Wine against `.tmp/archive-tests/asset-hand2-appended`. When the installed
+game executable is present, the runner uses its real path and the manifest's
+pinned hash; otherwise it substitutes the fixture executable hash only for
+that test input. It covers a valid route, executable/archive hash mismatch,
+changed ciphertext, wrong record/table/tag, truncation, missing fields,
+unsupported schema, overflow and concurrent reads of process-lifetime route
+state. The proxy regression run checks that `experimental_record_route` is off
+by default. On the unsupported Wine stand-in an opt-in request is reported as
+`executable_unsupported`. Successful preflight reports
+`validated_blocked_runtime_synchronization`; the proxy still does not install
+the callsite because game cache/stream synchronization and a live quiescent
+point remain unestablished.
 
 ## Loader scenarios (native, 41/41 passing)
 

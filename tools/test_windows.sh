@@ -10,7 +10,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$ROOT/build-win}"
+mkdir -p "$ROOT/.tmp"
+export TMPDIR="$ROOT/.tmp" TMP="$ROOT/.tmp" TEMP="$ROOT/.tmp"
+OUT="${1:-$ROOT/.tmp/build-win}"
 ORIGINAL_OPENAL="${2:-}"
 # Wine rejects relative WINEPREFIX paths and winepath needs absolute ones.
 mkdir -p "$OUT"
@@ -29,6 +31,20 @@ status=0
 
 echo "== wine: compiled CALL rel32 interception fixture =="
 timeout 45 wine "$OUT/tests/callsite_hook_client.exe" || status=1
+
+if [[ -f "$OUT/tests/route_manifest_client.exe" \
+     && -f "$ROOT/.tmp/archive-tests/asset-hand2-appended" \
+     && -f "$ROOT/.tmp/archive-tests/hand2-override.json" ]]; then
+  echo "== wine: compiled native validator against the real appended archive =="
+  GAME_EXE="${HYPRLODR_GAME_EXE:-$HOME/.local/share/Steam/steamapps/common/hyperdemon/hyperdemon.exe}"
+  GAME_EXE_ARGS=()
+  if [ -f "$GAME_EXE" ]; then GAME_EXE_ARGS=("$GAME_EXE"); fi
+  timeout 180 python3 "$ROOT/tools/tests/run_windows_manifest_fixture.py" \
+    "$OUT/tests/route_manifest_client.exe" \
+    "$ROOT/.tmp/archive-tests/asset-hand2-appended" \
+    "$ROOT/.tmp/archive-tests/hand2-override.json" \
+    "$OUT/manifest-fixture" "${GAME_EXE_ARGS[@]}" || status=1
+fi
 
 echo "== native hand dispatch readiness state tests =="
 cc -std=c17 -Wall -Wextra -Werror "$ROOT/native/tests/hand_dispatch_test.c" \
@@ -172,7 +188,7 @@ attach = json.loads((base / "hyprlodr-attach.json").read_text())
 assert attach["delay_ms"] == 0, attach
 assert attach["stage"] == "mods_loaded", attach
 assert attach["experimental_record_route_requested"] is True, attach
-assert attach["experimental_record_route_status"] == "rejected_unsupported_executable", attach
+assert attach["experimental_record_route_status"] == "executable_unsupported", attach
 events = [json.loads(line) for line in (base / "hyprlodr-events.jsonl").read_text().splitlines() if line.strip()]
 init = [e["mod"] for e in events if e["event"] == "initialize_ok"]
 samples = ["z.foundation", "a.palette", "b.audio", "m.overlay", "00.final"]
@@ -271,7 +287,9 @@ PY
     "/out:$TIMEOUT_PROXY" "/def:$OUT/OpenAL32.def" \
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" \
     "$OUT/obj/file_hook_timeout.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" \
-    "$OUT/obj/crt_impl.obj" "$OUT/lib/kernel32.lib" "$OUT/lib/user32.lib" "$OUT/lib/gdi32.lib"
+    "$OUT/obj/callsite_hook.obj" "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
+    "$OUT/obj/route_manifest.obj" "$OUT/obj/crt_impl.obj" "$OUT/lib/kernel32.lib" \
+    "$OUT/lib/user32.lib" "$OUT/lib/gdi32.lib" "$OUT/lib/bcrypt.lib"
   clang "${CFG[@]}" -DHYPRLODR_TEST_ASSET_OPEN_DELAY_MS=0 \
     -c "$ROOT/native/win32/tests/proxy_client.c" -o "$OUT/obj/proxy_client_timeout.obj"
   lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \

@@ -10,7 +10,7 @@ typedef struct {
     void *game_context;
 } original_call;
 
-static hyprlodr_game_route_binding *g_binding;
+static hyprlodr_game_route_binding *volatile g_binding;
 
 static int game_name_is_hand2(const void *name_object, char output[6]) {
     const unsigned char *object = (const unsigned char *)name_object;
@@ -42,7 +42,7 @@ void hyprlodr_record_route_hook_bind(hyprlodr_game_route_binding *binding,
     if (!binding) return;
     binding->hook = hook;
     binding->route = route;
-    g_binding = binding;
+    (void)__atomic_exchange_n(&g_binding, binding, __ATOMIC_RELEASE);
 }
 
 static uintptr_t invoke_original(void *context, void *record,
@@ -53,7 +53,8 @@ static uintptr_t invoke_original(void *context, void *record,
 
 uintptr_t hyprlodr_record_route_hook_call(void *context, void *record,
                                          const void *name_object, uint32_t flags) {
-    hyprlodr_game_route_binding *binding = g_binding;
+    hyprlodr_game_route_binding *binding =
+        __atomic_load_n(&g_binding, __ATOMIC_ACQUIRE);
     game_loader_fn original;
     original_call call;
     char requested_name[6];

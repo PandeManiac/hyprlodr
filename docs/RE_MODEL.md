@@ -269,13 +269,43 @@ object pointer as a C string. The Wine fixture exercises this wrapper through
 an actual emitted call instruction. This is synthetic evidence, not a real
 game interception.
 
-The proxy config accepts an opt-in `"experimental_record_route": true` flag,
-but treats it as a request only. `hyprlodr-attach.json` reports
-`experimental_record_route_requested` and a status: unsupported builds are
-rejected; a fingerprint match remains blocked on runtime manifest and
-cache/stream synchronization validation.
-This makes the experimental intent visible without silently activating an
-unproven patch.
+The proxy config accepts an opt-in `"experimental_record_route": true` flag
+plus `experimental_record_route_manifest` and
+`experimental_record_route_archive` paths. The new strict Windows validator is
+in `native/win32/route_manifest.c`. It accepts schema 1 and the exact
+`append-only-record-override-required` delivery, checks the hard-coded game
+SHA-256 as well as the on-disk executable, checks the archive's full SHA-256
+and source-prefix SHA-256, and verifies both the original record ciphertext
+and appended replacement ciphertext. It rejects duplicate JSON keys, escaped
+strings, non-integer/overflow values, trailing commas, excessive nesting,
+missing required fields, unsupported schema/delivery, wrong resolver table,
+record ID, original extent or tag, and non-append replacement ranges. Hashing
+uses bounded-memory Windows CNG streams during the bootstrap worker, not in
+the resource-loader or render callbacks.
+
+On successful preflight, the route and its `hand2` name are stored in static
+proxy storage. The route's name pointer refers to its owner, and the hook
+binding points to the static callsite state and route for process lifetime.
+The binding pointer is published and read with Windows interlocked pointer
+operations, so a future authorized installation has an explicit release/acquire
+publication edge before a wrapper can observe the immutable state.
+Failures free only temporary parser storage; no published route is reclaimed.
+`hyprlodr-attach.json` reports `experimental_record_route_requested` and a
+specific preflight status. A successful result is reported as
+`validated_blocked_runtime_synchronization`: it proves the replacement inputs,
+not a safe callsite installation. The proxy still never installs the callsite.
+
+The Wine fixture executes this compiled validator against the real 306,816,425
+byte appended archive and the installed executable. It also exercises stale
+executable/archive identities, modified ciphertext, wrong original metadata,
+wrong table and tag 2 with the same name, a truncated archive, missing fields,
+unsupported schema, u32 overflow, and parallel reads of immutable route state.
+This covers archive integrity and resource identity; it deliberately does not
+duplicate the native model parser. Offline decryption using the captured
+runtime cipher tables independently confirms a 22,056-byte plaintext with 239
+vertices, 1,191 indices and stride 72. The original 306,794,369-byte archive
+is the exact prefix declared by the manifest; neither installed game file was
+modified.
 
 ### Resolver/cache/stream concurrency status
 
@@ -310,25 +340,24 @@ compiled helper also ran under Wine and verified the 22,056-byte replacement
 extent plus rejection of the tag-2 `hand2` request. These are tests of the
 request-level component, not of a game callsite detour.
 
-This helper is not connected to a runtime hook. The current public host API can
-write fingerprint-guarded bytes, but its write uses `memcpy`, has no
-instruction-cache flush, and cannot create/manage a near relay for the game's
-five-byte relative call. A correct detour also needs a verified installation
-window, atomic or otherwise synchronized code replacement, and a teardown
-contract that prevents an in-flight call from entering an unloaded mod. The
-first-archive-open redirect gate offers a likely pre-read installation window,
-but this alone does not establish the thread or teardown guarantees. The
-analyzed map insertion and shared `istream` seek/read do not prove whether
-higher-level callers serialize requests. Therefore no live callsite patch or
-game run is justified yet. The isolated helper does not claim to establish
-loader thread safety or native game acceptance.
+The runtime preflight now constructs and binds this route state, but leaves the
+permanent callsite hook uninstalled. The existing managed hook is compiled and
+tested separately; its relay and callback code remain allocated until process
+exit. The first-archive-open redirect gate is not evidence that no thread can
+execute the target callsite, and the resolver's shared `istream` seek/read plus
+name-cache insert have no established outer synchronization contract. Static
+analysis also does not establish nested-load behavior or whether cache hits
+bypass the resolver. No global mutex was introduced because its interaction
+with existing locks and recursive loading is unknown. Therefore no real-game
+callsite patch or launch was justified in this milestone.
 
 The append archive still cannot route itself: record offsets live in runtime
-resolver tables, not a self-contained directory. The existing manifest
-validator proves exact archive/executable/record identities, appended bounds,
-ciphertext and plaintext hashes, decryption, and mesh counts offline. Connecting
-that manifest to a runtime hook remains future work and must fail closed before
-hook installation if any identity or range check fails.
+resolver tables, not a self-contained directory. Native preflight validates
+hashes and range/resource identity; offline Python tooling separately verifies
+decryption and parsed mesh counts. The remaining activation blocker is concrete:
+establish a guaranteed quiescent point before the five-byte write and prove the
+game's cache and shared archive stream are serialized (or establish an
+alternative boundary that does not rely on those assumptions).
 
 `Group8673` remains an unknown 8-byte graph value (`00000000a4040000`); its
 upper u32 numerically matches the original index count 1,188, but no consumer

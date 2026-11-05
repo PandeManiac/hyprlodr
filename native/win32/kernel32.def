@@ -23,6 +23,7 @@ GetProcessHeap
 GetTickCount
 GetModuleFileNameA
 GetFileSize
+SetFilePointerEx
 GetModuleHandleA
 GetProcAddress
 GetStdHandle

@@ -20,6 +20,9 @@
 #include "proxy_build.h"
 #include "gl_hook.h"
 #include "game_anchors.h"
+#include "route_manifest.h"
+#include "callsite_hook.h"
+#include "record_route_hook.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -35,6 +38,10 @@
 static hyprlodr_loader *g_loader;
 static DWORD g_delay_ms = HYPRLODR_BOOTSTRAP_DELAY_MS;
 static int g_record_route_requested;
+static char g_record_route_status[64] = "disabled";
+static hyprlodr_manifest_result g_route_manifest;
+static hyprlodr_call_hook g_route_call_hook = HYPRLODR_CALL_HOOK_INITIALIZER;
+static hyprlodr_game_route_binding g_route_binding;
 static char g_game_dir[1024];
 static char g_evidence_path[1024];
 
@@ -270,6 +277,69 @@ static int bootstrap_record_route_requested(void) {
     return requested;
 }
 
+static int config_string(const char *key, char *out, size_t capacity) {
+    char path[1024], line[1024];
+    snprintf(path, sizeof path, "%s\\hyprlodr-config.json", g_game_dir);
+    FILE *file=fopen(path,"rb"); if(!file)return 0;
+    char needle[128]; snprintf(needle,sizeof needle,"\"%s\"",key);
+    int found=0;
+    while(fgets(line,(int)sizeof line,file)) {
+        const char *at=find_literal(line,needle); if(!at)continue;
+        at+=strlen(needle); while(*at==' '||*at=='\t')++at;
+        if(*at++!=':')break; while(*at==' '||*at=='\t')++at;
+        if(*at++!='\"')break; size_t n=0;
+        while(*at&&*at!='\"'&&(unsigned char)*at>=0x20) {
+            if(*at=='\\') { if(at[1]!='\\'&&at[1]!='\"')break; ++at; }
+            if(n+1>=capacity)break; out[n++]=*at++;
+        }
+        if(*at!='\"'||n+1>capacity)break;
+        out[n]=0;found=1;break;
+    }
+    fclose(file); return found;
+}
+
+static int safe_route_path(const char *path) {
+    const char *component=path;
+    if(!path||!*path)return 0;
+    for(const char*p=path;;++p) {
+        unsigned char c=(unsigned char)*p;
+        if(c=='*'||c=='?'||c=='<'||c=='>'||c=='|'||c=='"'||c<0x20)return 0;
+        if(c=='\\'||c=='/'||c==0) {
+            if((size_t)(p-component)==2&&component[0]=='.'&&component[1]=='.')return 0;
+            if(c==0)break; component=p+1;
+        }
+    }
+    return 1;
+}
+
+static void preflight_record_route(int build_matches) {
+    if(!g_record_route_requested){snprintf(g_record_route_status,sizeof g_record_route_status,"disabled");return;}
+    if(!build_matches){snprintf(g_record_route_status,sizeof g_record_route_status,"executable_unsupported");return;}
+    char manifest[1024],archive[1024],exe[1024];
+    if(!config_string("experimental_record_route_manifest",manifest,sizeof manifest)) {
+        snprintf(g_record_route_status,sizeof g_record_route_status,"manifest_missing");return;
+    }
+    if(!safe_route_path(manifest)) { snprintf(g_record_route_status,sizeof g_record_route_status,"manifest_malformed");return; }
+    if(!config_string("experimental_record_route_archive",archive,sizeof archive)) {
+        snprintf(g_record_route_status,sizeof g_record_route_status,"archive_mismatch");return;
+    }
+    if(!safe_route_path(archive)) { snprintf(g_record_route_status,sizeof g_record_route_status,"archive_mismatch");return; }
+    if(!GetModuleFileNameA(NULL,exe,(DWORD)sizeof exe)) {
+        snprintf(g_record_route_status,sizeof g_record_route_status,"executable_unsupported");return;
+    }
+    hyprlodr_manifest_inputs input={exe,archive,manifest,
+        "7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611",
+        "tbl-e91fb3b80004","rec-011a0ebc0-000055d4-0001",295758784u,21972u,1u};
+    hyprlodr_manifest_status status=hyprlodr_manifest_validate(&input,&g_route_manifest);
+    if(status!=HYPRLODR_MANIFEST_OK){snprintf(g_record_route_status,sizeof g_record_route_status,"%s",hyprlodr_manifest_status_name(status));return;}
+    /* This object is static and its route.name points into itself. The hook's
+     * process-lifetime contract permits publishing it permanently. The real
+     * callsite is deliberately not installed while game synchronization is
+     * unresolved. */
+    hyprlodr_record_route_hook_bind(&g_route_binding,&g_route_call_hook,&g_route_manifest.route);
+    snprintf(g_record_route_status,sizeof g_record_route_status,"validated_blocked_runtime_synchronization");
+}
+
 
 static void write_attach_record(const char *stage, int status) {
     if (!g_anchors_checked) inspect_main_module();
@@ -310,9 +380,7 @@ static void write_attach_record(const char *stage, int status) {
     fputs(",\"experimental_record_route_requested\":", file);
     fputs(g_record_route_requested ? "true" : "false", file);
     fputs(",\"experimental_record_route_status\":\"", file);
-    json_escape(file, !g_record_route_requested ? "disabled" :
-                (build_matches ? "blocked_runtime_manifest_and_cache_stream_unverified" :
-                                 "rejected_unsupported_executable"));
+    json_escape(file, g_record_route_status);
     fputc('"', file);
     fprintf(file, ",\"anchors_total\":%lu,\"anchors_matched\":%lu,\"anchors_out_of_range\":%lu",
             (unsigned long)g_anchors.total, (unsigned long)g_anchors.matched,
@@ -396,6 +464,10 @@ static DWORD WINAPI bootstrap(LPVOID unused) {
      * inspect real code and data; a different build yields build_matches=0 and
      * every read is refused. */
     inspect_main_module();
+    int build_matches = g_module.parsed &&
+                        g_module.timestamp == HYPRLODR_GAME_BUILD_TIMESTAMP &&
+                        g_anchors.total > 0 && g_anchors.matched == g_anchors.total;
+    preflight_record_route(build_matches);
     hyprlodr_image image;
     image.base = g_module.base;
     image.size = (size_t)g_module.size_of_image;

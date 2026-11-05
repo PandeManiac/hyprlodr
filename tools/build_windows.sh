@@ -10,7 +10,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$ROOT/build-win}"
+mkdir -p "$ROOT/.tmp"
+export TMPDIR="$ROOT/.tmp" TMP="$ROOT/.tmp" TEMP="$ROOT/.tmp"
+OUT="${1:-$ROOT/.tmp/build-win}"
 ORIGINAL_OPENAL="${2:-}"
 
 TARGET=x86_64-pc-windows-msvc
@@ -47,6 +49,7 @@ echo "== import library =="
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/kernel32.def" -l "$OUT/lib/kernel32.lib"
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/user32.def" -l "$OUT/lib/user32.lib"
 llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/gdi32.def" -l "$OUT/lib/gdi32.lib"
+llvm-dlltool -m i386:x86-64 -d "$ROOT/native/win32/bcrypt.def" -l "$OUT/lib/bcrypt.lib"
 
 compile() { # compile <source> <object> [extra flags...]
   local source="$1" object="$2"; shift 2
@@ -59,6 +62,7 @@ compile "$ROOT/native/src/anchors.c" "$OUT/obj/anchors.obj"
 compile "$ROOT/native/src/record_route.c" "$OUT/obj/record_route.obj"
 compile "$ROOT/native/win32/callsite_hook.c" "$OUT/obj/callsite_hook.obj"
 compile "$ROOT/native/win32/record_route_hook.c" "$OUT/obj/record_route_hook.obj"
+compile "$ROOT/native/win32/route_manifest.c" "$OUT/obj/route_manifest.obj"
 compile "$ROOT/native/src/host.c" "$OUT/obj/host.obj"
 compile "$ROOT/native/win32/proxy.c" "$OUT/obj/proxy.obj"
 compile "$ROOT/native/win32/file_hook.c" "$OUT/obj/file_hook.obj"
@@ -109,6 +113,11 @@ lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
   "$OUT/obj/callsite_hook_client.obj" "$OUT/obj/callsite_hook.obj" \
   "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
   "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+echo "== native append-manifest fixture =="
+compile "$ROOT/native/win32/tests/route_manifest_client.c" "$OUT/obj/route_manifest_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/route_manifest_client.exe" "$OUT/obj/route_manifest_client.obj" \
+  "$OUT/obj/route_manifest.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" "$OUT/lib/bcrypt.lib"
 "$CC" "${CFLAGS[@]}" -c "$ROOT/native/win32/tests/redirect_mod.c" -o "$OUT/obj/redirect_mod.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/tests/redirect_mod.dll" \
   "$OUT/obj/redirect_mod.obj" "$CRT_OBJ" "$K32"
@@ -208,7 +217,8 @@ if [ -n "$ORIGINAL_OPENAL" ]; then
     /def:"$OUT/OpenAL32.def" \
     "$OUT/obj/proxy.obj" "$OUT/obj/gl_hook.obj" "$OUT/obj/asset_probe.obj" "$OUT/obj/file_hook.obj" \
     "$OUT/obj/callsite_hook.obj" "$OUT/obj/record_route_hook.obj" "$OUT/obj/record_route.obj" \
-    "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" "$K32" "$U32" "$G32"
+    "$OUT/obj/route_manifest.obj" "$OUT/obj/loader.obj" "$OUT/obj/anchors.obj" "$CRT_OBJ" \
+    "$K32" "$U32" "$G32" "$OUT/lib/bcrypt.lib"
   echo "built $OUT/OpenAL32.dll (loads mods from <game>/mods)"
   PROXY_SHA256="$(sha256sum "$OUT/OpenAL32.dll" | cut -d ' ' -f 1)"
   HAND_MOD_SHA256="$(sha256sum "$OUT/examples/example.hand-hook.dll" | cut -d ' ' -f 1)"
