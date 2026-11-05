@@ -59,7 +59,10 @@ Set `HYPRLODR_FIRST_LOAD_DIAGNOSTICS=1` for one explicitly opted-in run. The
 proxy stores attach-time, first archive attempt/wait/open, gate release,
 bootstrap/preflight/redirect/activation, first callsite, first `hand2`, exact
 tag-1 target, original loader entry, and first loader return in a fixed 128
-record process ring. The worker writes `hyprlodr-startup.jsonl` after attach
+record process ring. Separate `tag1_hand2_loader_call` and
+`tag1_hand2_loader_return` events retain the exact target's outcome even if
+the distinct tag-2 `hand2` request occurred first. The worker writes
+`hyprlodr-startup.jsonl` after attach
 returns and drains the ring. Sort by `seq`, not timestamps across files;
 `t_ms` is a monotonic `GetTickCount` sample and `thread` is the Windows thread
 ID. A `diagnostic_events_dropped` record invalidates completeness. No event

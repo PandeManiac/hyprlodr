@@ -39,7 +39,8 @@ static const char *kind_name(uint32_t kind) {
         "first_archive_attempt", "archive_gate_wait", "archive_open",
         "redirect_publication", "route_preflight", "route_activation",
         "archive_gate_release", "first_loader_callsite", "first_hand2_request",
-        "first_tag1_hand2_request", "hand2_loader_call", "hand2_loader_return"
+        "first_tag1_hand2_request", "hand2_loader_call", "hand2_loader_return",
+        "tag1_hand2_loader_call", "tag1_hand2_loader_return"
     };
     return kind < HYPRLODR_DIAG_KIND_COUNT ? names[kind] : "unknown";
 }
