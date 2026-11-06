@@ -437,6 +437,82 @@ updates, material grouping, and runtime normal/tangent recomputation remain
 unresolved. Native-format serializability alone does not establish animation or
 rendering compatibility.
 
+### Static parser-to-renderer count flow (2026-11-05)
+
+The pinned executable was re-opened read-only in Ghidra 12.1.2 and matched the
+documented SHA-256 `7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611`.
+Focused decompilation and instruction review establish this count path:
+
+| Stage | Observed behavior | Evidence |
+|---|---|---|
+| Mesh decode, `FUN_14021a710` (`0x21a710`) | Reads index count to object `+0x0c`, vertex count to `+0x10`, stride to `+0x08`; after initialization copies `vertex_count * stride` bytes to `+0x20` and `index_count * 4` bytes to `+0x28`; writes completion marker 3 at `+0x4c`. | Ghidra pseudocode `ev_c6b767edcac08146346d89abed2a607bfe7900a550243a27a9a906170ee6733d` |
+| Mesh storage initialization, `FUN_14021a110` (`0x21a110`) | The decoder's call instruction passes the stride, vertex count, index count, and a zero mode argument. The helper allocates `stride * vertex_count` and `index_count * 4` bytes. In that mode it copies the counts into `+0x18` (vertices) and `+0x14` (indices); it initializes the object's state field at `+0x04` to 2. | Helper pseudocode `ev_5e3b0823f404848259ba048e4d789ddbbcdfdc5e41db8e808ce45feb72a1e9c7`; call argument setup in the `FUN_14021a710` disassembly |
+| GPU upload and draw, `FUN_140236d90` (draw call at RVA `0x2370c0`) | In state 2, submits vertex bytes as `+0x18 * +0x08` and index bytes as `+0x14 * 4`, using CPU pointers `+0x20` and `+0x28`. Attribute stride also comes from `+0x08`; the 72-byte layout uses fixed attribute offsets. The draw call uses `GL_TRIANGLES` (`4`), `GL_UNSIGNED_INT` (`0x1405`), count `end - begin`, and byte offset `begin * 4`. | Ghidra pseudocode `ev_f07f82b639d460d17397d426b230a53543e614e27a467f82726507912e1d17d1` |
+| Draw-range caller, `FUN_1400f6af0` | One resolved caller obtains a mesh object at `owner + 0x48` and passes the range `[0, mesh + 0x14]` to the upload/draw helper. Thus this call path derives its draw count from the populated index count rather than a compile-time 1,188 constant. | Ghidra pseudocode `ev_dcfc16d4ecdeb793931f6c2c627f769e8a640ee67d2ee75c0b4d2eb6c1fe85f9`; call-site instructions at `0x1400f6c8c`–`0x1400f6c9d` |
+
+The storage fields and GPU helper agree: both use the same stride, counts, and
+array-pointer offsets. The decoder's allocator makes the payload-dependent
+sizes, and the observed upload/draw helper consumes those sizes and counts.
+No 238-vertex or 1,188-index capacity is present in these analyzed operations.
+For the target dimensions, the resulting requests would be 17,208 vertex bytes
+and 4,764 index bytes, and a full `[0, 1191]` draw range would produce 1,191
+indices. This is **static compatibility evidence**, not an observation that
+those requests occurred in HYPER DEMON. The retained live hand capture remains
+238/1,188; its exact count is the original one. The capture implementation in
+`examples/hand_hook.c` and `tools/re/hand_capture.py` also currently recognizes
+only that original signature.
+
+The decoder does not assign meanings to vertex attributes, and the renderer
+helper assumes the existing 72-byte attribute layout. Keeping that stride and
+the six known offsets unchanged avoids a newly identified layout constraint.
+This path does not establish animation/pose compatibility for a newly added
+vertex, material or submesh semantics, model-bound updates, or the exact
+resource-object/cache relationship from archive parse through this draw helper.
+Those remain separate runtime questions.
+
+#### `Group8673` status
+
+In `FUN_140205ec0`, each graph entry's eight-byte value is copied as two raw
+u32 fields into the name-keyed graph node at `+0x40` and `+0x44`. The nearby
+node/tree routines construct and look up nodes by their names; the observed
+mesh upload/draw helper reads the mesh counts at `+0x14` and `+0x18`, array
+pointers at `+0x20` and `+0x28`, and stride at `+0x08`, not the graph-node
+value. No analyzed consumer links `Group8673` to a mesh draw range or index
+count. Its upper u32 matching the original 1,188 count across several records
+remains a correlation only. Keep the original eight bytes unchanged; the
+consumer outside the analyzed graph construction and mesh render path remains
+unresolved.
+
+#### Minimal authenticated runtime check
+
+When an authenticated session is available, use a cold start with the existing
+append-only archive and exact tag-1 route enabled before the first target
+lookup. Keep tag-2 `hand2` and all other records unchanged. Capture one
+continuous trace and require these observations in order:
+
+1. Existing `asset_trace_frida.js` events identify the exact resolver record,
+   replacement extent, loader/parser result, and `mesh_decode` counts plus
+   copied-array hashes. The required target result is 239 vertices, 1,191
+   indices, stride 72, and completion marker 3.
+2. At the already verified OpenGL draw dispatch (`0x3d9ac8`, callsite RVA
+   `0x2370c0`), record the associated array/element buffer IDs and GL buffer
+   sizes, then read back exactly 17,208 and 4,764 bytes. The existing passive
+   `example.hand-hook` capture ABI is established, but its current implementation
+   rejects the enlarged draw and fixed-size readback; extend that capture to
+   accept this exact 239/1,191 signature before using it for the replacement.
+3. Require a `GL_TRIANGLES` draw with `GL_UNSIGNED_INT` and count 1,191. Compare
+   the draw-buffer hashes/bytes to the parser event and replacement payload;
+   then inspect a gameplay frame for visible added geometry. A matching parser
+   event alone proves neither GPU upload nor draw, and a matching draw count
+   alone proves neither buffer contents nor visibility.
+
+The capture shim already owns the verified draw dispatch and uses the Windows
+x64 GL callback ABI; it reads GL buffer sizes and contents only for one selected
+draw, with output deferred to a worker. The minimal required probe change is
+therefore to make its bounded capture accept the target dimensions and encode
+the actual counts/byte lengths. No new game hook or authenticated launch was
+performed for this static investigation.
+
 ### Reproduce extraction, no-change round trip, and edit
 
 Set persistent scratch paths before running Python or Blender:
