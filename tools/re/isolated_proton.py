@@ -329,7 +329,6 @@ try:
     with open("/proc/stat", encoding="ascii") as stream:
         boot_time = int(next(line.split()[1] for line in stream if line.startswith("btime ")))
 except Exception: pass
-game_path = os.path.realpath(os.path.join(game, "hyperdemon.exe"))
 def scan_processes():
     found = {}
     try: entries = os.listdir("/proc")
@@ -349,13 +348,15 @@ def scan_processes():
             comm = open(base + "/comm", "rb").read().decode("utf-8", "replace").strip()
         except (OSError, ValueError, IndexError): continue
         role_args = argv if len(argv) < 2 or argv[1] != "-c" else argv[:1]
-        role_text = (exe + " " + " ".join(role_args)).lower()
         roles = []
         proton_real = os.path.realpath(proton)
         is_proton = os.path.realpath(exe) == proton_real or any(
             os.path.realpath(arg) == proton_real for arg in argv[:3])
-        is_steam_compat = comm.lower() in ("steam.exe", "steamservice.exe", "steamclient.exe") or any(
-            token in role_text for token in ("steam.exe", "steamservice", "steamclient"))
+        steam_images = ("steam.exe", "steamservice", "steamservice.exe",
+                        "steamclient", "steamclient.exe")
+        image_names = {comm.lower(), os.path.basename(exe).lower()}
+        image_names.update(os.path.basename(arg.replace("\\", "/")).lower() for arg in argv[:2])
+        is_steam_compat = bool(image_names.intersection(steam_images))
         target_arg = any(arg.lower().replace("/", "\\").endswith("\\hyperdemon.exe") and
                          "\\game\\" in arg.lower().replace("/", "\\") for arg in argv)
         # Wine normally exposes the Windows image name through /proc/<pid>/comm

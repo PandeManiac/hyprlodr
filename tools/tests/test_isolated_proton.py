@@ -186,6 +186,8 @@ def test_supervisor_waits_after_proton_exits_while_game_child_lives(tmp_path, mo
                          "steam_compat" in e["roles"])
     assert "hyperdemon" not in steam_started["roles"]
     assert steam_started["game_process"] is False
+    assert not any(e.get("comm") == "bwrap" and "steam_compat" in e.get("roles", [])
+                   for e in events)
     summary = json.loads((run / "evidence/process-lifecycle.json").read_text())
     assert summary["proton_outlived_by_game"] is True
     assert summary["supervisor_terminated_game"] is False
