@@ -557,3 +557,36 @@ Reading `/proc/<pid>/fd` during a live session showed `asset/asset` held open by
 | 1266–1274 | `_Fiopen` | `…/HyperDemon/config`, `cache/scores`, `cache/names`, `user` |
 
 With a mod registering `asset/asset` → its own file, the same open came back `"redirected":true,"opened":"…\\hyprlodr-state\\r.asset\\asset.bin"`, 7/7 mods initialized and the game ran normally (the replacement was a hardlink, so the bytes were identical). Hook detail for that run: `CreateFileA=patched(7) fopen=patched(1) fopen_s=patched(1) _wfopen=patched(1) _Fiopen=patched(1) _wfopen_s=absent modules=39`.
+
+## Isolated Proton process-lifecycle run (2026-11-05)
+
+The corrected noninteractive supervisor ran one fresh disposable prefix in
+`.tmp/first-load-diagnostic/isolated/trace-20261105-04`. It observed the actual
+Wine image `hyperdemon.exe` (private PID 150; HYPRLODR Windows PID 296),
+`mods_loaded`, all 9/9 executable anchors, the dormant callsite hook, a running
+diagnostic writer, successful `z.foundation` initialization, and archive-gate
+release with routing disabled. The game process and Proton wrapper both
+disappeared in the same 100 ms observation interval at about 12.0 seconds; the
+wrapper returned 0, no supervisor signal was sent, and the game's exit status
+is unavailable. The trace cannot order those two disappearances more finely.
+
+No top-level X11 client, `asset/asset` open, or intercepted record-loader call
+was observed. The automatic 10-second screenshot is black. Startup coverage is
+complete with zero dropped events, but the missing callsite observation makes
+the hand request unknown; no statement about later gameplay or cache state is
+supported. Proton's log records DXVK Vulkan initialization failure and an
+unhandled Xalia `No displays available` exception. Xalia exited while the game
+process remained present for about eleven more seconds, so the log does not
+establish that Xalia caused the game's exit. The user's game files and source
+Proton launcher hashes matched before and after; the sandbox preflight found no
+writable host mounts and blocked host Steam IPC/network access.
+
+Machine-readable evidence is kept in the ignored run directory: `evidence/`
+contains process/window timelines, coverage, inventories and screenshots;
+`logs/proton-console.log` contains Proton/Wine diagnostics. During this run, a
+Steam compatibility helper whose command line included the game path was also
+classified as a game candidate. The process matcher now identifies Steam
+helpers by image name, and a fixture covers this distinction. No replacement
+was attempted; the next blocker is explaining the game's independent early
+exit and absent window/archive activity without treating the Xalia message as
+causal proof.
