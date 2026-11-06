@@ -458,9 +458,12 @@ For the target dimensions, the resulting requests would be 17,208 vertex bytes
 and 4,764 index bytes, and a full `[0, 1191]` draw range would produce 1,191
 indices. This is **static compatibility evidence**, not an observation that
 those requests occurred in HYPER DEMON. The retained live hand capture remains
-238/1,188; its exact count is the original one. The capture implementation in
-`examples/hand_hook.c` and `tools/re/hand_capture.py` also currently recognizes
-only that original signature.
+238/1,188; its exact count is the original one. The passive capture path now
+recognizes exactly the original 238/1,188 and enlarged 239/1,191 signatures,
+both with the verified 72-byte, six-attribute layout. Gameplay modification
+modes continue to recognize only the original signature. The compiled Wine
+fixture exercises the production callback and writer for both sizes; it does
+not establish that the enlarged payload has reached this draw in the game.
 
 The decoder does not assign meanings to vertex attributes, and the renderer
 helper assumes the existing 72-byte attribute layout. Keeping that stride and

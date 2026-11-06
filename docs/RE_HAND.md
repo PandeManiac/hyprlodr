@@ -1027,3 +1027,34 @@ owned Xvfb and window manager alive through Steam startup, input and capture;
 verify the recorded PID plus `xdpyinfo` and GLX responses before use; and only
 tear down processes that the run started. A display number or stale PID file
 alone does not establish that the display is still available.
+
+## Size-aware passive capture and next authenticated run
+
+Capture mode in `example.hand-hook` accepts exactly two layouts: original
+238/1,188 and enlarged 239/1,191. Both require stride 72, six enabled float
+attributes at offsets `[0, 12, 24, 32, 48, 60]`, `GL_TRIANGLES`, and
+`GL_UNSIGNED_INT`. It reads only the logical model byte counts (17,136/4,752
+or 17,208/4,764), after checking buffer capacities, buffer IDs, aligned index
+offset, and index range. The array-buffer binding is restored, and the native
+draw is forwarded without changing its arguments. The one-shot deferred writer
+uses the selected dimensions in the existing HYPRCAP1 header. Non-capture
+modes still recognize only the original 1,188-index hand draw.
+
+When an authenticated session and verified writable-state protection are
+available, perform two fresh, separate runs:
+
+1. **Original-size control:** replacement routing disabled; select passive
+   capture, enter gameplay until the native hand is drawn, then validate the
+   file with `tools/re/hand_capture.py`. Expect 238 vertices and 1,188 indices.
+2. **Enlarged replacement:** start fresh with the validated append-only archive
+   and exact tag-1 route active before the first cold request. Correlate archive
+   readiness, replacement extent, successful native loader return, and parsed
+   239/1,191 counts with a 239/1,191 GPU capture. Confirm a 1,191-index draw,
+   then inspect gameplay for visible added geometry.
+
+Keep parser acceptance, GPU upload, draw submission, and visible geometry as
+separate evidence. Before either run, snapshot applicable game configuration
+and save files, verify executable/archive/proxy identity and the reversible
+deployment journal, confirm experimental writable paths do not alias the normal
+Proton prefix, and resolve Steam Cloud uncertainty. Do not run if test state
+could synchronize to the user's account.

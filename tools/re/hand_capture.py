@@ -26,6 +26,10 @@ HEADER = struct.Struct("<8s12I2Q8I")
 HAND_VERTICES = 238
 HAND_STRIDE = 72
 HAND_INDICES = 1188
+ENLARGED_HAND_VERTICES = 239
+ENLARGED_HAND_INDICES = 1191
+SUPPORTED_SIGNATURES = {(HAND_VERTICES, HAND_INDICES),
+                        (ENLARGED_HAND_VERTICES, ENLARGED_HAND_INDICES)}
 GL_UNSIGNED_INT = 0x1405
 ATTRIBUTE_OFFSETS = (0, 12, 24, 32, 48, 60)
 ATTRIBUTE_WIDTHS = (12, 12, 8, 16, 12, 12)
@@ -46,10 +50,10 @@ def parse_capture(data: bytes) -> dict:
         raise ValueError("capture magic does not match HYPRCAP1")
     if version != 1 or header_size != HEADER.size:
         raise ValueError("unsupported capture version or header size")
-    if (mode != 7 or draw_count != HAND_INDICES or index_type != GL_UNSIGNED_INT or
-            vertex_count != HAND_VERTICES or stride != HAND_STRIDE or
-            vertex_bytes != HAND_VERTICES * HAND_STRIDE or
-            index_count != HAND_INDICES or index_width != 4):
+    if (mode != 7 or (vertex_count, index_count) not in SUPPORTED_SIGNATURES or
+            draw_count != index_count or index_type != GL_UNSIGNED_INT or
+            stride != HAND_STRIDE or vertex_bytes != vertex_count * HAND_STRIDE or
+            index_width != 4):
         raise ValueError("capture draw layout differs from the verified hand signature")
     if draw_ordinal == 0 or array_buffer == 0 or element_buffer == 0:
         raise ValueError("capture is missing its draw ordinal or live buffer identifiers")
@@ -202,17 +206,51 @@ def _positions(data: bytes, count: int, stride: int, offset: int = 0):
 def compare_source(capture: dict, payload: bytes, label: str) -> dict:
     source = _model_arrays(payload)
     model = source["model"]
-    if (model["vertex_count"] != capture["vertex_count"] or
-            model["vertex_stride"] != capture["vertex_stride"] or
-            model["index_count"] != capture["index_count"]):
-        return {"label": label, "assessment": "inconclusive-dimension-mismatch",
-                "model_vertex_count": model["vertex_count"],
-                "model_index_count": model["index_count"],
-                "model_stride": model["vertex_stride"]}
     captured_vertices = capture["vertex_data"]
     captured_indices = capture["index_data"]
     source_vertices = source["vertex_data"]
     source_indices = source["index_data"]
+    source_vertices_count = model["vertex_count"]
+    source_indices_count = model["index_count"]
+    capture_vertices_count = capture["vertex_count"]
+    capture_indices_count = capture["index_count"]
+    topology_dimensions_match = (source_vertices_count == capture_vertices_count and
+                                 source_indices_count == capture_indices_count and
+                                 model["vertex_stride"] == capture["vertex_stride"])
+    extra_vertex_referenced = (capture_vertices_count > HAND_VERTICES and any(
+        index == HAND_VERTICES for (index,) in struct.iter_unpack("<I", captured_indices)))
+    additional_triangle_present = (capture_indices_count >= ENLARGED_HAND_INDICES and
+                                   capture_indices_count % 3 == 0)
+    extra_triangle_bytes = 3 * 4
+    extra_triangle_matches_source = (
+        source_indices_count == ENLARGED_HAND_INDICES and
+        capture_indices_count == ENLARGED_HAND_INDICES and
+        source_indices[-extra_triangle_bytes:] == captured_indices[-extra_triangle_bytes:])
+    common = {
+        "label": label,
+        "source_vertex_count": source_vertices_count,
+        "source_index_count": source_indices_count,
+        "captured_vertex_count": capture_vertices_count,
+        "captured_index_count": capture_indices_count,
+        "topology_matches": False,
+        "topology_dimensions_match": topology_dimensions_match,
+        "index_bytes_match_exactly": source_indices == captured_indices,
+        "vertex_bytes_match_exactly": source_vertices == captured_vertices,
+        "source_vertex_sha256": sha256(source_vertices),
+        "captured_vertex_sha256": capture["vertex_sha256"],
+        "source_index_sha256": sha256(source_indices),
+        "captured_index_sha256": capture["index_sha256"],
+        "extra_vertex_present": capture_vertices_count > HAND_VERTICES,
+        "extra_vertex_referenced": extra_vertex_referenced,
+        "additional_triangle_indices_present": additional_triangle_present,
+        "additional_triangle_indices_match_source": extra_triangle_matches_source,
+    }
+    if not topology_dimensions_match:
+        return common | {
+            "assessment": "unsupported-topology-comparison",
+            "topology_correspondence": False,
+            "notes": ["byte and transform comparisons require equal vertex and index counts"],
+        }
     vertex_count, stride = model["vertex_count"], model["vertex_stride"]
     exact_vertex_bytes = captured_vertices == source_vertices
     exact_index_bytes = captured_indices == source_indices
@@ -258,6 +296,13 @@ def compare_source(capture: dict, payload: bytes, label: str) -> dict:
         fit = None
         normal_fit = None
     topology_corresponds = exact_index_bytes or remapped_index_order
+    common["topology_matches"] = topology_corresponds
+    if not topology_corresponds:
+        return common | {
+            "assessment": "unsupported-topology-comparison",
+            "topology_correspondence": False,
+            "notes": ["captured index connectivity does not correspond to source topology"],
+        }
     structural_correspondence = (direct_attributes or remapped_attributes) and topology_corresponds
     fit_value = fit.get("normalized_rmse") if fit else None
     if exact_vertex_bytes and exact_index_bytes:
@@ -282,13 +327,8 @@ def compare_source(capture: dict, payload: bytes, label: str) -> dict:
         cap = b"".join(captured_vertices[i * stride + attr_offset:i * stride + attr_offset + width]
                         for i in range(vertex_count))
         attr_exact[attr_name] = src == cap
-    return {
-        "label": label,
+    return common | {
         "assessment": assessment,
-        "source_vertex_sha256": sha256(source_vertices),
-        "captured_vertex_sha256": capture["vertex_sha256"],
-        "source_index_sha256": sha256(source_indices),
-        "captured_index_sha256": capture["index_sha256"],
         "exact_vertex_array": exact_vertex_bytes,
         "exact_index_array": exact_index_bytes,
         "exact_attributes_in_runtime_order": attr_exact,

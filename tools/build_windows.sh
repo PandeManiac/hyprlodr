@@ -241,6 +241,18 @@ lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.hand-ho
   "$OUT/obj/example_hand_hook.obj" "$CRT_OBJ" "$K32"
 echo "  MOD example.hand-hook (in $OUT/examples, GL dispatch-table hook)"
 
+echo "== compiled passive hand-capture fixture =="
+compile "$ROOT/examples/hand_hook.c" "$OUT/obj/hand_capture_test_mod.obj" \
+  -DHYPR_HAND_CAPTURE_TESTING
+lld-link /nologo /dll /noentry /nodefaultlib \
+  "/out:$OUT/tests/hand_capture_test_mod.dll" \
+  "$OUT/obj/hand_capture_test_mod.obj" "$CRT_OBJ" "$K32"
+compile "$ROOT/native/win32/tests/hand_capture_client.c" \
+  "$OUT/obj/hand_capture_client.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:console \
+  "/out:$OUT/tests/hand_capture_client.exe" \
+  "$OUT/obj/hand_capture_client.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32"
+
 "$CC" "${CFLAGS[@]}" -c "$ROOT/examples/asset_redirect.c" -o "$OUT/obj/example_asset_redirect.obj"
 lld-link /nologo /dll /noentry /nodefaultlib "/out:$OUT/examples/example.asset-redirect.dll" \
   "$OUT/obj/example_asset_redirect.obj" "$CRT_OBJ" "$K32"

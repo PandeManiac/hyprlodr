@@ -14,11 +14,24 @@ ctest --test-dir build --output-on-failure
 tools/build_windows.sh build-win "/path/to/HYPER DEMON/OpenAL32.dll"
 tools/test_windows.sh  build-win "/path/to/HYPER DEMON/OpenAL32.dll"
 
+# Passive hand-capture parser and source-comparison regressions
+python3 -m unittest tools.re.tests.test_hand_capture -v
+
 # Read-only installation diagnostics
 python3 tools/hyprl_diagnose.py --json report.json
 ```
 
 Every scenario copies real, independently compiled shared libraries into a temporary directory and runs `hyprlodr-host`. Assertions read the JSON event log the loader itself wrote — no callback simulation, no fabricated orderings.
+
+The Windows build also creates `tests/hand_capture_test_mod.dll` from the
+production `examples/hand_hook.c` with a guarded fake OpenGL dispatch seam.
+`tools/test_windows.sh` drives that callback under Wine and validates the
+deferred output with `tools/re/hand_capture.py`. It checks both approved
+signatures, exact readback lengths, aligned nonzero offset, bad attributes and
+buffer IDs, insufficient capacities, invalid ranges, unsupported draws,
+writer failure, one-shot behavior, state restoration, and unchanged forwarding.
+This compiled fixture tests instrumentation behavior; it does not establish
+that the enlarged model has rendered in HYPER DEMON.
 
 ## Pre-entrypoint fixture (Windows x64 under Wine)
 

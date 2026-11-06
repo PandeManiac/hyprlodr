@@ -70,8 +70,11 @@ int _fltused = 0;
  * binds to those vertices and follows their per-frame deltas. */
 #define HAND_VERTEX_COUNT 238
 #define HAND_VBO_BYTES (HAND_VERTEX_COUNT * 72)
+#define HAND_ENLARGED_INDEX_COUNT 1191u
+#define HAND_ENLARGED_VERTEX_COUNT 239u
+#define HAND_CAPTURE_MAX_VBO_BYTES (HAND_ENLARGED_VERTEX_COUNT * 72u)
 #define HAND_CAPTURE_HEADER_BYTES 104u
-#define HAND_CAPTURE_INDEX_BYTES (HAND_INDEX_COUNT * 4u)
+#define HAND_CAPTURE_MAX_INDEX_BYTES (HAND_ENLARGED_INDEX_COUNT * 4u)
 #define HAND_DISPATCH_RETRY_MS 10u
 #define HAND_DISPATCH_RETRY_COUNT 3000u
 #define FEATHER_HEADER_BYTES 32
@@ -224,8 +227,14 @@ static volatile LONG g_capture_stop;
 static HANDLE g_dispatch_thread;
 static volatile LONG g_dispatch_stop;
 static volatile LONG g_dispatch_state; /* 0 waiting, 1 installing, 2 installed, -1 failed */
-static unsigned char g_capture_vertices[HAND_VBO_BYTES];
-static unsigned char g_capture_indices[HAND_CAPTURE_INDEX_BYTES];
+static unsigned char g_capture_vertices[HAND_CAPTURE_MAX_VBO_BYTES];
+static unsigned char g_capture_indices[HAND_CAPTURE_MAX_INDEX_BYTES];
+static unsigned g_capture_vertex_count;
+static unsigned g_capture_index_count;
+static unsigned g_capture_vertex_bytes;
+static unsigned g_capture_index_bytes;
+static unsigned g_capture_vbo_capacity;
+static unsigned g_capture_ibo_capacity;
 static unsigned long long g_capture_index_offset;
 static unsigned g_capture_array_buffer;
 static unsigned g_capture_element_buffer;
@@ -252,6 +261,75 @@ static LONG atomic_long_compare_exchange(volatile LONG *value, LONG exchange,
 }
 static int g_capture_status;
 static unsigned g_capture_failure;
+
+#ifdef HYPR_HAND_CAPTURE_TESTING
+static unsigned char g_capture_test_vbo[HAND_CAPTURE_MAX_VBO_BYTES];
+static unsigned int g_capture_test_ibo[HAND_ENLARGED_INDEX_COUNT + 4u];
+static int g_capture_test_vbo_size;
+static int g_capture_test_ibo_size;
+static unsigned g_capture_test_array_binding = 91;
+static unsigned g_capture_test_element_binding = 42;
+static unsigned g_capture_test_read_vbo;
+static unsigned g_capture_test_read_ibo;
+static unsigned g_capture_test_read_calls;
+static unsigned g_capture_test_forwarded;
+static unsigned g_capture_test_last_mode, g_capture_test_last_count, g_capture_test_last_type;
+static unsigned g_capture_test_last_indices;
+static unsigned g_capture_test_bad_attribute;
+
+static void WINAPI capture_test_draw(unsigned mode, int count, unsigned type,
+                                    const void *indices) {
+    ++g_capture_test_forwarded;
+    g_capture_test_last_mode = mode;
+    g_capture_test_last_count = (unsigned)count;
+    g_capture_test_last_type = type;
+    g_capture_test_last_indices = (unsigned)(uintptr_t)indices;
+}
+static void WINAPI capture_test_bind_buffer(unsigned target, unsigned buffer) {
+    if (target == GL_ARRAY_BUFFER) g_capture_test_array_binding = buffer;
+    else if (target == GL_ELEMENT_ARRAY_BUFFER) g_capture_test_element_binding = buffer;
+}
+static void WINAPI capture_test_get_integerv(unsigned pname, int *value) {
+    if (pname == GL_ELEMENT_ARRAY_BUFFER_BINDING) *value = (int)g_capture_test_element_binding;
+    else if (pname == GL_ARRAY_BUFFER_BINDING) *value = (int)g_capture_test_array_binding;
+    else *value = 0;
+}
+static void WINAPI capture_test_get_vertex_attribiv(unsigned index, unsigned pname, int *value) {
+    static const int sizes[6] = {3, 3, 2, 4, 3, 3};
+    if (index >= 6) { *value = 0; return; }
+    if (pname == GL_VERTEX_ATTRIB_ARRAY_ENABLED) *value = 1;
+    else if (pname == GL_VERTEX_ATTRIB_ARRAY_SIZE)
+        *value = sizes[index] - (g_capture_test_bad_attribute == 1 && index == 0 ? 1 : 0);
+    else if (pname == GL_VERTEX_ATTRIB_ARRAY_STRIDE) *value = 72;
+    else if (pname == GL_VERTEX_ATTRIB_ARRAY_TYPE) *value = (int)GL_FLOAT;
+    else if (pname == GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING)
+        *value = g_capture_test_bad_attribute == 2 && index == 0 ? 0 : 41;
+    else *value = 0;
+}
+static void WINAPI capture_test_get_vertex_attrib_pointerv(unsigned index, unsigned pname,
+                                                           void **pointer) {
+    static const unsigned offsets[6] = {0, 12, 24, 32, 48, 60};
+    (void)pname;
+    *pointer = (void *)(uintptr_t)(index < 6 ? offsets[index] +
+                  (g_capture_test_bad_attribute == 3 && index == 0 ? 4u : 0u) : 0);
+}
+static void WINAPI capture_test_get_buffer_parameteriv(unsigned target, unsigned pname,
+                                                       int *value) {
+    (void)pname;
+    *value = target == GL_ARRAY_BUFFER ? g_capture_test_vbo_size : g_capture_test_ibo_size;
+}
+static void WINAPI capture_test_get_buffer_subdata(unsigned target, long long offset,
+                                                   long long size, void *data) {
+    ++g_capture_test_read_calls;
+    if (target == GL_ARRAY_BUFFER) {
+        g_capture_test_read_vbo = (unsigned)size;
+        memcpy(data, g_capture_test_vbo + offset, (size_t)size);
+    } else {
+        g_capture_test_read_ibo = (unsigned)size;
+        memcpy(data, (unsigned char *)g_capture_test_ibo + offset, (size_t)size);
+    }
+}
+#endif
 
 /* Private geometry. 0 = not prepared, 1 = ready, -1 = unavailable. */
 static int g_geometry_state;
@@ -391,12 +469,12 @@ static DWORD WINAPI capture_writer(void *unused) {
              * This is a pair-derived frame label, not a swap-hook frame count. */
             put_u32(header + 20, (g_capture_draw_ordinal - 1u) / 2u);
             put_u32(header + 24, 7);
-            put_u32(header + 28, HAND_INDEX_COUNT);
+            put_u32(header + 28, g_capture_index_count);
             put_u32(header + 32, GL_UNSIGNED_INT);
-            put_u32(header + 36, HAND_VERTEX_COUNT);
+            put_u32(header + 36, g_capture_vertex_count);
             put_u32(header + 40, 72);
-            put_u32(header + 44, HAND_VBO_BYTES);
-            put_u32(header + 48, HAND_INDEX_COUNT);
+            put_u32(header + 44, g_capture_vertex_bytes);
+            put_u32(header + 48, g_capture_index_count);
             put_u32(header + 52, 4);
             put_u64(header + 56, g_capture_index_offset);
             put_u64(header + 64, g_capture_timestamp_ms);
@@ -413,11 +491,11 @@ static DWORD WINAPI capture_writer(void *unused) {
                 DWORD written = 0;
                 int ok = WriteFile(file, header, sizeof header, &written, NULL) &&
                          written == sizeof header &&
-                         WriteFile(file, g_capture_vertices, HAND_VBO_BYTES, &written, NULL) &&
-                         written == HAND_VBO_BYTES &&
-                         WriteFile(file, g_capture_indices, HAND_CAPTURE_INDEX_BYTES,
+                         WriteFile(file, g_capture_vertices, g_capture_vertex_bytes, &written, NULL) &&
+                         written == g_capture_vertex_bytes &&
+                         WriteFile(file, g_capture_indices, g_capture_index_bytes,
                                    &written, NULL) &&
-                         written == HAND_CAPTURE_INDEX_BYTES;
+                         written == g_capture_index_bytes;
                 CloseHandle(file);
                 atomic_long_store(&g_capture_saved, ok ? 1 : -1);
             }
@@ -1307,11 +1385,23 @@ static void draw_native_palette(unsigned mode, int count, unsigned type,
 static void capture_native_hand(unsigned count, unsigned type, const void *indices) {
     static const int expected_sizes[6] = {3, 3, 2, 4, 3, 3};
     static const unsigned expected_offsets[6] = {0, 12, 24, 32, 48, 60};
+    unsigned vertex_count, vertex_bytes, index_bytes;
     if (atomic_long_compare_exchange(&g_capture_claimed, 1, 0) != 0) return;
     g_capture_status = -1;
+    if (g_mode != 7 || type != GL_UNSIGNED_INT || !g_capture_event ||
+        (count != HAND_INDEX_COUNT && count != HAND_ENLARGED_INDEX_COUNT)) {
+        g_capture_failure = 1;
+        return;
+    }
+    vertex_count = count == HAND_INDEX_COUNT ? HAND_VERTEX_COUNT : HAND_ENLARGED_VERTEX_COUNT;
+    vertex_bytes = vertex_count * 72u;
+    index_bytes = count * 4u;
+    if (vertex_bytes > sizeof g_capture_vertices || index_bytes > sizeof g_capture_indices) {
+        g_capture_failure = 1;
+        return;
+    }
     resolve_capture_gl();
-    if (count != HAND_INDEX_COUNT || type != GL_UNSIGNED_INT || !g_capture_event ||
-        !g_get_integerv || !g_get_vertex_attribiv || !g_get_vertex_attrib_pointerv ||
+    if (!g_get_integerv || !g_get_vertex_attribiv || !g_get_vertex_attrib_pointerv ||
         !g_get_buffer_parameteriv || !g_get_buffer_subdata || !g_bind_buffer) {
         g_capture_failure = 1;
         return;
@@ -1347,23 +1437,29 @@ static void capture_native_hand(unsigned count, unsigned type, const void *indic
     g_get_integerv(GL_ARRAY_BUFFER_BINDING, &saved_array_buffer);
     g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)array_buffer);
     g_get_buffer_parameteriv(GL_ARRAY_BUFFER, GL_BUFFER_SIZE, &vertex_buffer_size);
-    if (vertex_buffer_size < (int)HAND_VBO_BYTES) {
+    g_capture_vbo_capacity = vertex_buffer_size < 0 ? 0u : (unsigned)vertex_buffer_size;
+    if (g_capture_vbo_capacity < vertex_bytes) {
         g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
         g_capture_failure = 5;
         return;
     }
     g_get_buffer_parameteriv(GL_ELEMENT_ARRAY_BUFFER, GL_BUFFER_SIZE, &index_buffer_size);
-    if (index_buffer_size < 0 || index_offset + HAND_CAPTURE_INDEX_BYTES >
-                                     (unsigned)index_buffer_size) {
+    g_capture_ibo_capacity = index_buffer_size < 0 ? 0u : (unsigned)index_buffer_size;
+    if (g_capture_ibo_capacity == 0 || index_offset > g_capture_ibo_capacity ||
+        index_bytes > (unsigned long long)g_capture_ibo_capacity - index_offset) {
         g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
         g_capture_failure = 6;
         return;
     }
-    g_get_buffer_subdata(GL_ARRAY_BUFFER, 0, HAND_VBO_BYTES, g_capture_vertices);
+    g_get_buffer_subdata(GL_ARRAY_BUFFER, 0, vertex_bytes, g_capture_vertices);
     g_get_buffer_subdata(GL_ELEMENT_ARRAY_BUFFER, (long long)index_offset,
-                         HAND_CAPTURE_INDEX_BYTES, g_capture_indices);
+                         index_bytes, g_capture_indices);
     g_bind_buffer(GL_ARRAY_BUFFER, (unsigned)saved_array_buffer);
 
+    g_capture_vertex_count = vertex_count;
+    g_capture_index_count = count;
+    g_capture_vertex_bytes = vertex_bytes;
+    g_capture_index_bytes = index_bytes;
     g_capture_index_offset = index_offset;
     g_capture_array_buffer = (unsigned)array_buffer;
     g_capture_element_buffer = (unsigned)element_buffer;
@@ -1374,6 +1470,7 @@ static void capture_native_hand(unsigned count, unsigned type, const void *indic
     if (!SetEvent(g_capture_event)) {
         g_capture_status = -1;
         g_capture_failure = 7;
+        atomic_long_store(&g_capture_ready, 0);
         atomic_long_store(&g_capture_saved, -1);
         return;
     }
@@ -1905,8 +2002,11 @@ static void draw_feather_overlay(void) {
  * only counts, substitutes or suppresses, and forwards. */
 static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
                                   const void *indices) {
-    if (g_active && mode == GL_TRIANGLES && count == HAND_INDEX_COUNT &&
-        (type == GL_UNSIGNED_INT || type == GL_UNSIGNED_SHORT)) {
+    if (g_active && mode == GL_TRIANGLES &&
+        ((g_mode == 7 && type == GL_UNSIGNED_INT &&
+          (count == HAND_INDEX_COUNT || count == HAND_ENLARGED_INDEX_COUNT)) ||
+         (g_mode != 7 && count == HAND_INDEX_COUNT &&
+          (type == GL_UNSIGNED_INT || type == GL_UNSIGNED_SHORT)))) {
         ++g_hand_draws;
         hypr_hand_debug[4] = g_hand_draws;
         hypr_hand_debug[3] = (unsigned)g_geometry_state;
@@ -1943,6 +2043,87 @@ static void WINAPI hand_draw_shim(unsigned mode, int count, unsigned type,
     }
     g_original_draw(mode, count, type, indices);
 }
+
+#ifdef HYPR_HAND_CAPTURE_TESTING
+typedef struct hand_capture_test_result {
+    unsigned failure, saved, forwarded, vbo_read_bytes, ibo_read_bytes;
+    unsigned array_binding, element_binding, claimed, vbo_capacity, ibo_capacity;
+    unsigned read_calls, last_mode, last_count, last_type, last_indices;
+} hand_capture_test_result;
+
+__declspec(dllexport) int hand_capture_test_run(const char *path, unsigned draw_mode,
+        unsigned count, unsigned type, unsigned attribute_failure, int vbo_size, int ibo_size,
+        unsigned offset, unsigned repeat, hand_capture_test_result *result) {
+    g_capture_path[0] = 0;
+    if (!path || strlen(path) >= sizeof g_capture_path || !result) return -1;
+    memcpy(g_capture_path, path, strlen(path) + 1);
+    for (unsigned i = 0; i < sizeof g_capture_test_vbo; ++i)
+        g_capture_test_vbo[i] = (unsigned char)(i * 17u + 3u);
+    unsigned selected_vertices = count == HAND_ENLARGED_INDEX_COUNT ?
+                                 HAND_ENLARGED_VERTEX_COUNT : HAND_VERTEX_COUNT;
+    for (unsigned i = 0; i < sizeof g_capture_test_ibo / sizeof g_capture_test_ibo[0]; ++i)
+        g_capture_test_ibo[i] = i % selected_vertices;
+    g_capture_test_vbo_size = vbo_size;
+    g_capture_test_ibo_size = ibo_size;
+    g_capture_test_array_binding = 91;
+    g_capture_test_element_binding = attribute_failure == 4 ? 0u : 42u;
+    g_capture_test_read_vbo = g_capture_test_read_ibo = 0;
+    g_capture_test_read_calls = 0;
+    g_capture_test_forwarded = 0;
+    g_capture_test_last_mode = g_capture_test_last_count = 0;
+    g_capture_test_last_type = g_capture_test_last_indices = 0;
+    g_capture_test_bad_attribute = (int)attribute_failure;
+    g_get_integerv = capture_test_get_integerv;
+    g_get_vertex_attribiv = capture_test_get_vertex_attribiv;
+    g_get_vertex_attrib_pointerv = capture_test_get_vertex_attrib_pointerv;
+    g_get_buffer_parameteriv = capture_test_get_buffer_parameteriv;
+    g_get_buffer_subdata = capture_test_get_buffer_subdata;
+    g_bind_buffer = capture_test_bind_buffer;
+    g_capture_gl_resolved = 1;
+    g_capture_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+    if (!g_capture_event) return -2;
+    g_capture_thread = CreateThread(NULL, 0, capture_writer, NULL, 0, NULL);
+    if (!g_capture_thread) { CloseHandle(g_capture_event); g_capture_event = NULL; return -3; }
+    atomic_long_store(&g_capture_claimed, 0);
+    atomic_long_store(&g_capture_ready, 0);
+    atomic_long_store(&g_capture_saved, 0);
+    atomic_long_store(&g_capture_stop, 0);
+    g_capture_status = 0;
+    g_capture_failure = 0;
+    g_capture_draw_ordinal = 0;
+    g_hand_draws = 0;
+    g_original_draw = capture_test_draw;
+    g_mode = 7;
+    g_active = 1;
+    hand_draw_shim(draw_mode, (int)count, type, (const void *)(uintptr_t)offset);
+    if (repeat) hand_draw_shim(draw_mode, (int)count, type,
+                               (const void *)(uintptr_t)offset);
+    if (g_capture_status == 1)
+        for (unsigned i = 0; i < 1000 && atomic_long_load(&g_capture_saved) == 0; ++i)
+            Sleep(1);
+    atomic_long_store(&g_capture_stop, 1);
+    (void)SetEvent(g_capture_event);
+    (void)WaitForSingleObject(g_capture_thread, 5000);
+    result->failure = g_capture_failure;
+    result->saved = (unsigned)atomic_long_load(&g_capture_saved);
+    result->forwarded = g_capture_test_forwarded;
+    result->vbo_read_bytes = g_capture_test_read_vbo;
+    result->ibo_read_bytes = g_capture_test_read_ibo;
+    result->array_binding = g_capture_test_array_binding;
+    result->element_binding = g_capture_test_element_binding;
+    result->claimed = (unsigned)atomic_long_load(&g_capture_claimed);
+    result->vbo_capacity = g_capture_vbo_capacity;
+    result->ibo_capacity = g_capture_ibo_capacity;
+    result->read_calls = g_capture_test_read_calls;
+    result->last_mode = g_capture_test_last_mode;
+    result->last_count = g_capture_test_last_count;
+    result->last_type = g_capture_test_last_type;
+    result->last_indices = g_capture_test_last_indices;
+    CloseHandle(g_capture_thread); g_capture_thread = NULL;
+    CloseHandle(g_capture_event); g_capture_event = NULL;
+    return 0;
+}
+#endif
 
 static int executable_address(const void *address) {
     MEMORY_BASIC_INFORMATION64A info;

@@ -154,6 +154,31 @@ assert stop == list(reversed(expected)), f"shutdown order {stop}"
 print("windows host: init/shutdown order OK")
 PY
 
+echo "== wine compiled passive hand-capture path =="
+HAND_CAPTURE_WORK="$WORK/hand-capture"
+mkdir -p "$HAND_CAPTURE_WORK"
+timeout 30 wine "$OUT/tests/hand_capture_client.exe" \
+  "$(winepath -w "$OUT/tests/hand_capture_test_mod.dll")" \
+  "$(winepath -w "$HAND_CAPTURE_WORK")" || status=1
+python3 - "$ROOT" "$HAND_CAPTURE_WORK" <<'PY' || status=1
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from tools.re.hand_capture import parse_capture
+work = pathlib.Path(sys.argv[2])
+for name, expected in (("original.capture", (238, 1188, 0)),
+                       ("enlarged.capture", (239, 1191, 12))):
+    data = (work / name).read_bytes()
+    capture = parse_capture(data)
+    actual = (capture["vertex_count"], capture["index_count"],
+              capture["index_offset_bytes"])
+    assert actual == expected, (name, actual, expected)
+    print(f"compiled capture {name}: vertices={actual[0]} indices={actual[1]} offset={actual[2]}")
+expected_files = {"original.capture", "enlarged.capture"}
+actual_files = {path.name for path in work.iterdir() if path.is_file()}
+assert actual_files == expected_files, actual_files
+print("compiled capture failures: no partial or invalid capture files emitted")
+PY
+
 if [ -n "$ORIGINAL_OPENAL" ]; then
   echo "== wine proxy: forwarding + bootstrap =="
   cp "$OUT/OpenAL32.dll" "$WORK/proxy/OpenAL32.dll"

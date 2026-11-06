@@ -17,9 +17,10 @@ def payload_with_vertices(vertices, indices):
     return bytes(data)
 
 
-def make_source():
+def make_source(vertex_count=hand_capture.HAND_VERTICES,
+                index_count=hand_capture.HAND_INDICES):
     vertices = bytearray()
-    for index in range(hand_capture.HAND_VERTICES):
+    for index in range(vertex_count):
         x = float(index % 17)
         y = float(index // 17)
         z = float((index * 7) % 13)
@@ -28,15 +29,16 @@ def make_source():
                           index / 500.0, 0.25, 0, 0,
                           1, 0, 0, 0, 1, 0)
         vertices.extend(row)
-    indices = struct.pack(f"<{hand_capture.HAND_INDICES}I",
-                           *(i % hand_capture.HAND_VERTICES
-                             for i in range(hand_capture.HAND_INDICES)))
+    index_values = [i % vertex_count for i in range(index_count)]
+    if vertex_count == hand_capture.ENLARGED_HAND_VERTICES:
+        index_values[-3:] = [hand_capture.HAND_VERTICES, 1, 2]
+    indices = struct.pack(f"<{index_count}I", *index_values)
     return bytes(vertices), indices, payload_with_vertices(vertices, indices)
 
 
 def transformed_vertices(vertices, scale, translation):
     result = bytearray(vertices)
-    for index in range(hand_capture.HAND_VERTICES):
+    for index in range(len(vertices) // hand_capture.HAND_STRIDE):
         offset = index * hand_capture.HAND_STRIDE
         position = struct.unpack_from("<3f", result, offset)
         struct.pack_into("<3f", result, offset,
@@ -44,14 +46,17 @@ def transformed_vertices(vertices, scale, translation):
     return bytes(result)
 
 
-def capture_fixture(vertices, indices):
+def capture_fixture(vertices, indices, *, vertex_count=None, index_count=None,
+                    draw_count=None, mode=7, stride=hand_capture.HAND_STRIDE,
+                    index_width=4, offsets=hand_capture.ATTRIBUTE_OFFSETS,
+                    array_buffer=41, element_buffer=42, index_offset=0):
+    vertex_count = vertex_count or len(vertices) // hand_capture.HAND_STRIDE
+    index_count = index_count or len(indices) // 4
     fields = (
-        hand_capture.MAGIC, 1, hand_capture.HEADER.size, 1, 0, 7,
-        hand_capture.HAND_INDICES, hand_capture.GL_UNSIGNED_INT,
-        hand_capture.HAND_VERTICES, hand_capture.HAND_STRIDE,
-        hand_capture.HAND_VERTICES * hand_capture.HAND_STRIDE,
-        hand_capture.HAND_INDICES, 4,
-        0, 123456, 41, 42, *hand_capture.ATTRIBUTE_OFFSETS,
+        hand_capture.MAGIC, 1, hand_capture.HEADER.size, 1, 0, mode,
+        draw_count if draw_count is not None else index_count, hand_capture.GL_UNSIGNED_INT,
+        vertex_count, stride, vertex_count * stride, index_count, index_width,
+        index_offset, 123456, array_buffer, element_buffer, *offsets,
     )
     return hand_capture.HEADER.pack(*fields) + vertices + indices
 
@@ -74,6 +79,66 @@ class HandCaptureTests(unittest.TestCase):
         struct.pack_into("<I", bad_indices, 0, hand_capture.HAND_VERTICES)
         with self.assertRaisesRegex(ValueError, "outside"):
             hand_capture.parse_capture(capture_fixture(vertices, bad_indices))
+
+    def test_accepts_enlarged_signature_and_reports_extra_geometry(self):
+        vertices, indices, enlarged = make_source(
+            hand_capture.ENLARGED_HAND_VERTICES, hand_capture.ENLARGED_HAND_INDICES)
+        parsed = hand_capture.parse_capture(capture_fixture(vertices, indices))
+        self.assertEqual((parsed["vertex_count"], parsed["index_count"]), (239, 1191))
+        comparison = hand_capture.analyze(
+            capture_fixture(vertices, indices), [("enlarged", enlarged)])[
+                "comparisons"][0]
+        self.assertTrue(comparison["topology_matches"])
+        self.assertTrue(comparison["vertex_bytes_match_exactly"])
+        self.assertTrue(comparison["index_bytes_match_exactly"])
+        self.assertTrue(comparison["extra_vertex_referenced"])
+        self.assertTrue(comparison["additional_triangle_indices_present"])
+        self.assertTrue(comparison["additional_triangle_indices_match_source"])
+
+    def test_rejects_unsupported_dimensions_and_header_mismatches(self):
+        vertices, indices, _ = make_source(240, 1194)
+        with self.assertRaisesRegex(ValueError, "verified hand signature"):
+            hand_capture.parse_capture(capture_fixture(vertices, indices))
+        vertices, indices, _ = make_source()
+        with self.assertRaisesRegex(ValueError, "verified hand signature"):
+            hand_capture.parse_capture(capture_fixture(vertices, indices, draw_count=1191))
+
+    def test_rejects_invalid_layout_ids_and_trailing_bytes(self):
+        vertices, indices, _ = make_source()
+        cases = [
+            {"stride": 68}, {"index_width": 2}, {"offsets": (0, 12, 24, 32, 48, 56)},
+            {"array_buffer": 0}, {"element_buffer": 0}, {"index_offset": 2},
+        ]
+        for options in cases:
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                hand_capture.parse_capture(capture_fixture(vertices, indices, **options))
+        with self.assertRaisesRegex(ValueError, "does not equal expected"):
+            hand_capture.parse_capture(capture_fixture(vertices, indices) + b"x")
+
+    def test_topology_mismatch_is_explicit_and_not_an_analysis_error(self):
+        cap_vertices, cap_indices, _ = make_source(
+            hand_capture.ENLARGED_HAND_VERTICES, hand_capture.ENLARGED_HAND_INDICES)
+        _, _, original = make_source()
+        comparison = hand_capture.analyze(capture_fixture(cap_vertices, cap_indices),
+                                          [("original", original)])["comparisons"][0]
+        self.assertEqual(comparison["assessment"], "unsupported-topology-comparison")
+        self.assertFalse(comparison["topology_matches"])
+        self.assertEqual(comparison["source_vertex_count"], 238)
+        self.assertEqual(comparison["captured_vertex_count"], 239)
+        self.assertTrue(comparison["extra_vertex_present"])
+        self.assertTrue(comparison["additional_triangle_indices_present"])
+
+    def test_connectivity_mismatch_is_explicitly_unsupported(self):
+        vertices, indices, source = make_source()
+        changed = bytearray(indices)
+        first, second = struct.unpack_from("<II", changed)
+        struct.pack_into("<II", changed, 0, second, first)
+        comparison = hand_capture.analyze(capture_fixture(vertices, bytes(changed)),
+                                          [("different-connectivity", source)])[
+                                              "comparisons"][0]
+        self.assertEqual(comparison["assessment"], "unsupported-topology-comparison")
+        self.assertFalse(comparison["topology_matches"])
+        self.assertFalse(comparison["index_bytes_match_exactly"])
 
     def test_recognizes_exact_source_and_transform_consistent_edit(self):
         vertices, indices, original = make_source()
