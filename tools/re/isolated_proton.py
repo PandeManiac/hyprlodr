@@ -895,6 +895,22 @@ def window_inventory():
     return {"returncode":result.returncode,"stderr":result.stderr.strip(),
         "root":root_result.stdout.strip()}, rows
 
+def window_identity(row):
+    """Fields that distinguish a new X client when the server reuses a window ID."""
+    match=re.search(r'WM_CLASS\(STRING\)\s*=\s*"([^"]*)"\s*,\s*"([^"]*)"',
+        row.get("properties", ""))
+    window_class=tuple(match.groups()) if match else None
+    process_identities=tuple(process.get("identity") for process in
+                              row.get("associated_processes", []))
+    return row.get("x_pid"), process_identities, window_class
+
+def enrich_window_association(row):
+    associated=[p for p in processes.values() if row["x_pid"] and p["pid"]==row["x_pid"]]
+    row["associated_processes"]=[{"pid":p["pid"],"roles":p["roles"],
+        "identity":str(p["pid"])+":"+str(p["start_ticks"])} for p in associated]
+    row["game_process_associated"]=any(p["game_process"] for p in associated)
+    return row
+
 def capture_screen(reason, max_captures=6):
     if capture_screen.count >= max_captures: return
     xwd=shutil.which("xwd")
@@ -955,14 +971,29 @@ try:
             if display_result is not None:
                 new={row["id"]:row for row in rows}
                 for wid,row in new.items():
-                    if wid not in seen_windows:
-                        associated=[p for p in processes.values() if row["x_pid"] and p["pid"]==row["x_pid"]]
-                        row["associated_processes"]=[{"pid":p["pid"],"roles":p["roles"],
-                            "identity":str(p["pid"])+":"+str(p["start_ticks"])} for p in associated]
-                        linked_game=any(p["game_process"] for p in associated)
-                        row["game_process_associated"] = linked_game
+                    previous=seen_windows.get(wid)
+                    row=enrich_window_association(row)
+                    new[wid]=row
+                    reused=previous is not None and window_identity(previous)!=window_identity(row)
+                    if reused:
+                        event("window_disappeared",window=previous,display=display,
+                            reason="xid_reused_for_different_client")
+                    if previous is None or reused:
                         event("window_created",window=row,display=display)
-                        if row["game_candidate"] or linked_game: capture_screen("candidate_game_window")
+                        if row["game_candidate"] or row["game_process_associated"]:
+                            capture_screen("candidate_game_window")
+                    elif (previous.get("title")!=row.get("title") or
+                          previous.get("properties")!=row.get("properties") or
+                          previous.get("visible")!=row.get("visible") or
+                          previous.get("game_candidate")!=row.get("game_candidate") or
+                          previous.get("game_process_associated")!=row.get("game_process_associated")):
+                        event("window_updated",previous=previous,window=row,display=display)
+                        candidate_promoted=(not previous.get("game_candidate") and
+                                            row.get("game_candidate"))
+                        process_promoted=(not previous.get("game_process_associated") and
+                                          row.get("game_process_associated"))
+                        if candidate_promoted or process_promoted:
+                            capture_screen("candidate_game_window")
                 for wid,row in seen_windows.items():
                     if wid not in new: event("window_disappeared",window=row,display=display)
                 seen_windows=new

@@ -69,6 +69,13 @@ def parse_capture(data: bytes) -> dict:
     indices = struct.unpack(f"<{index_count}I", index_data)
     if any(index >= vertex_count for index in indices):
         raise ValueError("captured index addresses a vertex outside the captured VBO")
+    extra_vertex_index = HAND_VERTICES
+    extra_vertex_referenced = (vertex_count == ENLARGED_HAND_VERTICES and
+                               extra_vertex_index in indices)
+    final_triangle = list(indices[-3:])
+    extra_vertex_data = (vertex_data[extra_vertex_index * stride:
+                                     (extra_vertex_index + 1) * stride]
+                         if vertex_count == ENLARGED_HAND_VERTICES else b"")
     return {
         "format": "hyprlodr-passive-hand-gl-capture-v1",
         "draw_ordinal": draw_ordinal,
@@ -88,6 +95,9 @@ def parse_capture(data: bytes) -> dict:
         "attribute_offsets": list(attribute_offsets),
         "vertex_sha256": sha256(vertex_data),
         "index_sha256": sha256(index_data),
+        "extra_vertex_referenced": extra_vertex_referenced,
+        "extra_vertex_sha256": sha256(extra_vertex_data) if extra_vertex_data else None,
+        "final_triangle_indices": final_triangle,
         "vertex_data": vertex_data,
         "index_data": index_data,
     }
@@ -219,9 +229,12 @@ def compare_source(capture: dict, payload: bytes, label: str) -> dict:
                                  model["vertex_stride"] == capture["vertex_stride"])
     extra_vertex_referenced = (capture_vertices_count > HAND_VERTICES and any(
         index == HAND_VERTICES for (index,) in struct.iter_unpack("<I", captured_indices)))
-    additional_triangle_present = (capture_indices_count >= ENLARGED_HAND_INDICES and
-                                   capture_indices_count % 3 == 0)
     extra_triangle_bytes = 3 * 4
+    captured_final_triangle = tuple(struct.unpack(
+        "<3I", captured_indices[-extra_triangle_bytes:])) if captured_indices else ()
+    additional_triangle_present = (
+        capture_indices_count == ENLARGED_HAND_INDICES and
+        HAND_VERTICES in captured_final_triangle)
     extra_triangle_matches_source = (
         source_indices_count == ENLARGED_HAND_INDICES and
         capture_indices_count == ENLARGED_HAND_INDICES and

@@ -26,12 +26,21 @@ Every scenario copies real, independently compiled shared libraries into a tempo
 The Windows build also creates `tests/hand_capture_test_mod.dll` from the
 production `examples/hand_hook.c` with a guarded fake OpenGL dispatch seam.
 `tools/test_windows.sh` drives that callback under Wine and validates the
-deferred output with `tools/re/hand_capture.py`. It checks both approved
+deferred output through the production `tools/re/hand_capture.py` CLI. The
+compiled fixture writes a sidecar of the exact deterministic fake GL bytes so
+the test compares writer output byte-for-byte rather than reconstructing a
+Python capture. It checks both approved
 signatures, exact readback lengths, aligned nonzero offset, bad attributes and
 buffer IDs, insufficient capacities, invalid ranges, unsupported draws,
 writer failure, one-shot behavior, state restoration, and unchanged forwarding.
 This compiled fixture tests instrumentation behavior; it does not establish
 that the enlarged model has rendered in HYPER DEMON.
+
+The isolated supervisor fixture uses a one-shot Wine prefix per pytest case.
+It asserts the visible fixture's WM_CLASS, `_NET_WM_PID`, matching observed
+process command line, automatic screenshot, and disappearance. X11 may reuse a
+window ID between Wine prefix bootstrap and the fixture; the supervisor treats
+an ID whose PID/class identity changed as a new client lifecycle.
 
 ## Pre-entrypoint fixture (Windows x64 under Wine)
 

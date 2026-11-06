@@ -85,6 +85,10 @@ class HandCaptureTests(unittest.TestCase):
             hand_capture.ENLARGED_HAND_VERTICES, hand_capture.ENLARGED_HAND_INDICES)
         parsed = hand_capture.parse_capture(capture_fixture(vertices, indices))
         self.assertEqual((parsed["vertex_count"], parsed["index_count"]), (239, 1191))
+        self.assertTrue(parsed["extra_vertex_referenced"])
+        self.assertEqual(parsed["final_triangle_indices"], [238, 1, 2])
+        self.assertEqual(parsed["extra_vertex_sha256"],
+                         hand_capture.sha256(vertices[238 * 72:239 * 72]))
         comparison = hand_capture.analyze(
             capture_fixture(vertices, indices), [("enlarged", enlarged)])[
                 "comparisons"][0]

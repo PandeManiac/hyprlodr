@@ -44,6 +44,15 @@ draw bytes match the deliberately enlarged `hand2` payload exactly. The
 four-float group at byte 32 varies like UV/mask data in the capture and is not
 verified as skinning weights.
 
+The passive capture format accepts only the original 238/1,188 and enlarged
+239/1,191 signatures. A compiled Windows/Wine fixture now sends native-writer
+HYPRCAP1 output through the production Python CLI and checks exact VBO/IBO bytes,
+hashes, and the appended `[238, 1, 2]` triangle against deterministic fake GL
+storage. This establishes writer/parser compatibility and bounds validation;
+it does not establish that a runtime game draw with those counts belongs to
+`hand2`. Runtime identity still requires correlation with the tag-1 loader and
+parsed-object records described in `RE_HAND.md`.
+
 ### Vertex attributes and graph tail
 
 The archive decoder `FUN_14021a710` copies the vertex buffer as opaque

@@ -1052,6 +1052,23 @@ available, perform two fresh, separate runs:
    239/1,191 counts with a 239/1,191 GPU capture. Confirm a 1,191-index draw,
    then inspect gameplay for visible added geometry.
 
+For the enlarged run, retain evidence in this order: verify the executable and
+original archive hashes; validate the replacement archive and manifest; record
+archive-gate `READY` before the first cold tag-1 request; record selection of the
+replacement descriptor and the native loader return; confirm the decoded
+239/1,191 counts; analyze the 17,208-byte VBO and 4,764-byte IBO capture; then
+confirm the draw count and inspect an actual gameplay frame. The passive capture
+recognizes a strict GL signature (counts, attributes, capacities, IDs and range)
+but has no native resource pointer at draw time, so a same-layout unrelated draw
+could still match. Correlate process, loader, parser and capture timestamps and
+buffer IDs; do not treat dimensions alone as resource identity. Parsed geometry,
+GPU upload, draw submission and visible geometry are four separate claims.
+
+The compiled regression now feeds files emitted by the production Windows
+capture writer directly to the Python CLI and compares them with bytes read from
+the fixture's fake GL storage. This verifies the HYPRCAP1 boundary only; it is
+not evidence of the game runtime stages above.
+
 Keep parser acceptance, GPU upload, draw submission, and visible geometry as
 separate evidence. Before either run, snapshot applicable game configuration
 and save files, verify executable/archive/proxy identity and the reversible

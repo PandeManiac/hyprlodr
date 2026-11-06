@@ -2053,7 +2053,8 @@ typedef struct hand_capture_test_result {
 
 __declspec(dllexport) int hand_capture_test_run(const char *path, unsigned draw_mode,
         unsigned count, unsigned type, unsigned attribute_failure, int vbo_size, int ibo_size,
-        unsigned offset, unsigned repeat, hand_capture_test_result *result) {
+        unsigned offset, unsigned repeat, const char *expected_path,
+        hand_capture_test_result *result) {
     g_capture_path[0] = 0;
     if (!path || strlen(path) >= sizeof g_capture_path || !result) return -1;
     memcpy(g_capture_path, path, strlen(path) + 1);
@@ -2063,6 +2064,12 @@ __declspec(dllexport) int hand_capture_test_run(const char *path, unsigned draw_
                                  HAND_ENLARGED_VERTEX_COUNT : HAND_VERTEX_COUNT;
     for (unsigned i = 0; i < sizeof g_capture_test_ibo / sizeof g_capture_test_ibo[0]; ++i)
         g_capture_test_ibo[i] = i % selected_vertices;
+    if (count == HAND_ENLARGED_INDEX_COUNT && offset <= sizeof g_capture_test_ibo - 12u) {
+        unsigned first = offset / 4u + count - 3u;
+        g_capture_test_ibo[first] = HAND_VERTEX_COUNT;
+        g_capture_test_ibo[first + 1u] = 1u;
+        g_capture_test_ibo[first + 2u] = 2u;
+    }
     g_capture_test_vbo_size = vbo_size;
     g_capture_test_ibo_size = ibo_size;
     g_capture_test_array_binding = 91;
@@ -2101,6 +2108,24 @@ __declspec(dllexport) int hand_capture_test_run(const char *path, unsigned draw_
     if (g_capture_status == 1)
         for (unsigned i = 0; i < 1000 && atomic_long_load(&g_capture_saved) == 0; ++i)
             Sleep(1);
+    if (expected_path && expected_path[0] && atomic_long_load(&g_capture_saved) == 1) {
+        HANDLE expected = CreateFileA(expected_path, GENERIC_WRITE, FILE_SHARE_READ,
+                                      NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (expected != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            unsigned selected_vertex_bytes = selected_vertices * 72u;
+            unsigned selected_index_bytes = count * 4u;
+            int ok = WriteFile(expected, g_capture_test_vbo, selected_vertex_bytes,
+                               &written, NULL) && written == selected_vertex_bytes &&
+                     WriteFile(expected, (unsigned char *)g_capture_test_ibo + offset,
+                               selected_index_bytes, &written, NULL) &&
+                     written == selected_index_bytes;
+            CloseHandle(expected);
+            if (!ok) atomic_long_store(&g_capture_saved, -1);
+        } else {
+            atomic_long_store(&g_capture_saved, -1);
+        }
+    }
     atomic_long_store(&g_capture_stop, 1);
     (void)SetEvent(g_capture_event);
     (void)WaitForSingleObject(g_capture_thread, 5000);

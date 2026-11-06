@@ -11,12 +11,13 @@ typedef struct hand_capture_test_result {
     unsigned read_calls, last_mode, last_count, last_type, last_indices;
 } hand_capture_test_result;
 typedef int (*capture_run_fn)(const char *, unsigned, unsigned, unsigned, unsigned, int, int,
-                              unsigned, unsigned, hand_capture_test_result *);
+                              unsigned, unsigned, const char *, hand_capture_test_result *);
 
 #define GL_UNSIGNED_INT 0x1405u
 #define GL_UNSIGNED_SHORT 0x1403u
 
-static int run(capture_run_fn capture, const char *path, unsigned draw_mode,
+static int run(capture_run_fn capture, const char *path, const char *expected_path,
+               unsigned draw_mode,
                unsigned count, unsigned type,
                unsigned attr, int vbo_size, int ibo_size, unsigned offset,
                unsigned repeat, unsigned failure, unsigned expected_saved,
@@ -24,7 +25,7 @@ static int run(capture_run_fn capture, const char *path, unsigned draw_mode,
     hand_capture_test_result result;
     memset(&result, 0, sizeof result);
     if (capture(path, draw_mode, count, type, attr, vbo_size, ibo_size, offset,
-                repeat, &result) != 0) {
+                repeat, expected_path, &result) != 0) {
         printf("fixture: capture entry failed\n"); return 0;
     }
     if (result.failure != failure || result.saved != expected_saved ||
@@ -63,36 +64,37 @@ int main(int argc, char **argv) {
     capture_run_fn capture = module ? (capture_run_fn)GetProcAddress(module,
                                                     "hand_capture_test_run") : NULL;
     if (!capture) { printf("fixture: test entry not exported\n"); return 3; }
-    char path[1024];
+    char path[1024], expected_path[1024];
     int ok = 1;
 #define PATH(name) make_path(path, sizeof path, argv[2], name)
-    ok &= run(capture, PATH("original.capture"), 4, 1188, GL_UNSIGNED_INT, 0,
+#define EXPECTED(name) make_path(expected_path, sizeof expected_path, argv[2], name)
+    ok &= run(capture, PATH("original.capture"), EXPECTED("original.expected"), 4, 1188, GL_UNSIGNED_INT, 0,
               20000, 6000, 0, 1, 0, 1, 17136, 4752, 2);
-    ok &= run(capture, PATH("enlarged.capture"), 4, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("enlarged.capture"), EXPECTED("enlarged.expected"), 4, 1191, GL_UNSIGNED_INT, 0,
               18000, 5000, 12, 0, 0, 1, 17208, 4764, 1);
-    ok &= run(capture, PATH("bad-attribute.capture"), 4, 1191, GL_UNSIGNED_INT, 1,
+    ok &= run(capture, PATH("bad-attribute.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 1,
               18000, 5000, 0, 0, 3, 0, 0, 0, 1);
-    ok &= run(capture, PATH("short-vbo.capture"), 4, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("short-vbo.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 0,
               17207, 5000, 0, 0, 5, 0, 0, 0, 1);
-    ok &= run(capture, PATH("short-ibo.capture"), 4, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("short-ibo.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 0,
               18000, 4763, 0, 0, 6, 0, 0, 0, 1);
-    ok &= run(capture, PATH("bad-range.capture"), 4, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("bad-range.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 0,
               18000, 5000, 240, 0, 6, 0, 0, 0, 1);
-    ok &= run(capture, PATH("bad-vbo-id.capture"), 4, 1191, GL_UNSIGNED_INT, 2,
+    ok &= run(capture, PATH("bad-vbo-id.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 2,
               18000, 5000, 0, 0, 3, 0, 0, 0, 1);
-    ok &= run(capture, PATH("bad-ibo-id.capture"), 4, 1191, GL_UNSIGNED_INT, 4,
+    ok &= run(capture, PATH("bad-ibo-id.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 4,
               18000, 5000, 0, 0, 2, 0, 0, 0, 1);
-    ok &= run(capture, PATH("bad-pointer.capture"), 4, 1191, GL_UNSIGNED_INT, 3,
+    ok &= run(capture, PATH("bad-pointer.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 3,
               18000, 5000, 0, 0, 3, 0, 0, 0, 1);
-    ok &= run(capture, PATH("unsupported-count.capture"), 4, 1200, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("unsupported-count.capture"), NULL, 4, 1200, GL_UNSIGNED_INT, 0,
               18000, 5000, 0, 0, 0, 0, 0, 0, 1);
-    ok &= run(capture, PATH("wrong-index-type.capture"), 4, 1188, GL_UNSIGNED_SHORT, 0,
+    ok &= run(capture, PATH("wrong-index-type.capture"), NULL, 4, 1188, GL_UNSIGNED_SHORT, 0,
               20000, 6000, 0, 0, 0, 0, 0, 0, 1);
-    ok &= run(capture, PATH("writer-failure\\absent.capture"), 4, 1188, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("writer-failure\\absent.capture"), NULL, 4, 1188, GL_UNSIGNED_INT, 0,
               20000, 6000, 0, 0, 0, (unsigned)-1, 17136, 4752, 1);
-    ok &= run(capture, PATH("unaligned-offset.capture"), 4, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("unaligned-offset.capture"), NULL, 4, 1191, GL_UNSIGNED_INT, 0,
               18000, 5000, 2, 0, 4, 0, 0, 0, 1);
-    ok &= run(capture, PATH("wrong-draw-mode.capture"), 1, 1191, GL_UNSIGNED_INT, 0,
+    ok &= run(capture, PATH("wrong-draw-mode.capture"), NULL, 1, 1191, GL_UNSIGNED_INT, 0,
               18000, 5000, 0, 0, 0, 0, 0, 0, 1);
     if (!ok) return 4;
     FreeLibrary(module);

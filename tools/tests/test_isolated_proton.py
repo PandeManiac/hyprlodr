@@ -454,10 +454,31 @@ def test_supervisor_captures_and_tracks_wine_window_without_stdin(tmp_path, monk
                                                 window_fixture=Path(fixture))
     assert result == 0
     events = _runtime_events(run)
+    process_events = [json.loads(line) for line in
+                      (run / "evidence/process-lifecycle.jsonl").read_text().splitlines()]
     created = [e for e in events if e["event"] == "window_created"]
     disappeared = [e for e in events if e["event"] == "window_disappeared"]
-    assert any(e["window"]["game_candidate"] for e in created)
-    assert disappeared
+    candidates = [e["window"] for e in created if e["window"].get("game_candidate")]
+    fixture_window = next((e["window"] for e in created
+        if e["window"].get("game_candidate") and
+        "hyprlodr-supervisor-window-fixture.exe" in e["window"].get("properties", "").lower()),
+        None)
+    assert fixture_window is not None, {
+        "created_windows": [e.get("window") for e in created],
+        "inventories": [e for e in events if e["event"].startswith("display_inventory")],
+        "processes": process_events,
+    }
+    assert candidates == [fixture_window], candidates
+    assert fixture_window["visible"] is True
+    assert fixture_window["x_pid"] > 0
+    assert any(p.get("pid") == fixture_window["x_pid"] and
+               "hyprlodr-supervisor-window-fixture.exe" in p.get("cmdline", "").lower()
+               for p in process_events if p["event"] == "process_started_observed"), {
+        "window": fixture_window, "processes": process_events,
+    }
+    assert any(e["window"].get("id") == fixture_window["id"] and
+               "hyprlodr-supervisor-window-fixture.exe" in
+               e["window"].get("properties", "").lower() for e in disappeared)
     assert any(e["event"] == "screen_capture" and e["reason"] == "candidate_game_window"
                and e["ok"] for e in events)
     assert (run / "evidence/window-lifecycle.jsonl").is_file()
