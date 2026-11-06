@@ -166,6 +166,8 @@ def test_supervisor_waits_after_proton_exits_while_game_child_lives(tmp_path, mo
     body = ("import subprocess,sys\n"
             "child_code=\"import ctypes,time; ctypes.CDLL(None).prctl(15,b'hyperdemon.exe',0,0,0); time.sleep(1.4)\"\n"
             "subprocess.Popen([sys.executable,'-c',child_code,sys.argv[2]])\n"
+            "steam_code=\"import ctypes,time; ctypes.CDLL(None).prctl(15,b'steam.exe',0,0,0); time.sleep(.7)\"\n"
+            "subprocess.Popen([sys.executable,'-c',steam_code,sys.argv[2]])\n"
             "sys.exit(0)\n")
     source, proton, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body)
     assert result == 0
@@ -180,6 +182,10 @@ def test_supervisor_waits_after_proton_exits_while_game_child_lives(tmp_path, mo
     started = next(e for e in events if e["event"] == "process_started_observed" and
                    "hyperdemon" in e["roles"])
     assert started["comm"] == "hyperdemon.exe"
+    steam_started = next(e for e in events if e["event"] == "process_started_observed" and
+                         "steam_compat" in e["roles"])
+    assert "hyperdemon" not in steam_started["roles"]
+    assert steam_started["game_process"] is False
     summary = json.loads((run / "evidence/process-lifecycle.json").read_text())
     assert summary["proton_outlived_by_game"] is True
     assert summary["supervisor_terminated_game"] is False

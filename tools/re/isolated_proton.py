@@ -354,17 +354,19 @@ def scan_processes():
         proton_real = os.path.realpath(proton)
         is_proton = os.path.realpath(exe) == proton_real or any(
             os.path.realpath(arg) == proton_real for arg in argv[:3])
+        is_steam_compat = comm.lower() in ("steam.exe", "steamservice.exe", "steamclient.exe") or any(
+            token in role_text for token in ("steam.exe", "steamservice", "steamclient"))
         target_arg = any(arg.lower().replace("/", "\\").endswith("\\hyperdemon.exe") and
                          "\\game\\" in arg.lower().replace("/", "\\") for arg in argv)
         # Wine normally exposes the Windows image name through /proc/<pid>/comm
         # while /proc/<pid>/exe remains wine-preloader or a Unix helper. Keep
         # command-line matching as a fallback for Wine builds that preserve it.
-        is_game = not is_proton and (comm.lower() == "hyperdemon.exe" or target_arg)
+        is_game = not is_proton and not is_steam_compat and \
+            (comm.lower() == "hyperdemon.exe" or target_arg)
         if is_game: roles.append("hyperdemon")
         if any(arg.lower().replace("\\", "/").endswith("/xalia.exe") for arg in role_args): roles.append("xalia")
         if "wineserver" in os.path.basename(exe).lower(): roles.append("wineserver")
-        if any(token in role_text for token in ("steam.exe", "steamservice", "steamclient")):
-            roles.append("steam_compat")
+        if is_steam_compat: roles.append("steam_compat")
         if is_proton: roles.append("proton")
         if "wine" in os.path.basename(exe).lower() or "wine" in role_args[0].lower(): roles.append("wine")
         if not roles: continue
