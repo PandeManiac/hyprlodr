@@ -497,33 +497,18 @@ unresolved.
 
 #### Minimal authenticated runtime check
 
-When an authenticated session is available, use a cold start with the existing
-append-only archive and exact tag-1 route enabled before the first target
-lookup. Keep tag-2 `hand2` and all other records unchanged. Capture one
-continuous trace and require these observations in order:
+Use the three-phase, user-controlled procedure in
+[`HAND2_RUNTIME_RUNBOOK.md`](HAND2_RUNTIME_RUNBOOK.md). The passive capture
+accepts exactly the original 238/1,188 and enlarged 239/1,191 signatures, and
+compiled Windows/Wine fixtures pass native-writer-to-production-Python-parser
+integration for both. These are synthetic capture results, not evidence that
+the enlarged model has reached the actual game's GPU.
 
-1. Existing `asset_trace_frida.js` events identify the exact resolver record,
-   replacement extent, loader/parser result, and `mesh_decode` counts plus
-   copied-array hashes. The required target result is 239 vertices, 1,191
-   indices, stride 72, and completion marker 3.
-2. At the already verified OpenGL draw dispatch (`0x3d9ac8`, callsite RVA
-   `0x2370c0`), record the associated array/element buffer IDs and GL buffer
-   sizes, then read back exactly 17,208 and 4,764 bytes. The existing passive
-   `example.hand-hook` capture ABI is established, but its current implementation
-   rejects the enlarged draw and fixed-size readback; extend that capture to
-   accept this exact 239/1,191 signature before using it for the replacement.
-3. Require a `GL_TRIANGLES` draw with `GL_UNSIGNED_INT` and count 1,191. Compare
-   the draw-buffer hashes/bytes to the parser event and replacement payload;
-   then inspect a gameplay frame for visible added geometry. A matching parser
-   event alone proves neither GPU upload nor draw, and a matching draw count
-   alone proves neither buffer contents nor visibility.
-
-The capture shim already owns the verified draw dispatch and uses the Windows
-x64 GL callback ABI; it reads GL buffer sizes and contents only for one selected
-draw, with output deferred to a worker. The minimal required probe change is
-therefore to make its bounded capture accept the target dimensions and encode
-the actual counts/byte lengths. No new game hook or authenticated launch was
-performed for this static investigation.
+The runbook correlates process/run identity, archive and route manifest,
+replacement descriptor, native loader/parser events, capture buffer IDs and
+contents, and a gameplay frame. Parser acceptance, GPU upload, draw submission,
+and visible geometry remain separate proof stages. No authenticated launch is
+performed by the repository tooling.
 
 ### Reproduce extraction, no-change round trip, and edit
 

@@ -766,12 +766,13 @@ the next work.
 ## Passive hand geometry capture (0.9.5)
 
 `example.hand-hook` 0.9.5 adds an opt-in `capture` mode. It uses the already verified draw
-dispatch slot and the same `GL_TRIANGLES` / 1,188-index / unsigned-int signature, but
-forwards the original draw arguments unchanged. Before forwarding the first matching
-draw, it verifies all six enabled attributes against the measured 72-byte layout and
-checks both buffer extents. It reads 17,136 bytes from the vertex buffer and the draw's
-4,752-byte index range into fixed storage. It restores the prior `GL_ARRAY_BUFFER`
-binding; it never rebinds the element buffer or modifies either buffer. A single
+dispatch slot and accepts exactly the original `GL_TRIANGLES` / 1,188-index and enlarged
+1,191-index unsigned-int signatures, while forwarding original draw arguments unchanged.
+Before capturing the first matching draw, it verifies all six enabled attributes against
+the measured 72-byte layout and checks both buffer extents. It reads the logical VBO/IBO
+sizes (17,136/4,752 bytes original; 17,208/4,764 enlarged) into fixed storage. It restores
+the prior `GL_ARRAY_BUFFER` binding; it never rebinds the element buffer or modifies either
+buffer. A single
 `glGetBufferSubData` readback can stall the render thread, so capture mode is for a
 controlled diagnostic run only.
 
@@ -1064,10 +1065,17 @@ could still match. Correlate process, loader, parser and capture timestamps and
 buffer IDs; do not treat dimensions alone as resource identity. Parsed geometry,
 GPU upload, draw submission and visible geometry are four separate claims.
 
-The compiled regression now feeds files emitted by the production Windows
+The compiled Windows/Wine regression feeds files emitted by the production
 capture writer directly to the Python CLI and compares them with bytes read from
-the fixture's fake GL storage. This verifies the HYPRCAP1 boundary only; it is
-not evidence of the game runtime stages above.
+the fixture's fake GL storage. Both approved signatures pass this native-writer
+to production-parser boundary, including the enlarged additional vertex and
+triangle. This is synthetic evidence only; it is not evidence that the enlarged
+replacement reached the real game's GPU.
+
+For the controlled authenticated experiment, use the concise
+[`HAND2_RUNTIME_RUNBOOK.md`](HAND2_RUNTIME_RUNBOOK.md). It separates vanilla,
+original-geometry, and enlarged-replacement runs and requires user verification
+of prefix and Steam Cloud boundaries before any deployment.
 
 Keep parser acceptance, GPU upload, draw submission, and visible geometry as
 separate evidence. Before either run, snapshot applicable game configuration

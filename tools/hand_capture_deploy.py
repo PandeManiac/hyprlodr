@@ -14,14 +14,17 @@ import shutil
 import struct
 import sys
 from pathlib import Path
+import pathlib
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools" / "re"))
 sys.path.insert(0, str(ROOT / "tools"))
 from pack_crypt import decrypt, load_tables  # noqa: E402
 from asset_model import inspect_payload  # noqa: E402
+from pack_append import sha256_prefix, validate_override_read  # noqa: E402
 
 EXPECTED_EXE_SHA256 = "7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611"
+EXPECTED_OPENAL_SHA256 = "8e0a069370f76de7084c39f23360311715f18677236d0e767c9af3f7992dbe64"
 HAND_OFFSET = 295758784
 HAND_SIZE = 21972
 STATE_ROOT = "hyprlodr-state"
@@ -50,6 +53,36 @@ def inside(path: Path, parent: Path) -> bool:
         return False
 
 
+def install_path_errors(game: Path) -> list[str]:
+    """Reject links and non-regular files at paths the journaled deploy replaces."""
+    if not game.is_dir():
+        return [f"game directory is missing or not a directory: {game}"]
+    relative = [
+        "OpenAL32.dll", "OpenAL32_real.dll", "mods/example.hand-hook.dll",
+        "mods/example.asset-redirect.dll", "mods/disabled.txt", "hyprlodr-config.json",
+        f"{STATE_ROOT}/example.hand-hook/hand-mode.txt",
+        f"{STATE_ROOT}/example.asset-redirect/asset-redirect.txt",
+    ]
+    relative.extend(path.name for path in game.iterdir()
+                    if path.is_file() and path.name.startswith("hyprlodr-")
+                    and path.name not in RUNTIME_EXCLUDES)
+    errors = []
+    for name in relative:
+        target = game / name
+        parent = game
+        for component in pathlib.PurePosixPath(name).parts[:-1]:
+            parent = parent / component
+            if os.path.lexists(parent):
+                info = parent.lstat()
+                if pathlib.Path(parent).is_symlink() or not parent.is_dir():
+                    errors.append(f"unsafe install path parent: {parent}")
+        if os.path.lexists(target):
+            info = target.lstat()
+            if pathlib.Path(target).is_symlink() or not target.is_file() or info.st_nlink != 1:
+                errors.append(f"install target must be a single-link regular file: {target}")
+    return sorted(set(errors))
+
+
 def compare_untouched(original: Path, replacement: Path, offset: int = HAND_OFFSET,
                       size: int = HAND_SIZE) -> bool:
     if original.stat().st_size != replacement.stat().st_size:
@@ -67,13 +100,18 @@ def compare_untouched(original: Path, replacement: Path, offset: int = HAND_OFFS
                 return True
 
 
-def preflight(game: Path, build: Path, archive: Path, expected_payload: Path) -> dict:
+def preflight(game: Path, build: Path, archive: Path, expected_payload: Path,
+              route_manifest: Path | None = None,
+              capture_output: Path | None = None) -> dict:
     game, build, archive = game.resolve(), build.resolve(), archive.resolve()
     errors: list[str] = []
     exe = game / "hyperdemon.exe"
     original = game / "asset" / "asset"
+    shipped_openal = game / "OpenAL32.dll"
     if not exe.is_file() or sha256(exe) != EXPECTED_EXE_SHA256:
         errors.append("game executable hash does not match the verified build")
+    if not shipped_openal.is_file() or sha256(shipped_openal) != EXPECTED_OPENAL_SHA256:
+        errors.append("shipped OpenAL32.dll hash does not match the verified runtime")
     proxy = build / "OpenAL32.dll"
     identity_path = build / "hyprlodr-proxy-build.json"
     try:
@@ -105,28 +143,68 @@ def preflight(game: Path, build: Path, archive: Path, expected_payload: Path) ->
             errors.append(f"mod artifact hash does not match build identity: {artifact.name}")
     if not inside(archive, ROOT / ".tmp") or archive == original.resolve():
         errors.append("replacement archive must be a separate file under repository .tmp/")
-    if not original.is_file() or not archive.is_file() or archive.stat().st_size != original.stat().st_size:
-        errors.append("original or replacement archive is missing or has the wrong size")
-    if original.is_file() and archive.is_file() and not compare_untouched(original, archive):
-        errors.append("archive differs outside the designated tag-1 hand2 record")
-    try:
-        if not expected_payload.is_file() or expected_payload.stat().st_size != HAND_SIZE:
-            raise ValueError("expected edited payload missing or wrong size")
-        t0, t1, _ = load_tables(exe)
-        with archive.open("rb") as stream:
-            stream.seek(HAND_OFFSET)
-            cipher = stream.read(HAND_SIZE)
-        plain = decrypt(cipher, t0, t1, 0x2FE)  # CRC-32("hand2") & 0x3ff
-        if plain != expected_payload.read_bytes():
-            raise ValueError("modified hand2 ciphertext does not decrypt to expected payload")
-        model = inspect_payload(plain)
-        if model.get("graph_version") != 3 or model.get("vertex_count") != 238 or \
-                model.get("index_count") != 1188 or model.get("vertex_stride") != 72:
-            raise ValueError("edited hand2 payload structure differs from the validated model")
-    except (OSError, ValueError, KeyError, struct.error) as error:
-        errors.append(f"archive payload validation failed: {error}")
+    if not original.is_file() or not archive.is_file():
+        errors.append("original or replacement archive is missing")
+    mode = "append-route" if route_manifest else "original-capture"
+    errors.extend(install_path_errors(game))
+    if route_manifest:
+        route_manifest = route_manifest.resolve()
+        if not inside(archive, ROOT / ".tmp") or archive == original.resolve():
+            errors.append("append archive must be separate and stored below repository .tmp/")
+        if not inside(route_manifest, ROOT / ".tmp"):
+            errors.append("route manifest must be stored below repository .tmp/")
+        try:
+            manifest = json.loads(route_manifest.read_text())
+            source = manifest["source_archive"]
+            if (not original.is_file() or source["size"] != original.stat().st_size or
+                    source["sha256"] != sha256(original) or
+                    sha256_prefix(archive, source["size"]) != source["sha256"]):
+                raise ValueError("installed source archive is not the exact appended archive prefix")
+            if not expected_payload.is_file():
+                raise ValueError("expected enlarged payload is missing")
+            plain, model = validate_override_read(exe=exe, archive=archive,
+                manifest_path=route_manifest, observed_record={
+                    "name": "hand2", "record_id": "rec-011a0ebc0-000055d4-0001",
+                    "resolver_table_id": "tbl-e91fb3b80004", "offset": HAND_OFFSET,
+                    "size": HAND_SIZE, "tag": 1})
+            if plain != expected_payload.read_bytes():
+                raise ValueError("appended tag-1 hand2 does not decrypt to expected payload")
+            if (model.get("graph_version") != 3 or model.get("vertex_count") != 239 or
+                    model.get("index_count") != 1191 or model.get("vertex_stride") != 72):
+                raise ValueError("appended hand2 is not the validated 239/1,191/72 layout")
+        except (OSError, ValueError, KeyError, TypeError, struct.error) as error:
+            errors.append(f"append route validation failed: {error}")
+    else:
+        if archive.is_file() and original.is_file() and archive.stat().st_size != original.stat().st_size:
+            errors.append("original-capture archive must have the original archive size")
+        if original.is_file() and archive.is_file() and not compare_untouched(original, archive):
+            errors.append("archive differs outside the designated tag-1 hand2 record")
+        try:
+            if not expected_payload.is_file() or expected_payload.stat().st_size != HAND_SIZE:
+                raise ValueError("expected original-size payload missing or wrong size")
+            t0, t1, _ = load_tables(exe)
+            with archive.open("rb") as stream:
+                stream.seek(HAND_OFFSET)
+                cipher = stream.read(HAND_SIZE)
+            plain = decrypt(cipher, t0, t1, 0x2FE)
+            if plain != expected_payload.read_bytes():
+                raise ValueError("tag-1 hand2 does not decrypt to expected original payload")
+            model = inspect_payload(plain)
+            if (model.get("graph_version") != 3 or model.get("vertex_count") != 238 or
+                    model.get("index_count") != 1188 or model.get("vertex_stride") != 72):
+                raise ValueError("original hand2 payload structure differs from verified topology")
+        except (OSError, ValueError, KeyError, struct.error) as error:
+            errors.append(f"archive payload validation failed: {error}")
+    if capture_output is None:
+        capture_output = ROOT / ".tmp" / "hand-capture" / "runtime" / "hand2.capture"
+    capture_output = capture_output.resolve()
+    if not inside(capture_output, ROOT / ".tmp"):
+        errors.append("capture output must be below repository .tmp/")
+    if os.path.lexists(capture_output):
+        errors.append("capture output already exists; choose a fresh run-specific path")
     return {
         "ok": not errors,
+        "mode": mode,
         "game_dir": str(game),
         "executable_sha256": sha256(exe) if exe.is_file() else None,
         "proxy": str(proxy),
@@ -134,8 +212,11 @@ def preflight(game: Path, build: Path, archive: Path, expected_payload: Path) ->
         "proxy_identity": identity,
         "archive": str(archive),
         "archive_sha256": sha256(archive) if archive.is_file() else None,
+        "route_manifest": str(route_manifest) if route_manifest else None,
+        "capture_output": str(capture_output),
         "hand2": {"offset": HAND_OFFSET, "size": HAND_SIZE,
-                  "version": 3, "vertices": 238, "indices": 1188, "stride": 72},
+                  "version": 3, "vertices": 239 if route_manifest else 238,
+                  "indices": 1191 if route_manifest else 1188, "stride": 72},
         "errors": errors,
     }
 
@@ -153,6 +234,10 @@ def backup_one(game: Path, journal_dir: Path, rel: str) -> dict:
     return item
 
 
+def _windows_path(path: Path) -> str:
+    return "Z:" + path.resolve().as_posix().replace("/", "\\")
+
+
 def deploy(args, result: dict) -> int:
     game = args.game_dir.resolve()
     journal_dir = args.journal.resolve()
@@ -166,7 +251,7 @@ def deploy(args, result: dict) -> int:
                          if path.is_file() and path.name.startswith("hyprlodr-")
                          and path.name not in RUNTIME_EXCLUDES)
     relative = [
-        "OpenAL32.dll", "mods/example.hand-hook.dll", "mods/example.asset-redirect.dll",
+        "OpenAL32.dll", "OpenAL32_real.dll", "mods/example.hand-hook.dll", "mods/example.asset-redirect.dll",
         "mods/disabled.txt", "hyprlodr-config.json",
         f"{STATE_ROOT}/example.hand-hook/hand-mode.txt",
         f"{STATE_ROOT}/example.asset-redirect/asset-redirect.txt",
@@ -174,10 +259,11 @@ def deploy(args, result: dict) -> int:
     ]
     entries = [backup_one(game, journal_dir, rel) for rel in relative]
     journal = {"schema": 1, "game_dir": str(game), "backup_dir": str(journal_dir / "backup"),
-               "runtime_files": sorted(runtime_files), "entries": entries}
+               "mode": result["mode"], "runtime_files": sorted(runtime_files), "entries": entries}
     journal_dir.mkdir(parents=True, exist_ok=True)
     journal_path.write_text(json.dumps(journal, indent=2) + "\n")
     try:
+        shutil.copy2(game / "OpenAL32.dll", game / "OpenAL32_real.dll")
         shutil.copy2(args.build / "OpenAL32.dll", game / "OpenAL32.dll")
         shutil.copy2(args.build / "examples" / "example.hand-hook.dll",
                      game / "mods" / "example.hand-hook.dll")
@@ -191,12 +277,20 @@ def deploy(args, result: dict) -> int:
         config_path = game / "hyprlodr-config.json"
         config = json.loads(config_path.read_text()) if config_path.exists() else {}
         config["delay_ms"] = 0
+        config["experimental_record_route"] = bool(args.route_manifest)
+        if args.route_manifest:
+            config["experimental_record_route_manifest"] = _windows_path(args.route_manifest)
+            config["experimental_record_route_archive"] = _windows_path(args.archive)
+        else:
+            config.pop("experimental_record_route_manifest", None)
+            config.pop("experimental_record_route_archive", None)
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         for runtime_file in runtime_files:
             (game / runtime_file).unlink(missing_ok=True)
         hand_state = game / STATE_ROOT / "example.hand-hook"
         hand_state.mkdir(parents=True, exist_ok=True)
-        capture = ROOT / ".tmp" / "hand-capture" / "runtime" / "hand2.capture"
+        capture = args.capture_output.resolve() if args.capture_output else (
+            ROOT / ".tmp" / "hand-capture" / "runtime" / "hand2.capture")
         capture.parent.mkdir(parents=True, exist_ok=True)
         capture_win = "Z:" + capture.as_posix().replace("/", "\\")
         (hand_state / "hand-mode.txt").write_text(f"capture\n{capture_win}\n")
@@ -292,6 +386,10 @@ def main(argv=None) -> int:
         item.add_argument("--build", type=Path, required=True)
         item.add_argument("--archive", type=Path, required=True)
         item.add_argument("--expected-payload", type=Path, required=True)
+        item.add_argument("--route-manifest", type=Path,
+                          help="enable the exact appended tag-1 hand2 route")
+        item.add_argument("--capture-output", type=Path,
+                          help="fresh run-specific HYPRCAP1 output below repository .tmp/")
         if command == "deploy":
             item.add_argument("--journal", type=Path, default=ROOT / ".tmp" / "hand-capture" / "deployment")
     restore = sub.add_parser("restore")
@@ -302,7 +400,8 @@ def main(argv=None) -> int:
         if not args.journal.is_file():
             parser.error(f"deployment journal not found: {args.journal}")
         return restore_journal(args.journal)
-    report = preflight(args.game_dir, args.build, args.archive, args.expected_payload)
+    report = preflight(args.game_dir, args.build, args.archive, args.expected_payload,
+                       args.route_manifest, args.capture_output)
     print(json.dumps(report, indent=2))
     if not report["ok"]:
         return 2

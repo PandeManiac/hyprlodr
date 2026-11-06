@@ -17,6 +17,9 @@ tools/test_windows.sh  build-win "/path/to/HYPER DEMON/OpenAL32.dll"
 # Passive hand-capture parser and source-comparison regressions
 python3 -m unittest tools.re.tests.test_hand_capture -v
 
+# Controlled authenticated runtime procedure (user initiated; no game launch by this tooling)
+# See docs/HAND2_RUNTIME_RUNBOOK.md for the three-phase, journaled workflow.
+
 # Read-only installation diagnostics
 python3 tools/hyprl_diagnose.py --json report.json
 ```
