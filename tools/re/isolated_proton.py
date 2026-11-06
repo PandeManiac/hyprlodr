@@ -820,8 +820,8 @@ def _launch_claimed(run_root: Path, source_game: Path, duration: int,
         "STEAM_COMPAT_INSTALL_PATH": "/tmp/hyprlodr/game",
         "STEAM_COMPAT_TOOL_PATHS": "/tmp/hyprlodr/proton",
         "PROTON_LOG": "1",
-        # The control has no in-process file hook. Wine's scoped file channel
-        # provides independent open/close evidence for the original archive.
+        # The control has no in-process file hook. Request Wine's file channel
+        # as supplemental evidence; missing channel output stays unknown.
         "WINEDEBUG": "+file" if meta.get("mode") == "vanilla" else "-all"}
     if meta.get("mode") == "diagnostic":
         env.update({"HYPRLODR_EARLY_RECORD_HOOK": "1",

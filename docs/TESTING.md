@@ -182,6 +182,43 @@ in vanilla mode. Proton's return code remains distinct from the game's
 unavailable exit status, and `/proc` disappearance alone is not treated as a
 normal game exit.
 
+#### Vanilla control result (2026-11-05)
+
+The fresh run `vanilla-control-20261105-01` passed all source-hash, vanilla
+staging, one-shot prefix, private namespace, hidden Steam IPC, and writable
+mount checks. It launched the pinned game (`hyperdemon.exe`, private PID 150)
+with the shipped OpenAL DLL and no HYPRLODR proxy, mods, config, or input probe.
+The game process was first seen at 0.94 s and disappeared at 12.02 s in the
+same 100 ms polling interval as Proton's wrapper (return code 0). The supervisor
+sent no signal; the game's exit code remains unknown. No top-level X11 window
+was observed, and automatic screenshots stayed black. This matches the
+instrumented run's startup boundary and shows that HYPRLODR is not required to
+reproduce the early exit in this offline environment.
+
+The control requested Wine `+file` diagnostics, but the resulting Proton log
+contained only 28 lines of Proton/DXVK/Xalia output and no Wine file-channel
+records. Therefore, `asset/asset` open status remains **unknown**; the control
+does not prove that the archive was never opened. The DXVK Vulkan and Xalia
+errors match the prior run; the game outlived Xalia by about eleven seconds,
+so those messages remain unproven as the cause. The run used private network
+and Steam IPC namespaces with no authentication supplied. The current run did
+not log a Steam API result, but the independent 2026-11-01 vanilla startup
+investigation recorded a logged-off Steam client, `SteamAPI_Init` failure, and
+deliberate early game exit; a later authenticated Steam launch reached the
+title screen. Together with this vanilla control reproducing the same boundary,
+the best-supported explanation is that the intentionally offline sandbox
+cannot satisfy the game's Steam startup dependency. This is supported by the
+earlier direct observation, not inferred from the import table alone; the exact
+API result in this control remains unobserved.
+
+Evidence is preserved under
+`.tmp/first-load-diagnostic/isolated/vanilla-control-20261105-01/`: `stage.json`
+declares the control, `evidence/` contains preflight/process/window timelines,
+screenshots and before/after inventories, and `logs/proton-console.log` holds
+the game session's available Proton output. Original executable, archive,
+installed OpenAL files, and source Proton launcher hashes matched after the
+run. No user Steam state was exposed or changed.
+
 The process stream includes `/proc/<pid>/comm` so Wine's Windows image name can
 identify `hyperdemon.exe` even when the Linux executable is `wine-preloader`.
 Polling is sampled at 100 ms and cannot prove that a shorter-lived process was
