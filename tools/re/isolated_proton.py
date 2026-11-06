@@ -294,20 +294,118 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
         "game_process_will_be_network_isolated": True}
 
 
-_SUPERVISOR = r'''import json, os, select, shutil, signal, subprocess, sys, time
+_SUPERVISOR = r'''import json, os, re, select, shutil, signal, subprocess, sys, time
 root, proton, game, run_seconds = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
 evidence = os.path.join(root, "evidence")
 logs = os.path.join(root, "logs")
 for path in (evidence, logs): os.makedirs(path, exist_ok=True)
 events_path = os.path.join(evidence, "runtime-events.jsonl")
+process_path = os.path.join(evidence, "process-lifecycle.jsonl")
+window_path = os.path.join(evidence, "window-lifecycle.jsonl")
 sequence = 0
 start = time.monotonic()
+supervisor_run_id = "%x-%x" % (os.getpid(), time.monotonic_ns())
+processes = {}
+game_seen = set()
+supervisor_signals = {}
 def event(name, **fields):
     global sequence
     sequence += 1
-    row = {"seq": sequence, "t_ms": int((time.monotonic()-start)*1000), "event": name, **fields}
-    with open(events_path, "a", encoding="utf-8") as stream: stream.write(json.dumps(row)+"\n")
+    row = {"seq": sequence, "run_id": supervisor_run_id,
+        "t_ms": int((time.monotonic()-start)*1000), "event": name, **fields}
+    with open(events_path, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(row)+"\n"); stream.flush()
     print(json.dumps(row), flush=True)
+    if name.startswith("process_") or name in ("proton_wrapper_exit", "process_tree_complete"):
+        with open(process_path, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row)+"\n"); stream.flush()
+    if name.startswith("window_") or name.startswith("display_inventory") or name == "screen_capture":
+        with open(window_path, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(row)+"\n"); stream.flush()
+
+ticks = os.sysconf("SC_CLK_TCK")
+boot_time = 0
+try:
+    with open("/proc/stat", encoding="ascii") as stream:
+        boot_time = int(next(line.split()[1] for line in stream if line.startswith("btime ")))
+except Exception: pass
+game_path = os.path.realpath(os.path.join(game, "hyperdemon.exe"))
+def scan_processes():
+    found = {}
+    try: entries = os.listdir("/proc")
+    except OSError: return found
+    for entry in entries:
+        if not entry.isdigit(): continue
+        pid = int(entry); base = "/proc/" + entry
+        try:
+            raw = open(base + "/stat", "rb").read().decode("utf-8", "replace")
+            end = raw.rfind(")")
+            fields = raw[end+2:].split()
+            state, ppid, start_ticks = fields[0], int(fields[1]), int(fields[19])
+            argv = open(base + "/cmdline", "rb").read().split(b"\0")
+            argv = [item.decode("utf-8", "replace") for item in argv if item]
+            cmdline = " ".join(argv)
+            exe = os.readlink(base + "/exe")
+            comm = open(base + "/comm", "rb").read().decode("utf-8", "replace").strip()
+        except (OSError, ValueError, IndexError): continue
+        role_args = argv if len(argv) < 2 or argv[1] != "-c" else argv[:1]
+        role_text = (exe + " " + " ".join(role_args)).lower()
+        roles = []
+        proton_real = os.path.realpath(proton)
+        is_proton = os.path.realpath(exe) == proton_real or any(
+            os.path.realpath(arg) == proton_real for arg in argv[:3])
+        target_arg = any(arg.lower().replace("/", "\\").endswith("\\hyperdemon.exe") and
+                         "\\game\\" in arg.lower().replace("/", "\\") for arg in argv)
+        # Wine normally exposes the Windows image name through /proc/<pid>/comm
+        # while /proc/<pid>/exe remains wine-preloader or a Unix helper. Keep
+        # command-line matching as a fallback for Wine builds that preserve it.
+        is_game = not is_proton and (comm.lower() == "hyperdemon.exe" or target_arg)
+        if is_game: roles.append("hyperdemon")
+        if any(arg.lower().replace("\\", "/").endswith("/xalia.exe") for arg in role_args): roles.append("xalia")
+        if "wineserver" in os.path.basename(exe).lower(): roles.append("wineserver")
+        if any(token in role_text for token in ("steam.exe", "steamservice", "steamclient")):
+            roles.append("steam_compat")
+        if is_proton: roles.append("proton")
+        if "wine" in os.path.basename(exe).lower() or "wine" in role_args[0].lower(): roles.append("wine")
+        if not roles: continue
+        key = str(pid) + ":" + str(start_ticks)
+        found[key] = {"pid":pid,"ppid":ppid,"state":state,"start_ticks":start_ticks,
+            "start_epoch_s":boot_time + start_ticks / ticks if boot_time else None,
+            "exe":exe,"comm":comm,"cmdline":cmdline,"roles":sorted(set(roles)),"game_process":is_game}
+    return found
+
+def observe_processes(now_ms):
+    current = scan_processes()
+    for key, old in list(processes.items()):
+        if key not in current:
+            event("process_disappeared", identity=key, pid=old["pid"], ppid=old["ppid"],
+                roles=old["roles"], last_state=old["state"], first_seen_ms=old["first_seen_ms"],
+                last_seen_ms=old["last_seen_ms"], exit_code=None, exit_signal=None,
+                exit_observation="not_available_from_procfs",
+                supervisor_terminated=supervisor_signals.get(key, False))
+            del processes[key]
+    for key, sample in current.items():
+        if key not in processes:
+            sample["first_seen_ms"] = now_ms
+            sample["last_seen_ms"] = now_ms
+            processes[key] = sample
+            event("process_started_observed", identity=key, **sample)
+        else:
+            tracked = processes[key]
+            tracked.update({"state":sample["state"],"last_seen_ms":now_ms,
+                            "ppid":sample["ppid"],"cmdline":sample["cmdline"],"exe":sample["exe"],
+                            "comm":sample["comm"]})
+        if sample["game_process"]: game_seen.add(key)
+    active_games = {key: value for key,value in processes.items() if value["game_process"]}
+    return current, active_games
+
+def proc_identity_alive(key):
+    try:
+        pid_text, ticks_text = key.split(":", 1)
+        raw = open("/proc/"+pid_text+"/stat", "rb").read().decode("utf-8", "replace")
+        return int(raw[raw.rfind(")")+2:].split()[19]) == int(ticks_text)
+    except (OSError, ValueError, IndexError): return False
+
 read_fd, write_fd = os.pipe()
 xvfb_log = open(os.path.join(logs, "xvfb.log"), "wb")
 xvfb = subprocess.Popen(["/usr/bin/Xvfb", "-displayfd", str(write_fd), "-screen", "0", "1920x1080x24",
@@ -333,89 +431,279 @@ if not display:
 env = os.environ.copy()
 env.update({"DISPLAY": display, "XAUTHORITY": "/dev/null"})
 env.pop("WAYLAND_DISPLAY", None)
+probe = None
 for _ in range(100):
     probe = subprocess.run(["/usr/bin/xdpyinfo", "-display", display], env=env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if probe.returncode == 0: break
     if xvfb.poll() is not None: break
     time.sleep(0.05)
-if probe.returncode != 0:
+if probe is None or probe.returncode != 0:
     event("xvfb_readiness_failed", display=display)
     xvfb.terminate(); xvfb.wait(timeout=5); sys.exit(21)
 event("xvfb_ready", display=display, pid=xvfb.pid, resolution="1920x1080x24", glx=True, randr=True)
 wm = None
+wm_log = None
 openbox = shutil.which("openbox")
 if openbox:
     wm_log = open(os.path.join(logs, "window-manager.log"), "wb")
     wm = subprocess.Popen([openbox, "--sm-disable"], env=env, stdout=wm_log,
         stderr=subprocess.STDOUT, close_fds=True)
     event("window_manager_started", pid=wm.pid)
+
+def window_inventory():
+    xwininfo = shutil.which("xwininfo")
+    wmctrl = shutil.which("wmctrl")
+    if not xwininfo: return None, []
+    try:
+        root_result = subprocess.run([xwininfo,"-display",display,"-root"],env=env,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=3,check=False)
+        result = subprocess.run([wmctrl,"-l","-p","-G"],env=env,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=3,check=False)
+    except subprocess.TimeoutExpired:
+        return {"returncode":None,"stderr":"xwininfo_timeout"}, []
+    rows=[]
+    clients=[]
+    if wmctrl and result.returncode == 0:
+        for line in result.stdout.splitlines():
+            match=re.match(r"^(0x[0-9a-fA-F]+)\s+(-?\d+)\s+(\d+)\s+(-?\d+)\s+(-?\d+)\s+(\d+)\s+(\d+)\s+\S+\s+(.*)$",line)
+            if match:
+                wid,pid,x,y,width,height,desktop,title=match.groups()
+                clients.append((wid,int(pid) if pid.isdigit() else None,title,
+                    int(x),int(y),int(width),int(height)))
+    else:
+        # xwininfo's root tree indents direct children by two spaces and
+        # nested toolkit children more deeply; keep only actual root clients.
+        tree=subprocess.run([xwininfo,"-display",display,"-root","-tree"],env=env,
+            stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=3,check=False)
+        for line in tree.stdout.splitlines():
+            match=re.match(r"^  (0x[0-9a-fA-F]+)\s+(.+)$",line)
+            if match: clients.append((match.group(1),None,match.group(2),None,None,None,None))
+        result=tree
+    for wid,wm_pid,wm_title,x,y,width,height in clients:
+        try:
+            prop=subprocess.run(["xprop","-display",display,"-id",wid,"WM_CLASS","_NET_WM_PID","_NET_WM_NAME","WM_NAME"],
+                env=env,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=2,check=False)
+        except subprocess.TimeoutExpired: continue
+        info=prop.stdout.strip()
+        try:
+            detail=subprocess.run([xwininfo,"-display",display,"-id",wid],env=env,
+                stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=2,check=False)
+        except subprocess.TimeoutExpired: continue
+        visible="IsViewable" in detail.stdout
+        def xint(label):
+            found=re.search(r"^\s*"+label+r":\s*(-?\d+)",detail.stdout,re.M)
+            return int(found.group(1)) if found else None
+        pid_match=re.search(r"_NET_WM_PID\(CARDINAL\)\s*=\s*(\d+)",info)
+        x_pid=int(pid_match.group(1)) if pid_match else wm_pid
+        title=(wm_title or "")
+        rows.append({"id":wid,"title":title,"properties":info,"x_pid":x_pid,
+            "visible":visible,"x":x if x is not None else xint("Absolute upper-left X"),
+            "y":y if y is not None else xint("Absolute upper-left Y"),
+            "width":width if width is not None else xint("Width"),
+            "height":height if height is not None else xint("Height"),
+            "game_candidate":("hyperdemon" in (title+" "+info).lower())})
+    return {"returncode":result.returncode,"stderr":result.stderr.strip(),
+        "root":root_result.stdout.strip()}, rows
+
+def capture_screen(reason, max_captures=6):
+    if capture_screen.count >= max_captures: return
+    xwd=shutil.which("xwd")
+    if not xwd:
+        event("screen_capture",reason=reason,ok=False,error="xwd_unavailable"); return
+    path=os.path.join(evidence,"screen-%02d.xwd"%capture_screen.count)
+    shot=subprocess.run([xwd,"-display",display,"-root","-silent","-out",path],env=env,
+        stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=5,check=False)
+    capture_screen.count += 1
+    event("screen_capture",reason=reason,path=path,ok=shot.returncode==0,
+        error=shot.stderr.decode("utf-8","replace") if shot.returncode else "")
+capture_screen.count=0
+
+seen_windows={}
+next_window_scan=0.0
+fallback_capture_at=time.monotonic()+10
+next_fallback_capture=fallback_capture_at
+attach_paths=set()
+def observe_attach():
+    for path in sorted(__import__("glob").glob(os.path.join(game,"hyprlodr-attach-*.json"))):
+        if path in attach_paths: continue
+        attach_paths.add(path)
+        try: row=json.load(open(path,encoding="utf-8"))
+        except Exception as error:
+            event("hyprlodr_attach_unreadable",path=path,error=str(error)); continue
+        event("hyprlodr_attach_observed",path=path,hyprlodr_run_id=row.get("run_id"),
+            windows_pid=row.get("pid"),stage=row.get("stage"),build_matches=row.get("build_matches"),
+            anchors_total=row.get("anchors_total"),anchors_matched=row.get("anchors_matched"),
+            early_hook=row.get("experimental_early_hook_status"),
+            relevant_linux_processes=[p for p in processes.values() if p["game_process"]])
+
 proton_log = open(os.path.join(logs, "proton-console.log"), "wb")
+env["WINEDEBUG"] = "+seh"
 proc = subprocess.Popen([proton, "run", os.path.join(game, "hyperdemon.exe")], cwd=game,
     env=env, stdin=subprocess.DEVNULL, stdout=proton_log, stderr=subprocess.STDOUT,
     close_fds=True, start_new_session=True)
-event("proton_game_started", pid=proc.pid, app_id=os.environ.get("STEAM_COMPAT_APP_ID"),
-    game=game, compat_data=os.environ.get("STEAM_COMPAT_DATA_PATH"),
-    steam_client_ipc="unavailable", network="isolated")
-next_capture = time.monotonic() + 15
-stop_at = time.monotonic() + run_seconds
-stdin_open = True
+wrapper_started=time.monotonic()
+event("proton_game_started", pid=proc.pid, ppid=os.getpid(), start_monotonic_ns=time.monotonic_ns(),
+    app_id=os.environ.get("STEAM_COMPAT_APP_ID"),game=game,
+    compat_data=os.environ.get("STEAM_COMPAT_DATA_PATH"),
+    steam_client_ipc="unavailable",network="isolated",stdin="closed_noninteractive")
+stop_at = wrapper_started + run_seconds
+wrapper_exit_at=None
+wrapper_exit_code=None
+wrapper_outlived_game=False
+window_identities=set()
+termination_reason=None
+scan_period=0.1
+next_capture = wrapper_started + 15
+last_window_report=None
 try:
-    while proc.poll() is None and time.monotonic() < stop_at:
-        ready, _, _ = select.select([sys.stdin] if stdin_open else [], [], [], 0.25)
-        if ready:
-            command = sys.stdin.readline().strip().lower()
-            if not command: stdin_open = False
-            if command in ("snapshot", "enter", "click-enter"):
-                image_path = os.path.join(evidence, "screen-" + str(int(time.monotonic()-start)) + ".xwd")
-                xwd = shutil.which("xwd")
-                if xwd:
-                    shot = subprocess.run([xwd, "-display", display, "-root", "-silent", "-out", image_path],
-                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-                    event("screen_capture", path=image_path, ok=shot.returncode == 0)
-                if command != "snapshot":
-                    probe_path = os.path.join(game, "hyprlodr-input-probe.exe")
-                    if not os.path.isfile(probe_path):
-                        event("input_rejected", reason="existing Win32 probe not staged")
-                    else:
-                        action = "enter" if command == "enter" else "click-enter"
-                        report = os.path.join(evidence, "input-report.jsonl")
-                        report_win = "Z:" + report.replace("/", "\\")
-                        args = [proton, "run", probe_path, action, "--title=hyperdemon",
-                            "--module=hyperdemon.exe", "--report=" + report_win]
-                        result = subprocess.run(args, cwd=game, env=env, stdout=proton_log,
-                            stderr=subprocess.STDOUT, timeout=30, check=False)
-                        event("win32_input_helper", action=action, returncode=result.returncode,
-                            report=report)
-            elif command in ("quit", "stop"):
-                event("requested_stop")
-                break
-        if time.monotonic() >= next_capture:
-            event("game_still_running", pid=proc.pid, elapsed_seconds=int(time.monotonic()-start))
+    while True:
+        now=time.monotonic(); now_ms=int((now-start)*1000)
+        current, active_games=observe_processes(now_ms)
+        observe_attach()
+        if now >= next_window_scan:
+            display_result, rows=window_inventory()
+            if display_result is not None:
+                new={row["id"]:row for row in rows}
+                for wid,row in new.items():
+                    if wid not in seen_windows:
+                        associated=[p for p in processes.values() if row["x_pid"] and p["pid"]==row["x_pid"]]
+                        row["associated_processes"]=[{"pid":p["pid"],"roles":p["roles"],
+                            "identity":str(p["pid"])+":"+str(p["start_ticks"])} for p in associated]
+                        linked_game=any(p["game_process"] for p in associated)
+                        row["game_process_associated"] = linked_game
+                        event("window_created",window=row,display=display)
+                        if row["game_candidate"] or linked_game: capture_screen("candidate_game_window")
+                for wid,row in seen_windows.items():
+                    if wid not in new: event("window_disappeared",window=row,display=display)
+                seen_windows=new
+                inventory_row={"display":display,"root":display_result,"windows":rows}
+                if inventory_row != last_window_report:
+                    event("display_inventory",**inventory_row)
+                    last_window_report=inventory_row
+            next_window_scan=now+0.5
+        if now >= next_capture:
+            event("supervisor_heartbeat",proton_pid=proc.pid,proton_running=proc.poll() is None,
+                active_game_identities=sorted(active_games),elapsed_seconds=int(now-start))
             next_capture += 15
-    if proc.poll() is None:
-        event("game_stop", reason="runtime_limit_or_operator")
-        os.killpg(proc.pid, signal.SIGTERM)
-        try: proc.wait(timeout=10)
+        if now >= next_fallback_capture:
+            capture_screen("bounded_fallback"); next_fallback_capture += 30
+
+        code=proc.poll()
+        if code is not None and wrapper_exit_at is None:
+            wrapper_exit_at=now; wrapper_exit_code=code
+            event("proton_wrapper_exit",pid=proc.pid,returncode=code,
+                exit_kind="signal" if code<0 else "status",signal=-code if code<0 else None,
+                active_game_identities=sorted(active_games))
+            wrapper_outlived_game=bool(active_games)
+            if wrapper_outlived_game:
+                event("proton_wrapper_returned_before_game",proton_pid=proc.pid,
+                    active_game_identities=sorted(active_games))
+        if wrapper_exit_at is not None and game_seen and not active_games:
+            termination_reason="observed_game_process_exit"; break
+        if wrapper_exit_at is not None and not game_seen and now-wrapper_exit_at>=5.0:
+            termination_reason="no_game_process_observed_after_wrapper_grace"; break
+        if now >= stop_at:
+            termination_reason="run_limit"; break
+        time.sleep(scan_period)
+
+    # Preserve the final visible state before any cleanup can close Wine windows.
+    capture_screen("pre_cleanup_final")
+    display_result, rows=window_inventory()
+    if display_result is not None:
+        event("display_inventory_final",display=display,root=display_result,windows=rows)
+    event("process_tree_complete",reason=termination_reason,proton_pid=proc.pid,
+        proton_returncode=proc.poll(),game_processes_ever_observed=sorted(game_seen),
+        game_process_active_at_wrapper_exit=wrapper_outlived_game,
+        supervisor_termination_required=termination_reason=="run_limit")
+
+    if termination_reason=="run_limit":
+        current, active_games=observe_processes(int((time.monotonic()-start)*1000))
+        for key,p in list(active_games.items()):
+            if not proc_identity_alive(key): continue
+            try:
+                os.kill(p["pid"],signal.SIGTERM); supervisor_signals[key]=True
+                event("process_supervisor_signal",identity=key,pid=p["pid"],roles=p["roles"],signal="SIGTERM")
+            except ProcessLookupError: pass
+        term_deadline=time.monotonic()+5
+        while time.monotonic()<term_deadline:
+            _,active_games=observe_processes(int((time.monotonic()-start)*1000))
+            if not active_games: break
+            time.sleep(scan_period)
+        for key,p in list(active_games.items()):
+            if proc_identity_alive(key):
+                try:
+                    os.kill(p["pid"],signal.SIGKILL); supervisor_signals[key]=True
+                    event("process_supervisor_signal",identity=key,pid=p["pid"],roles=p["roles"],signal="SIGKILL")
+                except ProcessLookupError: pass
+    elif proc.poll() is None:
+        # This can occur only if the overall limit elapsed before Proton returned.
+        event("process_supervisor_signal",identity=str(proc.pid),pid=proc.pid,signal="SIGTERM",role="proton")
+        proc.terminate()
+        try: proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=5)
-    event("game_exit", returncode=proc.returncode)
+            event("process_supervisor_signal",identity=str(proc.pid),pid=proc.pid,signal="SIGKILL",role="proton")
+            proc.kill(); proc.wait(timeout=2)
+    event("game_exit_observation",wrapper_returncode=wrapper_exit_code,
+        game_exit_code=None,game_exit_status="unknown_unless_waitable_child",
+        reason=termination_reason,supervisor_terminated_game=termination_reason=="run_limit")
 finally:
-    try:
-        subprocess.run([os.path.join(proton, "files/bin/wineserver"), "-k"], env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
-    except Exception: pass
+    # Wrapper return alone is never a cleanup condition while the game remains.
+    # wineserver -k is scoped by the private WINEPREFIX and runs only after the
+    # observed game process has exited, or after explicit run-limit cleanup.
+    wineserver=os.path.join(proton,"files/bin/wineserver")
+    if proc.poll() is None or any(p["game_process"] for p in processes.values()):
+        try:
+            _, active_games=observe_processes(int((time.monotonic()-start)*1000))
+            for key,p in active_games.items():
+                if proc_identity_alive(key):
+                    os.kill(p["pid"],signal.SIGTERM); supervisor_signals[key]=True
+                    event("process_supervisor_signal",identity=key,pid=p["pid"],
+                        roles=p["roles"],signal="SIGTERM",reason="supervisor_cleanup")
+            grace=time.monotonic()+2
+            while time.monotonic()<grace:
+                _,active_games=observe_processes(int((time.monotonic()-start)*1000))
+                if not active_games: break
+                time.sleep(scan_period)
+            for key,p in active_games.items():
+                if proc_identity_alive(key):
+                    os.kill(p["pid"],signal.SIGKILL); supervisor_signals[key]=True
+                    event("process_supervisor_signal",identity=key,pid=p["pid"],
+                        roles=p["roles"],signal="SIGKILL",reason="supervisor_cleanup")
+            if proc.poll() is None:
+                proc.terminate()
+                try: proc.wait(timeout=3)
+                except subprocess.TimeoutExpired: proc.kill(); proc.wait(timeout=2)
+        except Exception as error: event("owned_process_cleanup_failed",error=str(error))
+    if os.path.isfile(wineserver):
+        try:
+            result=subprocess.run([wineserver,"-k"],env=env,stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,timeout=10,check=False)
+            event("wineserver_cleanup",returncode=result.returncode,after_game_observation=True)
+        except Exception as error: event("wineserver_cleanup_failed",error=str(error))
+    capture_screen("final_before_display_shutdown")
+    display_result,rows=window_inventory()
+    if display_result is not None: event("display_inventory_cleanup",display=display,root=display_result,windows=rows)
     if wm is not None and wm.poll() is None: wm.terminate()
     if wm is not None:
         try: wm.wait(timeout=5)
         except subprocess.TimeoutExpired: wm.kill(); wm.wait(timeout=2)
-    if wm is not None: wm_log.close()
+    if wm_log is not None: wm_log.close()
     if xvfb.poll() is None: xvfb.terminate()
     try: xvfb.wait(timeout=5)
     except subprocess.TimeoutExpired: xvfb.kill(); xvfb.wait(timeout=2)
     proton_log.close(); xvfb_log.close()
-    event("owned_runtime_stopped", xvfb_returncode=xvfb.returncode)
+    event("owned_runtime_stopped",xvfb_returncode=xvfb.returncode,
+        process_poll_interval_ms=int(scan_period*1000),supervisor_run_id=supervisor_run_id)
+    summary={"schema":1,"supervisor_run_id":supervisor_run_id,"proton_pid":proc.pid,
+        "proton_returncode":proc.poll(),"proton_outlived_by_game":wrapper_outlived_game,
+        "game_processes_ever_observed":sorted(game_seen),"termination_reason":termination_reason,
+        "game_exit_code":None,"game_exit_code_available":False,
+        "supervisor_terminated_game":termination_reason=="run_limit",
+        "process_poll_interval_ms":int(scan_period*1000),
+        "window_inventory_path":window_path,"process_events_path":process_path}
+    with open(os.path.join(evidence,"process-lifecycle.json"),"w",encoding="utf-8") as stream:
+        json.dump(summary,stream,indent=2);stream.write("\n")
 '''
 
 

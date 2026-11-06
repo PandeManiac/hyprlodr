@@ -89,6 +89,10 @@ cp "$OUT/tests/hyprlodr_startup_fixture.dll" "$PREENTRY/"
     wine "$OUT/tests/preentry_fixture_dynamic_client.exe"
 ) || status=1
 
+echo "== isolated Proton supervisor: process/window lifecycle fixtures =="
+HYPRLODR_SUPERVISOR_WINDOW_FIXTURE="$OUT/tools/hyprlodr_supervisor_window_fixture.exe" \
+  python3 -m pytest "$ROOT/tools/tests/test_isolated_proton.py" -q || status=1
+
 echo "== wine: first MSVCP140!_Fiopen import is gated before bootstrap =="
 FILE_FIXTURE="$OUT/startup-file-fixture"
 mkdir -p "$FILE_FIXTURE/success/mods" "$FILE_FIXTURE/concurrent/mods" \

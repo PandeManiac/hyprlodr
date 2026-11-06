@@ -1,6 +1,9 @@
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -131,3 +134,141 @@ def test_preflight_rejects_a_reused_compatdata_prefix(tmp_path, monkeypatch):
     (run / "compatdata/pfx").mkdir()
     with pytest.raises(ValueError, match="fresh_compatdata_prefix"):
         isolated.check_runtime(run, source)
+
+
+def _set_proton_fixture(proton_root: Path, body: str) -> None:
+    launcher = proton_root / "proton"
+    launcher.write_text("#!/usr/bin/python3\n" + body, encoding="utf-8")
+    launcher.chmod(0o755)
+
+
+def _run_supervisor_fixture(tmp_path, monkeypatch, body: str, seconds: int = 5,
+                            window_fixture: Path | None = None):
+    import shutil
+    if not shutil.which("bwrap") or not shutil.which("Xvfb"):
+        pytest.skip("Bubblewrap and Xvfb are required for supervisor lifecycle fixtures")
+    case_root = tmp_path / ("fixture-%02d" % len(list(tmp_path.iterdir())))
+    case_root.mkdir()
+    sandbox, source, proton, proxy, openal, run = fixture_tree(case_root, monkeypatch)
+    _set_proton_fixture(proton, body)
+    isolated.stage(source, proton, proxy, openal, run)
+    if window_fixture:
+        shutil.copy2(window_fixture, run / "game/hyprlodr-supervisor-window-fixture.exe")
+    return source, proton, run, isolated.launch(run, source, duration=seconds)
+
+
+def _runtime_events(run: Path):
+    return [json.loads(line) for line in
+            (run / "evidence/runtime-events.jsonl").read_text().splitlines()]
+
+
+def test_supervisor_waits_after_proton_exits_while_game_child_lives(tmp_path, monkeypatch):
+    body = ("import subprocess,sys\n"
+            "child_code=\"import ctypes,time; ctypes.CDLL(None).prctl(15,b'hyperdemon.exe',0,0,0); time.sleep(1.4)\"\n"
+            "subprocess.Popen([sys.executable,'-c',child_code,sys.argv[2]])\n"
+            "sys.exit(0)\n")
+    source, proton, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body)
+    assert result == 0
+    events = _runtime_events(run)
+    returned = next(e for e in events if e["event"] == "proton_wrapper_exit")
+    outlived = next(e for e in events if e["event"] == "proton_wrapper_returned_before_game")
+    disappeared = next(e for e in events if e["event"] == "process_disappeared" and
+                       "hyperdemon" in e["roles"])
+    assert outlived["t_ms"] >= returned["t_ms"]
+    assert disappeared["t_ms"] > returned["t_ms"]
+    assert disappeared["exit_code"] is None
+    started = next(e for e in events if e["event"] == "process_started_observed" and
+                   "hyperdemon" in e["roles"])
+    assert started["comm"] == "hyperdemon.exe"
+    summary = json.loads((run / "evidence/process-lifecycle.json").read_text())
+    assert summary["proton_outlived_by_game"] is True
+    assert summary["supervisor_terminated_game"] is False
+    assert (run / "logs/proton-console.log").is_file()
+
+
+def test_supervisor_observes_game_child_exit_before_proton_parent(tmp_path, monkeypatch):
+    body = ("import subprocess,sys,time\n"
+            "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(.45)',sys.argv[2]])\n"
+            "child.wait(); time.sleep(.35); sys.exit(0)\n")
+    _, _, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body)
+    assert result == 0
+    events = _runtime_events(run)
+    disappeared = next(e for e in events if e["event"] == "process_disappeared" and
+                       "hyperdemon" in e["roles"])
+    returned = next(e for e in events if e["event"] == "proton_wrapper_exit")
+    assert disappeared["t_ms"] < returned["t_ms"]
+    assert disappeared["exit_observation"] == "not_available_from_procfs"
+
+
+def test_supervisor_records_crashing_game_child_without_fabricating_status(tmp_path, monkeypatch):
+    body = ("import subprocess,sys\n"
+            "child_code=\"import ctypes,os,time; ctypes.CDLL(None).prctl(15,b'hyperdemon.exe',0,0,0); time.sleep(.4); os.abort()\"\n"
+            "child=subprocess.Popen([sys.executable,'-c',child_code,sys.argv[2]])\n"
+            "child.wait(); raise SystemExit(0)\n")
+    _, _, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body)
+    assert result == 0
+    events = _runtime_events(run)
+    disappeared = next(e for e in events if e["event"] == "process_disappeared" and
+                       "hyperdemon" in e["roles"])
+    assert disappeared["exit_code"] is None
+    assert disappeared["exit_signal"] is None
+    assert disappeared["exit_observation"] == "not_available_from_procfs"
+    assert (run / "logs/proton-console.log").is_file()
+
+
+def test_supervisor_captures_and_tracks_wine_window_without_stdin(tmp_path, monkeypatch):
+    fixture = os.environ.get("HYPRLODR_SUPERVISOR_WINDOW_FIXTURE")
+    if not fixture or not Path(fixture).is_file():
+        pytest.skip("compiled Wine window fixture is required")
+    body = ("import subprocess,sys\n"
+            "raise SystemExit(subprocess.run(['/usr/bin/wine',"
+            "'/tmp/hyprlodr/game/hyprlodr-supervisor-window-fixture.exe']).returncode)\n")
+    _, _, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body, seconds=20,
+                                                window_fixture=Path(fixture))
+    assert result == 0
+    events = _runtime_events(run)
+    created = [e for e in events if e["event"] == "window_created"]
+    disappeared = [e for e in events if e["event"] == "window_disappeared"]
+    assert any(e["window"]["game_candidate"] for e in created)
+    assert disappeared
+    assert any(e["event"] == "screen_capture" and e["reason"] == "candidate_game_window"
+               and e["ok"] for e in events)
+    assert (run / "evidence/window-lifecycle.jsonl").is_file()
+
+
+def test_supervisor_records_no_window_and_proton_crash(tmp_path, monkeypatch):
+    no_window = ("import subprocess,sys\n"
+                 "raise SystemExit(subprocess.run([sys.executable,'-c',"
+                 "'import time; time.sleep(.3)',sys.argv[2]]).returncode)\n")
+    _, _, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, no_window)
+    assert result == 0
+    assert not any(e["event"] == "window_created" and e["window"]["game_candidate"]
+                   for e in _runtime_events(run))
+    crash = "import os\nos.abort()\n"
+    _, _, crash_run, result = _run_supervisor_fixture(tmp_path, monkeypatch, crash)
+    assert result == 0
+    crash_event = next(e for e in _runtime_events(crash_run)
+                       if e["event"] == "proton_wrapper_exit")
+    assert crash_event["returncode"] == -6 and crash_event["signal"] == 6
+    assert (crash_run / "logs/proton-console.log").exists()
+
+
+def test_supervisor_timeout_cleans_owned_game_and_preserves_host_process(tmp_path, monkeypatch):
+    host_process = subprocess.Popen(["sleep", "20"])
+    try:
+        body = ("import subprocess,sys,time\n"
+                "subprocess.Popen([sys.executable,'-c','import time; time.sleep(20)',sys.argv[2]])\n"
+                "time.sleep(20)\n")
+        _, _, run, result = _run_supervisor_fixture(tmp_path, monkeypatch, body, seconds=1)
+        assert result == 0
+        events = _runtime_events(run)
+        assert any(e["event"] == "process_supervisor_signal" and
+                   e.get("signal") == "SIGTERM" and "hyperdemon" in e.get("roles", [])
+                   for e in events)
+        summary = json.loads((run / "evidence/process-lifecycle.json").read_text())
+        assert summary["supervisor_terminated_game"] is True
+        assert host_process.poll() is None
+        assert (run / "logs/proton-console.log").is_file()
+    finally:
+        host_process.terminate()
+        host_process.wait(timeout=3)

@@ -135,20 +135,38 @@ python3 tools/re/isolated_proton.py launch --run "$RUN" --source-game "$GAME"
 The runner invokes the disposable Proton copy's `run` verb with the game copy, a fresh
 compatdata prefix, sanitized environment, and a private Bubblewrap network,
 PID, mount, HOME, `/run`, and `/tmp` view. Xvfb starts inside that same private
-view with a dynamically reserved display and remains alive until the game
-exits. Proton's `WINEPREFIX` is fixed to that run's prefix; on timeout, only
-the owned Proton process group and that prefix's wineserver are stopped. The
-outer Bubblewrap process also receives a sanitized environment, so the game
-does not inherit host Steam or preload variables. `snapshot`, `enter`, and `click-enter` may be sent to the running
-diagnostic session; input is delivered only through the existing Win32 probe
-and only to a matching HYPER DEMON window. The app ID is read from the verified
-installation. The runner does not provide Steam authentication; an offline
-startup or license failure is reported without connecting to the active Steam
-client. Network isolation also prevents Cloud synchronization.
+view with a dynamically reserved display and remains alive until the observed
+game process exits or the configured run limit is reached. The supervisor
+polls the private `/proc` namespace by PID plus start time, records process
+identity and last state, and never treats Proton's wrapper return as proof the
+game exited. It reports a child disappearance without inventing an exit code
+unless the supervisor can wait on that process. At the run limit it signals
+only observed game PIDs whose start time still matches. A wineserver cleanup
+is scoped to the disposable `WINEPREFIX` and occurs after game exit or explicit
+timeout cleanup. Window IDs, titles/classes, visibility, geometry, create and
+disappear events, bounded XWD captures, and the final display inventory are
+recorded without stdin. The outer Bubblewrap process also receives a sanitized
+environment, so the game does not inherit host Steam or preload variables.
+The app ID is read from the verified installation. The runner does not provide
+Steam authentication; an offline startup or license failure is reported
+without connecting to the active Steam client. Network isolation also
+prevents Cloud synchronization.
+
+The process stream includes `/proc/<pid>/comm` so Wine's Windows image name can
+identify `hyperdemon.exe` even when the Linux executable is `wine-preloader`.
+Polling is sampled at 100 ms and cannot prove that a shorter-lived process was
+never created. Window scans include top-level X11 clients and associate a game
+window only by its HYPER DEMON title/class or a matching game PID; Wine bootstrap
+and desktop helper windows remain separately identifiable. Screenshot capture
+is automatic and bounded, including a final capture before owned display
+cleanup. The fixture suite exercises wrapper/child exit ordering, child crash,
+window create/close and no-window runs, bounded cleanup, closed stdin, and
+preservation of an unrelated host process.
 
 The runner creates `preflight.json`, `launch-environment.json`,
-`prelaunch-inventory.json`, `postlaunch-inventory.json`, and a coverage report
-under the run's `evidence/`. `postlaunch-inventory.json` records created,
+`prelaunch-inventory.json`, `postlaunch-inventory.json`, process and window
+lifecycle JSONL streams, a process lifecycle summary, screenshots, and a
+coverage report under the run's `evidence/`. `postlaunch-inventory.json` records created,
 modified, and deleted paths in the disposable tree and checks the original
 executable/archive hashes again. A complete process trace is not a gameplay
 trace: if gameplay was not reached, absence of a hand load applies only to

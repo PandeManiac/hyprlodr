@@ -256,6 +256,10 @@ compile "$ROOT/tools/re/input_fixture.c" "$OUT/obj/input_fixture.obj"
 lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:windows \
   "/out:$OUT/tools/hyprlodr_input_fixture.exe" \
   "$OUT/obj/input_fixture.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" "$U32"
+compile "$ROOT/tools/re/supervisor_window_fixture.c" "$OUT/obj/supervisor_window_fixture.obj"
+lld-link /nologo /nodefaultlib /entry:hyprlodr_entry /subsystem:windows \
+  "/out:$OUT/tools/hyprlodr_supervisor_window_fixture.exe" \
+  "$OUT/obj/supervisor_window_fixture.obj" "$OUT/obj/entry.obj" "$CRT_OBJ" "$K32" "$U32"
 echo "  built probe and local Win32 input fixture (launch probe with tools/re/proton_input.py)"
 
 # Stage the example as a real package, so the documented authoring path is the
