@@ -200,6 +200,161 @@ def test_preflight_rejects_a_reused_compatdata_prefix(tmp_path, monkeypatch):
         isolated.check_runtime(run, source)
 
 
+def _auth_fixture(tmp_path, monkeypatch):
+    sandbox = (tmp_path / "isolated").resolve()
+    monkeypatch.setattr(isolated, "SANDBOX", sandbox)
+    monkeypatch.setattr(isolated, "AUTH_SNAPSHOT_ROOT", sandbox / "authenticated-snapshots")
+    source = tmp_path / "installed"
+    (source / "asset").mkdir(parents=True)
+    (source / "mods").mkdir()
+    (source / "hyperdemon.exe").write_bytes(b"exe")
+    (source / "asset/asset").write_bytes(b"archive")
+    (source / "OpenAL32.dll").write_bytes(b"openal")
+    candidate = sandbox / "candidate/game"
+    (candidate / "asset").mkdir(parents=True)
+    (candidate / "hyperdemon.exe").write_bytes(b"exe")
+    (candidate / "asset/asset").write_bytes(b"archive")
+    (candidate / "OpenAL32.dll").write_bytes(b"openal")
+    proton = sandbox / "candidate/proton"
+    proton.mkdir()
+    (proton / "proton").write_text("stub")
+    (sandbox / "candidate/stage.json").write_text(json.dumps({
+        "mode": "vanilla", "app_id": isolated.APP_ID, "game_copy": str(candidate),
+        "proton_root": str(proton),
+        "source_executable_sha256": hashlib.sha256(b"exe").hexdigest(),
+        "source_archive_sha256": hashlib.sha256(b"archive").hexdigest(),
+        "proton_launcher_sha256": hashlib.sha256((proton / "proton").read_bytes()).hexdigest()}))
+    steam = tmp_path / "Steam"
+    prefix = sandbox / "candidate/compatdata"
+    user_data = tmp_path / "original-prefix/pfx/drive_c/users/steamuser/AppData/Roaming/HyperDemon"
+    user_data.mkdir(parents=True)
+    (user_data / "config").write_bytes(b"private game config")
+    openal = tmp_path / "shipped/OpenAL32.dll"
+    openal.parent.mkdir()
+    openal.write_bytes(b"openal")
+    monkeypatch.setattr(isolated, "EXPECTED_EXE", hashlib.sha256(b"exe").hexdigest())
+    monkeypatch.setattr(isolated, "EXPECTED_ARCHIVE", hashlib.sha256(b"archive").hexdigest())
+    monkeypatch.setattr(isolated, "EXPECTED_OPENAL", hashlib.sha256(b"openal").hexdigest())
+    return sandbox, source, candidate, proton, steam, prefix, openal, user_data
+
+
+def test_authenticated_state_snapshot_is_private_and_detects_stale_data(tmp_path, monkeypatch):
+    _, source, _, _, _, _, _, user_data = _auth_fixture(tmp_path, monkeypatch)
+    (source / "OpenAL32.dll").write_bytes(b"installed proxy")
+    (source / "hyprlodr-install-manifest.json").write_text('{"installed":true}')
+    source_before = {p.relative_to(source): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in source.rglob("*") if p.is_file()}
+    user_before = (user_data / "config").read_bytes()
+    snapshot = isolated.snapshot_authenticated_state(source, user_data, "auth-fixture-1")
+    manifest = Path(snapshot["manifest"])
+    assert snapshot["source_modified"] is False
+    assert snapshot["entries"] == 3
+    assert manifest.stat().st_mode & 0o777 == 0o600
+    assert manifest.parent.stat().st_mode & 0o777 == 0o700
+    assert isolated.verify_authenticated_snapshot(source, user_data, manifest)["valid"] is True
+    assert (user_data / "config").read_bytes() == user_before
+    assert {p.relative_to(source): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in source.rglob("*") if p.is_file()} == source_before
+    (user_data / "config").write_bytes(b"changed")
+    assert isolated.verify_authenticated_snapshot(source, user_data, manifest)["valid"] is False
+
+
+def test_authenticated_snapshot_rejects_links_malformed_and_overwrite(tmp_path, monkeypatch):
+    _, source, _, _, _, _, _, user_data = _auth_fixture(tmp_path, monkeypatch)
+    hardlink = user_data / "linked-config"
+    os.link(user_data / "config", hardlink)
+    with pytest.raises(ValueError, match="linked or unsupported"):
+        isolated.snapshot_authenticated_state(source, user_data, "link-case")
+    hardlink.unlink()
+    linked_dir = user_data / "linked-dir"
+    linked_dir.symlink_to(user_data, target_is_directory=True)
+    with pytest.raises(ValueError, match="linked directory"):
+        isolated.snapshot_authenticated_state(source, user_data, "symlink-case")
+    linked_dir.unlink()
+    snapshot = isolated.snapshot_authenticated_state(source, user_data, "valid-case")
+    manifest = Path(snapshot["manifest"])
+    manifest.write_text("not json")
+    assert isolated.verify_authenticated_snapshot(source, user_data, manifest)["reason"] == \
+        "snapshot_manifest_malformed"
+    with pytest.raises(ValueError, match="refusing to overwrite"):
+        isolated.snapshot_authenticated_state(source, user_data, "valid-case")
+
+
+def test_authenticated_preflight_is_fail_closed_and_reports_separation(tmp_path, monkeypatch):
+    sandbox, source, candidate, proton, steam, prefix, openal, user_data = \
+        _auth_fixture(tmp_path, monkeypatch)
+    snapshot = isolated.snapshot_authenticated_state(source, user_data, "preflight-case")
+    proc_root = tmp_path / "empty-proc"
+    proc_root.mkdir()
+    report = isolated.authenticated_preflight(
+        source, candidate, proton, steam, prefix, openal, user_data,
+        Path(snapshot["manifest"]), proc_root=proc_root)
+    assert report["safe_to_launch"] is False
+    assert report["launch_attempted"] is False
+    assert report["checks"]["supported_executable"] is True
+    assert report["checks"]["original_archive"] is True
+    assert report["checks"]["candidate_game_copy_is_vanilla"] is True
+    assert report["checks"]["candidate_prefix_is_disposable"] is True
+    assert report["checks"]["snapshot_matches_game_and_user_data"] is True
+    assert "steam_cloud_behavior_not_proven_disabled_for_this_app" in report["blockers"]
+    assert "authenticated_steam_handoff_to_disposable_game_and_prefix_unverified" in report["blockers"]
+    assert not prefix.exists()
+    default_prefix = steam / "steamapps/compatdata" / isolated.APP_ID
+    bad = isolated.authenticated_preflight(
+        source, candidate, proton, steam, default_prefix, openal, user_data,
+        Path(snapshot["manifest"]), proc_root=proc_root)
+    assert bad["checks"]["candidate_prefix_is_disposable"] is False
+    default_prefix.mkdir(parents=True)
+    (default_prefix / "user-state").write_text("must not touch")
+    bad = isolated.authenticated_preflight(
+        source, candidate, proton, steam, default_prefix, openal, user_data,
+        Path(snapshot["manifest"]), proc_root=proc_root)
+    assert (default_prefix / "user-state").read_text() == "must not touch"
+    assert bad["candidate_compatdata"] == str(default_prefix)
+
+
+def test_authenticated_preflight_rejects_modified_game_and_source_aliases(tmp_path, monkeypatch):
+    sandbox, source, candidate, proton, steam, prefix, openal, user_data = \
+        _auth_fixture(tmp_path, monkeypatch)
+    snapshot = isolated.snapshot_authenticated_state(source, user_data, "identity-case")
+    (candidate / "asset/asset").write_bytes(b"modified")
+    proc_root = tmp_path / "empty-proc"
+    proc_root.mkdir()
+    report = isolated.authenticated_preflight(
+        source, candidate, proton, steam, prefix, openal, user_data,
+        Path(snapshot["manifest"]), proc_root=proc_root)
+    assert report["checks"]["candidate_archive_matches"] is False
+    assert report["safe_to_launch"] is False
+    report = isolated.authenticated_preflight(
+        source, source, proton, steam, prefix, openal, user_data,
+        Path(snapshot["manifest"]), proc_root=proc_root)
+    assert report["checks"]["game_copy_is_separate"] is False
+
+
+def test_authenticated_preflight_cli_returns_blocked_without_launching(
+        tmp_path, monkeypatch, capsys):
+    _, source, candidate, proton, steam, prefix, openal, user_data = \
+        _auth_fixture(tmp_path, monkeypatch)
+    snapshot = isolated.snapshot_authenticated_state(source, user_data, "cli-case")
+    proc_root = tmp_path / "empty-proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(isolated, "live_wine_processes", lambda root: [])
+    # The Steam process scanner is imported in the command implementation; no
+    # host process state is needed to test its fail-closed result.
+    from tools.re import first_load_diagnostics
+    monkeypatch.setattr(first_load_diagnostics, "live_steam_processes", lambda root: [])
+    result = isolated.main([
+        "authenticated-preflight", "--source-game", str(source), "--game-copy", str(candidate),
+        "--proton", str(proton), "--steam-root", str(steam), "--compatdata", str(prefix),
+        "--original-openal", str(openal), "--user-data-root", str(user_data),
+        "--snapshot-manifest", snapshot["manifest"]])
+    captured = json.loads(capsys.readouterr().out)
+    assert result == 3
+    assert captured["launch_attempted"] is False
+    assert captured["safe_to_launch"] is False
+    assert not prefix.exists()
+
+
 def _set_proton_fixture(proton_root: Path, body: str) -> None:
     launcher = proton_root / "proton"
     launcher.write_text("#!/usr/bin/python3\n" + body, encoding="utf-8")

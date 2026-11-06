@@ -18,6 +18,30 @@
 3. **Hosts** — `native/src/host.c` (synthetic test host, JSON summary) and `native/win32/proxy.c` (in-game bootstrap inside the OpenAL32 proxy).
 4. **Tooling** (`tools/`) — diagnostics, installation with rollback, proxy `.def` generation, Windows build/test drivers.
 
+### Steam-authenticated startup boundary
+
+The disposable Bubblewrap mode is intentionally offline and hides the host
+Steam client IPC. It is suitable for synthetic/runtime-isolation work, not for
+a title startup that requires Steam authentication. Historical client logs and
+a later authenticated title-screen run support Steam initialization as the
+startup dependency; the latest vanilla offline control did not capture a
+`SteamAPI_Init` return and leaves archive-open status unknown. Do not attribute
+the matching offline exit to HYPRLODR.
+
+`tools/re/isolated_proton.py snapshot-auth-data` privately snapshots selected
+game-specific AppData and reversible install state under ignored `.tmp/`
+storage. `authenticated-preflight` audits game/runtime/prefix identities,
+state separation and snapshot validity, and emits machine-readable blockers.
+It is deliberately audit-only and fails closed: a separate HOME, a running
+Steam process, or a missing Cloud cache cannot prove account authentication,
+Steam's app handoff to a copied game/prefix, or Cloud isolation. The tool never
+launches Steam or the game, changes launch options, copies credentials, or
+changes Cloud settings. The current active client/session and unverified Cloud
+semantics make autonomous authenticated launching unsafe. The user must
+initiate a Steam UI baseline in a separately scheduled session, then confirm
+the actual prefix and game write paths before any HYPRLODR run. See
+`docs/STARTUP_BLOCKER.md` for the procedure and limits.
+
 The proxy fingerprints the main executable before installing its optional early
 record-call hook. That fingerprint is an attach-time snapshot: once the hook
 replaces the verified five-byte `CALL`, later bootstrap code must reuse the

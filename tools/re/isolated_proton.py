@@ -19,10 +19,12 @@ import socket
 import subprocess
 import sys
 import time
+import uuid
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SANDBOX = (ROOT / ".tmp/first-load-diagnostic/isolated").resolve()
+AUTH_SNAPSHOT_ROOT = (SANDBOX / "authenticated-snapshots").resolve()
 EXPECTED_EXE = "7612dd72076002b7c0cb5cab8f7340a399176ecedefe9d3b4d0353fbdac93611"
 EXPECTED_ARCHIVE = "2ce9dabb3251cb8d7994e2bda74056d344c06bf55b0d47b8645029b4687f99c7"
 EXPECTED_OPENAL = "396f88738ce20905e933cb7d8c696351e41bd7e72e80b8cfdadf20ab613420b4"
@@ -30,6 +32,10 @@ APP_ID = "1743850"
 IGNORED_NAMES = {"mods", "hyprlodr-state", "OST"}
 RUNTIME_PREFIXES = ("hyprlodr-",)
 RUNTIME_NAMES = {"berds.log", "steamuser.log"}
+AUTH_INSTALL_STATE_NAMES = {
+    "OpenAL32.dll", "OpenAL32_real.dll", "hyprlodr-install-manifest.json",
+    "hyprlodr-config.json", "hyprlodr-title-mask.raw",
+}
 
 
 def inside(path: Path, parent: Path) -> bool:
@@ -75,6 +81,330 @@ def inventory(root: Path) -> dict[str, dict[str, Any]]:
     return rows
 
 
+def _authenticated_state_files(game_root: Path, user_data_root: Path) -> list[tuple[str, Path]]:
+    """Return only game-specific save/config and reversible install-state files."""
+    rows: list[tuple[str, Path]] = []
+    roots = [("user", user_data_root)]
+    for prefix, root in roots:
+        if not root.exists():
+            continue
+        if root.is_symlink() or not root.is_dir():
+            raise ValueError(f"user state root is linked or not a directory: {root}")
+        for directory, names, filenames in os.walk(root, followlinks=False):
+            directory_path = Path(directory)
+            for name in list(names):
+                path = directory_path / name
+                if path.is_symlink():
+                    raise ValueError(f"user state contains a linked directory: {path}")
+                if not path.is_dir():
+                    raise ValueError(f"user state contains an unsupported directory entry: {path}")
+            for name in filenames:
+                path = directory_path / name
+                info = path.lstat()
+                if not path.is_file() or path.is_symlink() or info.st_nlink != 1:
+                    raise ValueError(f"user state contains a linked or unsupported file: {path}")
+                rows.append((prefix + "/" + path.relative_to(root).as_posix(), path))
+    for name in sorted(AUTH_INSTALL_STATE_NAMES):
+        path = game_root / name
+        if path.is_symlink():
+            raise ValueError(f"game install state is a symlink: {path}")
+        if path.exists() and not path.is_file():
+            raise ValueError(f"game install state is not a regular file: {path}")
+        if path.is_file():
+            rows.append(("install/" + name, path))
+    mod_root = game_root / "mods"
+    if mod_root.exists():
+        if mod_root.is_symlink() or not mod_root.is_dir():
+            raise ValueError(f"game mod state is not a directory: {mod_root}")
+        for directory, names, filenames in os.walk(mod_root, followlinks=False):
+            base = Path(directory)
+            for name in list(names):
+                path = base / name
+                if path.is_symlink() or not path.is_dir():
+                    raise ValueError(f"game mod state contains a linked or unsupported directory: {path}")
+            for name in filenames:
+                path = base / name
+                info = path.lstat()
+                if path.is_symlink() or not path.is_file() or info.st_nlink != 1:
+                    raise ValueError(f"game mod state contains a linked or unsupported file: {path}")
+                rows.append(("install/mods/" + path.relative_to(mod_root).as_posix(), path))
+    for relative, path in rows:
+        info = path.lstat()
+        if path.is_symlink() or not path.is_file() or info.st_nlink != 1:
+            raise ValueError(f"user state contains a linked or unsupported file: {path}")
+    return rows
+
+
+def snapshot_authenticated_state(game_root: Path, user_data_root: Path,
+                                 snapshot_id: str) -> dict:
+    """Make a private, hash-verified snapshot of game saves and install state.
+
+    This is a copy-only operation. It never changes the Steam prefix or game
+    installation. Snapshot files are mode 0600 under a mode 0700 .tmp root.
+    """
+    if not snapshot_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+                              for character in snapshot_id):
+        raise ValueError("snapshot ID may contain only letters, numbers, dash, and underscore")
+    if user_data_root.is_symlink():
+        raise ValueError(f"user state root is a symlink: {user_data_root}")
+    game_root, user_data_root = game_root.resolve(), user_data_root.resolve()
+    if not game_root.is_dir() or not user_data_root.is_dir():
+        raise ValueError("game installation and game-specific user-data directories must exist")
+    if inside(user_data_root, game_root) or inside(game_root, user_data_root):
+        raise ValueError("game installation and user-data roots must be separate")
+    AUTH_SNAPSHOT_ROOT.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if AUTH_SNAPSHOT_ROOT.is_symlink() or not AUTH_SNAPSHOT_ROOT.is_dir():
+        raise ValueError(f"snapshot storage root is linked or not a directory: {AUTH_SNAPSHOT_ROOT}")
+    os.chmod(AUTH_SNAPSHOT_ROOT, 0o700)
+    final_root = AUTH_SNAPSHOT_ROOT / snapshot_id
+    if final_root.exists() or final_root.is_symlink():
+        raise ValueError(f"refusing to overwrite an authenticated snapshot: {final_root}")
+    partial_root = AUTH_SNAPSHOT_ROOT / (".partial-" + uuid.uuid4().hex)
+    partial_root.mkdir(mode=0o700)
+    os.chmod(partial_root, 0o700)
+    try:
+        entries = []
+        for relative, source in _authenticated_state_files(game_root, user_data_root):
+            before = source.stat()
+            digest = sha256(source)
+            destination = partial_root / "files" / relative
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(destination.parent, 0o700)
+            shutil.copyfile(source, destination)
+            os.chmod(destination, 0o600)
+            after = source.stat()
+            copied = sha256(destination)
+            if (before.st_size, before.st_mtime_ns, before.st_ino) != \
+                    (after.st_size, after.st_mtime_ns, after.st_ino) or copied != digest:
+                raise ValueError(f"user data changed while snapshotting: {source}")
+            entries.append({"path": relative, "sha256": digest, "size": before.st_size,
+                            "mtime_ns": before.st_mtime_ns, "mode": before.st_mode & 0o777})
+        manifest = {"schema": 1, "snapshot_id": snapshot_id,
+                    "game_root": str(game_root), "user_data_root": str(user_data_root),
+                    "created_ns": time.time_ns(), "entries": entries}
+        manifest_path = partial_root / "snapshot.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        os.chmod(manifest_path, 0o600)
+        os.rename(partial_root, final_root)
+        return {"snapshot_root": str(final_root),
+                "manifest": str(final_root / "snapshot.json"),
+                "entries": len(entries), "safe_permissions": True,
+                "source_modified": False}
+    except Exception:
+        shutil.rmtree(partial_root, ignore_errors=True)
+        raise
+
+
+def verify_authenticated_snapshot(game_root: Path, user_data_root: Path,
+                                  manifest_path: Path) -> dict:
+    """Verify an existing protected snapshot still matches all selected inputs."""
+    if user_data_root.is_symlink():
+        return {"valid": False, "reason": "user_state_root_is_symlink"}
+    game_root, user_data_root = game_root.resolve(), user_data_root.resolve()
+    if manifest_path.is_symlink():
+        return {"valid": False, "reason": "snapshot_manifest_is_symlink"}
+    manifest_path = manifest_path.absolute()
+    if not inside(manifest_path, AUTH_SNAPSHOT_ROOT) or not manifest_path.is_file():
+        return {"valid": False, "reason": "snapshot_manifest_missing_or_outside_private_root"}
+    if manifest_path.stat().st_mode & 0o777 != 0o600 or \
+            manifest_path.parent.stat().st_mode & 0o777 != 0o700:
+        return {"valid": False, "reason": "snapshot_permissions_are_not_private"}
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"valid": False, "reason": "snapshot_manifest_malformed"}
+    if not isinstance(manifest, dict) or manifest.get("schema") != 1 or \
+            manifest.get("snapshot_id") != manifest_path.parent.name or \
+            manifest.get("game_root") != str(game_root) or \
+            manifest.get("user_data_root") != str(user_data_root) or \
+            not isinstance(manifest.get("entries"), list):
+        return {"valid": False, "reason": "snapshot_identity_mismatch"}
+    try:
+        current = dict(_authenticated_state_files(game_root, user_data_root))
+    except (OSError, ValueError) as error:
+        return {"valid": False, "reason": f"current_state_unreadable:{error}"}
+    expected = {row.get("path"): row for row in manifest["entries"]
+                if isinstance(row, dict) and isinstance(row.get("path"), str)}
+    if len(expected) != len(manifest["entries"]) or set(current) != set(expected):
+        return {"valid": False, "reason": "game_or_user_state_set_changed"}
+    for relative, source in current.items():
+        row = expected[relative]
+        copy_path = manifest_path.parent / "files" / relative
+        try:
+            if not isinstance(row.get("size"), int) or row["size"] < 0 or \
+                    not isinstance(row.get("sha256"), str) or len(row["sha256"]) != 64 or \
+                    source.stat().st_mtime_ns != row.get("mtime_ns") or \
+                    source.stat().st_mode & 0o777 != row.get("mode") or \
+                    not inside(copy_path, manifest_path.parent) or copy_path.is_symlink() or \
+                    copy_path.stat().st_mode & 0o777 != 0o600 or \
+                    sha256(source) != row.get("sha256") or sha256(copy_path) != row.get("sha256") or \
+                    source.stat().st_size != row.get("size"):
+                return {"valid": False, "reason": f"snapshot_hash_mismatch:{relative}"}
+        except OSError:
+            return {"valid": False, "reason": f"snapshot_file_missing:{relative}"}
+    return {"valid": True, "entries": len(expected),
+            "snapshot_id": manifest.get("snapshot_id")}
+
+
+def live_wine_processes(proc_root: Path = Path("/proc")) -> list[dict[str, Any]]:
+    """Report Wine/Proton processes without signaling or classifying ownership."""
+    rows = []
+    try:
+        entries = list(proc_root.iterdir())
+    except OSError:
+        return rows
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        base = entry
+        try:
+            comm = (base / "comm").read_text(errors="replace").strip()
+            executable = os.readlink(base / "exe")
+            start_ticks = int((base / "stat").read_text().rsplit(")", 1)[1].split()[19])
+        except (OSError, ValueError, IndexError):
+            continue
+        lower = (comm + " " + executable).lower()
+        if "wine" in lower or "proton" in lower or comm.lower().endswith(".exe"):
+            rows.append({"pid": int(entry.name), "start_ticks": start_ticks,
+                         "comm": comm, "executable": executable})
+    return sorted(rows, key=lambda row: row["pid"])
+
+
+def authenticated_preflight(source_game: Path, game_root: Path, proton_root: Path,
+                            steam_root: Path, compatdata: Path,
+                            original_openal: Path, user_data_root: Path,
+                            snapshot_manifest: Path | None,
+                            proc_root: Path = Path("/proc")) -> dict:
+    """Audit a proposed Steam-authenticated workflow; this function never launches."""
+    source_game, game_root = source_game.resolve(), game_root.resolve()
+    proton_root, steam_root, compatdata = proton_root.resolve(), steam_root.resolve(), compatdata.resolve()
+    original_openal, user_data_root = original_openal.resolve(), user_data_root.resolve()
+    try:
+        from .first_load_diagnostics import live_steam_processes
+    except ImportError:
+        from first_load_diagnostics import live_steam_processes
+    steam_pids = live_steam_processes(proc_root)
+    wine_processes = live_wine_processes(proc_root)
+    default_compatdata = steam_root / "steamapps/compatdata" / APP_ID
+    snapshot = (verify_authenticated_snapshot(source_game, user_data_root, snapshot_manifest)
+               if snapshot_manifest else {"valid": False, "reason": "snapshot_not_supplied"})
+    mod_files = []
+    mod_root = game_root / "mods"
+    if mod_root.is_dir():
+        for path in sorted(mod_root.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                mod_files.append({"name": path.relative_to(mod_root).as_posix(),
+                                  "size": path.stat().st_size, "sha256": sha256(path)})
+    source_mods = []
+    source_mod_root = source_game / "mods"
+    if source_mod_root.is_dir():
+        for path in sorted(source_mod_root.rglob("*")):
+            if path.is_file() and not path.is_symlink():
+                source_mods.append({"name": path.relative_to(source_mod_root).as_posix(),
+                                    "size": path.stat().st_size, "sha256": sha256(path)})
+    try:
+        candidate_plain_tree = _tree_has_plain_files(game_root)
+    except OSError:
+        candidate_plain_tree = False
+    try:
+        _validate_proton_tree(proton_root)
+        proton_tree_safe = all(not path.is_file() or path.stat().st_nlink == 1
+                               for path in proton_root.rglob("*") if not path.is_symlink())
+    except (OSError, ValueError):
+        proton_tree_safe = False
+    stage_manifest_path = game_root.parent / "stage.json"
+    try:
+        stage_manifest = json.loads(stage_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        stage_manifest = {}
+    stage_runtime_matches = (
+        stage_manifest.get("mode") == "vanilla" and
+        stage_manifest.get("app_id") == APP_ID and
+        Path(stage_manifest.get("game_copy", "")).resolve() == game_root and
+        Path(stage_manifest.get("proton_root", "")).resolve() == proton_root and
+        stage_manifest.get("source_executable_sha256") == EXPECTED_EXE and
+        stage_manifest.get("source_archive_sha256") == EXPECTED_ARCHIVE and
+        stage_manifest.get("proton_launcher_sha256") ==
+        (sha256(proton_root / "proton") if (proton_root / "proton").is_file() else None))
+    checks = {
+        "supported_executable": (source_game / "hyperdemon.exe").is_file() and
+            sha256(source_game / "hyperdemon.exe") == EXPECTED_EXE,
+        "original_archive": (source_game / "asset/asset").is_file() and
+            sha256(source_game / "asset/asset") == EXPECTED_ARCHIVE,
+        "shipped_openal_source": original_openal.is_file() and sha256(original_openal) == EXPECTED_OPENAL,
+        "game_copy_is_separate": source_game != game_root and inside(game_root, SANDBOX),
+        "candidate_game_tree_has_no_links": candidate_plain_tree,
+        "candidate_executable_matches": (game_root / "hyperdemon.exe").is_file() and
+            sha256(game_root / "hyperdemon.exe") == EXPECTED_EXE,
+        "candidate_archive_matches": (game_root / "asset/asset").is_file() and
+            sha256(game_root / "asset/asset") == EXPECTED_ARCHIVE,
+        "candidate_game_copy_is_vanilla": (game_root / "OpenAL32.dll").is_file() and
+            sha256(game_root / "OpenAL32.dll") == EXPECTED_OPENAL and
+            not mod_files and (not mod_root.exists() or not any(mod_root.iterdir())) and
+            not (game_root / "hyprlodr-install-manifest.json").exists() and
+            not (game_root / "OpenAL32_real.dll").exists() and
+            not any(game_root.rglob("hyprlodr-*")),
+        "selected_proton_readable": (proton_root / "proton").is_file() and proton_tree_safe,
+        "selected_runtime_matches_vanilla_stage_manifest": stage_runtime_matches,
+        "game_runtime_prefix_share_fresh_run_root": game_root.parent == proton_root.parent == compatdata.parent,
+        "selected_proton_under_private_storage": inside(proton_root, SANDBOX),
+        "candidate_prefix_is_disposable": compatdata != default_compatdata and
+            inside(compatdata, SANDBOX) and (not compatdata.exists() or not any(compatdata.iterdir())),
+        "candidate_game_data_is_under_selected_prefix": inside(
+            compatdata / "pfx/drive_c/users/steamuser/AppData/Roaming/HyperDemon", compatdata),
+        "original_game_data_is_outside_candidate_prefix": not inside(user_data_root, compatdata),
+        "snapshot_matches_game_and_user_data": snapshot.get("valid") is True,
+    }
+    blockers = [name for name, passed in checks.items() if not passed]
+    # Neither a Steam PID nor environment variables prove login, the app's Steam
+    # handoff to a copied executable, Cloud behavior, or which prefix Steam uses.
+    blockers.extend([
+        "steam_authentication_state_requires_user_confirmation",
+        "authenticated_steam_handoff_to_disposable_game_and_prefix_unverified",
+        "steam_cloud_behavior_not_proven_disabled_for_this_app",
+        "actual_game_data_and_prefix_paths_not_observed_in_authenticated_process",
+    ])
+    if wine_processes:
+        blockers.append("existing_wine_or_proton_processes_must_be_classified_by_the_user")
+    return {"schema": 1, "safe_to_launch": False, "launch_attempted": False,
+        "mode": "authenticated_user_initiated_audit_only",
+        "steam_app_id": APP_ID, "working_directory": str(game_root),
+        "source_game": str(source_game), "candidate_game_copy": str(game_root),
+        "selected_proton": str(proton_root), "candidate_compatdata": str(compatdata),
+        "selected_proton_launcher_sha256": (sha256(proton_root / "proton")
+            if (proton_root / "proton").is_file() else None),
+        "selected_proton_version": ((proton_root / "version").read_text(errors="replace").strip()
+            if (proton_root / "version").is_file() else None),
+        "stage_manifest": str(stage_manifest_path),
+        "default_compatdata": str(default_compatdata), "user_data_root": str(user_data_root),
+        "checks": checks, "blockers": sorted(set(blockers)),
+        "steam_processes_observed": steam_pids,
+        "wine_or_proton_processes_observed": wine_processes,
+        "steam_authentication": "not inferred from process existence",
+        "steam_cloud": "unknown; public store metadata and local cache absence are not proof",
+        "snapshot": snapshot,
+        "candidate_install_state": {"proxy_or_original_dlls": {
+            name: (sha256(game_root / name) if (game_root / name).is_file() else None)
+            for name in ("OpenAL32.dll", "OpenAL32_real.dll")},
+            "install_manifest_present": (game_root / "hyprlodr-install-manifest.json").is_file(),
+            "mods": mod_files},
+        "source_install_state": {"proxy_or_original_dlls": {
+            name: (sha256(source_game / name) if (source_game / name).is_file() else None)
+            for name in ("OpenAL32.dll", "OpenAL32_real.dll")},
+            "install_manifest_present": (source_game / "hyprlodr-install-manifest.json").is_file(),
+            "mods": source_mods},
+        "user_action_required": [
+            "authenticate in the existing Steam client through its UI",
+            "confirm no unrelated game session will be affected",
+            "resolve the Steam Cloud and separate-prefix questions before launch",
+        ]}
+
+
+def snapshot_game_user_data(game_root: Path, user_data_root: Path, snapshot_id: str) -> dict:
+    """CLI-safe wrapper that snapshots beneath this repository's ignored .tmp tree."""
+    return snapshot_authenticated_state(game_root, user_data_root, snapshot_id)
+
+
 def _ignore(directory: str, names: list[str]) -> set[str]:
     ignored = set()
     for name in names:
@@ -93,6 +423,15 @@ def _validate_source_tree(source: Path) -> None:
             raise ValueError(f"source game tree contains a symlink: {path}")
         if not path.is_dir() and not path.is_file():
             raise ValueError(f"source game tree contains a special file: {path}")
+
+
+def _tree_has_plain_files(source: Path) -> bool:
+    try:
+        _validate_source_tree(source)
+        return all(not path.is_file() or path.stat().st_nlink == 1
+                   for path in source.rglob("*"))
+    except (OSError, ValueError):
+        return False
 
 
 def _validate_proton_tree(source: Path) -> None:
@@ -906,6 +1245,22 @@ def main(argv: list[str] | None = None) -> int:
     staging.add_argument("--run-id", required=True)
     staging.add_argument("--app-id", default=APP_ID)
     staging.add_argument("--input-probe", type=Path)
+    snapshot_parser = sub.add_parser("snapshot-auth-data")
+    snapshot_parser.add_argument("--game-root", type=Path, required=True,
+                                 help="installed game directory whose install state must be preserved")
+    snapshot_parser.add_argument("--user-data-root", type=Path, required=True,
+                                 help="existing game-specific Proton AppData directory")
+    snapshot_parser.add_argument("--snapshot-id", required=True)
+    auth_preflight = sub.add_parser("authenticated-preflight")
+    auth_preflight.add_argument("--source-game", type=Path, required=True)
+    auth_preflight.add_argument("--game-copy", type=Path, required=True)
+    auth_preflight.add_argument("--proton", type=Path, required=True)
+    auth_preflight.add_argument("--steam-root", type=Path, required=True)
+    auth_preflight.add_argument("--compatdata", type=Path, required=True)
+    auth_preflight.add_argument("--original-openal", type=Path, required=True)
+    auth_preflight.add_argument("--user-data-root", type=Path, required=True,
+                                help="original installed-prefix game-specific AppData directory")
+    auth_preflight.add_argument("--snapshot-manifest", type=Path)
     preflight = sub.add_parser("preflight")
     preflight.add_argument("--run", type=Path, required=True)
     preflight.add_argument("--source-game", type=Path, required=True)
@@ -923,6 +1278,16 @@ def main(argv: list[str] | None = None) -> int:
                            args.original_openal, run_root, args.app_id, args.input_probe,
                            args.mode)
             print(json.dumps(result, indent=2))
+        elif args.command == "snapshot-auth-data":
+            result = snapshot_game_user_data(args.game_root, args.user_data_root, args.snapshot_id)
+            print(json.dumps(result, indent=2))
+        elif args.command == "authenticated-preflight":
+            result = authenticated_preflight(
+                args.source_game, args.game_copy, args.proton, args.steam_root,
+                args.compatdata, args.original_openal, args.user_data_root,
+                args.snapshot_manifest)
+            print(json.dumps(result, indent=2))
+            return 0 if result["safe_to_launch"] else 3
         elif args.command == "preflight":
             result = check_runtime(args.run, args.source_game, args.bwrap)
             print(json.dumps(result, indent=2))

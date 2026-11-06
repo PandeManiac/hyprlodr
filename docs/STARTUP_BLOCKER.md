@@ -1,5 +1,78 @@
 # Startup blocker and what the binary says about the title (2026-11-01)
 
+## 0. Current isolated-launch finding and authenticated boundary (2026-11-05)
+
+The fourth disposable HYPRLODR run and the subsequent vanilla control both
+started the real `hyperdemon.exe` and disappeared at about the same 12-second
+startup boundary. The vanilla control used the pinned executable, original
+archive, shipped OpenAL, no mods, no proxy and no HYPRLODR hooks. Neither run
+created an observable game window. The vanilla run's independent Wine file log
+did not record an archive open, so its archive status is **unknown**. Its
+process disappeared without an available Windows exit code; that is not proof
+of a normal exit.
+
+The old Steam client logs in section 1b directly recorded failed logon attempts
+and a logged-off session. The accompanying investigation recorded
+`SteamAPI_Init` failing and the game exiting before its window. Section 1c then
+records a later authenticated Steam launch reaching the title screen and
+rendering with llvmpipe. The pinned executable imports `SteamAPI_Init` and
+related Steam API functions. These observations strongly support an
+authenticated Steam client as a startup dependency. The 2026-11-05 vanilla
+control did **not** observe the return value of `SteamAPI_Init`; do not describe
+that specific run as direct proof of the API failure.
+
+The isolated Bubblewrap launch intentionally hides Steam IPC and has no network
+route. Repeating it is not a useful startup experiment. A separate HOME does
+not create an authenticated Steam client, and copying Steam credentials or
+connecting the sandbox to the active client is not an acceptable substitute.
+The current machine also has an unrelated Steam game running. Do not use
+`steam -applaunch`, change Steam launch options, alter Cloud settings, or start
+another title while that session is active.
+
+### Audit-only preparation
+
+`tools/re/isolated_proton.py snapshot-auth-data` makes a private, hash-verified
+copy under the repository's ignored `.tmp/first-load-diagnostic/isolated/
+authenticated-snapshots/` directory. It captures selected game-specific
+AppData files and reversible install state (the current OpenAL files, HYPRLODR
+manifest/config/title-mask files and installed mods). It rejects symlinks,
+special files and hard-linked files. It does not restore or alter the source.
+
+Example, after verifying the two paths locally:
+
+```bash
+python tools/re/isolated_proton.py snapshot-auth-data \
+  --game-root "$HOME/.local/share/Steam/steamapps/common/HYPER DEMON" \
+  --user-data-root "$HOME/.local/share/Steam/steamapps/compatdata/1743850/pfx/drive_c/users/steamuser/AppData/Roaming/HyperDemon" \
+  --snapshot-id before-auth-review-01
+```
+
+The `authenticated-preflight` command is an audit, **not a launcher**. It checks
+the pinned executable/archive/OpenAL hashes, the separate vanilla game copy,
+the Proton copy, candidate prefix location/freshness, game data path placement,
+and the matching private snapshot. It always blocks launch today because Steam
+cannot prove that an authenticated app launch will use the copied game and
+prefix, Cloud behavior is not established, and actual runtime write paths have
+not been measured in an authenticated process. A process existing, environment
+variables, a missing local Cloud cache, or a public store page is not proof of
+authentication or Cloud isolation.
+
+There is currently no verified autonomous authenticated procedure that both
+uses Steam's supported app launch and guarantees separation from the active
+client's installation, prefix, saves and Cloud state. Steam must not be asked
+to launch HYPER DEMON until the user can schedule an isolated Steam session and
+the launch path, prefix and Cloud behavior can be verified without affecting
+another game. The safe next action is a user-initiated Steam UI launch during a
+separate session, after reviewing the game's Cloud setting and making the
+snapshot above. This repository does not change Steam settings or launch
+options and does not treat the snapshot as protection against Cloud upload.
+
+After that user action, first capture a vanilla baseline and verify the actual
+prefix and write paths before enabling HYPRLODR. Only then run passive loader
+diagnostics with replacement routing disabled. The enlarged `hand2` model must
+remain disabled until a real authenticated first-load trace proves that the
+route can be activated before the first cold tag-1 request.
+
 Two separate results from this session: a hard blocker on running the game, and
 static evidence about how the title is built.
 

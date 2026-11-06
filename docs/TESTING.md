@@ -657,3 +657,65 @@ helpers by image name, and a fixture covers this distinction. No replacement
 was attempted; the next blocker is explaining the game's independent early
 exit and absent window/archive activity without treating the Xalia message as
 causal proof.
+
+# Authenticated startup investigation
+
+The offline isolated launcher remains strict and unchanged. Its private PID and
+network namespaces cannot authenticate through the user's Steam client. Do not
+repeat an offline launch to test Steam startup, and do not infer authentication
+from Steam process presence.
+
+Before any user-scheduled authenticated baseline, create a private snapshot of
+the installed game's selected reversible state and its game-specific AppData
+directory. The command copies only into ignored `.tmp/` storage and never
+restores or changes source files:
+
+```bash
+python tools/re/isolated_proton.py snapshot-auth-data \
+  --game-root "$HOME/.local/share/Steam/steamapps/common/HYPER DEMON" \
+  --user-data-root "$HOME/.local/share/Steam/steamapps/compatdata/1743850/pfx/drive_c/users/steamuser/AppData/Roaming/HyperDemon" \
+  --snapshot-id before-auth-review-01
+```
+
+The selected user-data path includes `config`, `user`, `cache/scores`, and
+`cache/names` when present. The snapshot also records hashes for the currently
+installed OpenAL DLLs, HYPRLODR deployment/configuration files, title mask, and
+mod files. Linked, special, or hard-linked entries fail closed. Keep the
+snapshot private; it can contain personal save/configuration data.
+
+`authenticated-preflight` audits a proposed user-reviewed setup and always
+returns exit status 3 while its authentication, Steam handoff, Cloud, or
+authenticated runtime-path blockers remain. It is not a launch command. Example
+argument shape (use only paths that have been independently verified):
+
+```bash
+python tools/re/isolated_proton.py authenticated-preflight \
+  --source-game "$HOME/.local/share/Steam/steamapps/common/HYPER DEMON" \
+  --game-copy "$PWD/.tmp/first-load-diagnostic/isolated/<fresh-run>/game" \
+  --proton "$PWD/.tmp/first-load-diagnostic/isolated/<fresh-run>/proton" \
+  --steam-root "$HOME/.local/share/Steam" \
+  --compatdata "$PWD/.tmp/first-load-diagnostic/isolated/<fresh-run>/compatdata" \
+  --original-openal "$HOME/.local/share/Steam/steamapps/common/HYPER DEMON/OpenAL32.dll" \
+  --user-data-root "$HOME/.local/share/Steam/steamapps/compatdata/1743850/pfx/drive_c/users/steamuser/AppData/Roaming/HyperDemon" \
+  --snapshot-manifest "$PWD/.tmp/first-load-diagnostic/isolated/authenticated-snapshots/before-auth-review-01/snapshot.json"
+```
+
+Do not run this example unchanged: the deployed game may have a proxy in place
+of the shipped OpenAL DLL, and that path will correctly fail identity checking.
+Find the original shipped DLL from a verified source. Do not copy Steam tokens
+or use the live client from Bubblewrap. The audit reports Steam and Wine process
+identities but does not stop them. It intentionally does not claim Cloud is off
+because a cache file or public metadata is absent.
+
+Current evidence supports Steam authentication as a game startup dependency:
+the earlier Steam log recorded logon failure/logoff and the associated game
+investigation recorded `SteamAPI_Init` failure; a later authenticated launch
+reached the title screen. The later isolated vanilla control did not directly
+observe the API return. No authenticated run is safe to initiate autonomously
+while the active Steam session is running another game and separate-prefix,
+app-handoff, and Cloud guarantees remain unverified. The user must schedule a
+separate Steam session, review per-game Cloud behavior, and initiate the
+baseline through the Steam UI. First verify runtime prefix and write paths;
+only after a vanilla baseline succeeds should HYPRLODR passive diagnostics be
+deployed. No launch options, global Steam settings, or Cloud settings are
+changed by these tools.
