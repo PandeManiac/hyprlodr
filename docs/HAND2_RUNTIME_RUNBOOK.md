@@ -229,8 +229,10 @@ gate `READY`, appended archive open, exact tag-1 `hand2` selection and
 replacement descriptor offset/size, successful native loader return, and
 parser counts 239/1,191 with stride 72. Then require a passive capture with
 17,208 VBO bytes, 4,764 IBO bytes, valid indices, and a 1,191-index
-`GL_TRIANGLES`/`GL_UNSIGNED_INT` draw. The final captured triangle should
-contain `[238, 1, 2]` when that is the selected source geometry. Analyze it:
+`GL_TRIANGLES`/`GL_UNSIGNED_INT` draw. The retained replacement preserves the
+original 1,188-index prefix and appends `[0, 1, 238]`; confirm that final
+triangle in the captured index data. The compiled synthetic fixture uses a
+different deterministic final triangle, `[238, 1, 2]`. Analyze the real capture:
 
 ```bash
 python3 tools/re/hand_capture.py "$CAPTURE_C" \
