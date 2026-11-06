@@ -77,6 +77,70 @@ def test_stages_game_copy_without_user_mods_and_proves_runtime_isolation(tmp_pat
     assert report["active_steam_pids_observed"] == diagnostics.live_steam_processes()
 
 
+def test_vanilla_mode_stages_only_verified_original_game_and_openal(tmp_path, monkeypatch):
+    if not __import__("shutil").which("bwrap"):
+        pytest.skip("Bubblewrap is not installed")
+    sandbox, source, proton, proxy, openal, run = fixture_tree(tmp_path, monkeypatch)
+    before = {path.relative_to(source): hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in source.rglob("*") if path.is_file()}
+    manifest = isolated.stage(source, proton, None, openal, run, mode="vanilla")
+    game = run / "game"
+    assert manifest["mode"] == "vanilla"
+    assert manifest["hyprlodr_present"] is False
+    assert manifest["replacement_routing"] is False
+    assert manifest["user_mods_copied"] is False
+    assert manifest["source_executable_sha256"] == isolated.EXPECTED_EXE
+    assert manifest["source_archive_sha256"] == isolated.EXPECTED_ARCHIVE
+    assert manifest["staged_openal_sha256"] == isolated.EXPECTED_OPENAL
+    assert (game / "OpenAL32.dll").read_bytes() == openal.read_bytes()
+    assert not (game / "OpenAL32_real.dll").exists()
+    assert not (game / "mods").exists()
+    assert not list(game.glob("hyprlodr-*"))
+    assert not (game / "hyprlodr-config.json").exists()
+    assert {path.relative_to(source): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in source.rglob("*") if path.is_file()} == before
+    report = isolated.check_runtime(run, source)
+    assert report["safe"] is True
+    assert report["experiment_mode"] == "vanilla"
+    assert report["hyprlodr_absent"] is True
+    assert report["checks"]["vanilla_hyprlodr_artifacts_absent"] is True
+
+
+def test_vanilla_preflight_rejects_any_hyprlodr_artifact(tmp_path, monkeypatch):
+    if not __import__("shutil").which("bwrap"):
+        pytest.skip("Bubblewrap is not installed")
+    _, source, proton, _, openal, run = fixture_tree(tmp_path, monkeypatch)
+    isolated.stage(source, proton, None, openal, run, mode="vanilla")
+    (run / "game/mods").mkdir()
+    with pytest.raises(ValueError, match="vanilla_hyprlodr_artifacts_absent"):
+        isolated.check_runtime(run, source)
+
+
+def test_vanilla_launch_has_no_loader_environment_and_uses_original_openal(tmp_path, monkeypatch):
+    if not __import__("shutil").which("bwrap") or not __import__("shutil").which("Xvfb"):
+        pytest.skip("Bubblewrap and Xvfb are required")
+    sandbox, source, proton, _, openal, run = fixture_tree(tmp_path, monkeypatch)
+    _set_proton_fixture(proton, "import json,os,sys\n"
+        "with open(os.path.join(os.environ['HOME'],'launch-env.json'),'w') as f:\n"
+        " json.dump({k:v for k,v in os.environ.items() if k.startswith('HYPRLODR_') or k=='WINEDEBUG'},f)\n"
+        "sys.exit(0)\n")
+    isolated.stage(source, proton, None, openal, run, mode="vanilla")
+    assert isolated.launch(run, source, duration=5) == 0
+    captured = json.loads((run / "home/launch-env.json").read_text())
+    assert captured == {"WINEDEBUG": "+file,+seh"}
+    assert (run / "game/OpenAL32.dll").read_bytes() == openal.read_bytes()
+    assert not (run / "game/mods").exists()
+    report = json.loads((run / "evidence/preflight.json").read_text())
+    assert report["experiment_mode"] == "vanilla"
+    assert report["hyprlodr_absent"] is True
+    inventory = json.loads((run / "evidence/postlaunch-inventory.json").read_text())
+    assert inventory["host_game_source_unchanged"] is True
+    assert inventory["host_game_openal_files_unchanged"] is True
+    assert (run / "launch.claimed").is_file()
+    with pytest.raises(ValueError, match="already been claimed"):
+        isolated.launch(run, source, duration=5)
+
+
 def test_preflight_rejects_existing_run_directory_and_bad_executable(tmp_path, monkeypatch):
     sandbox, source, proton, proxy, openal, run = fixture_tree(tmp_path, monkeypatch)
     run.mkdir(parents=True)

@@ -152,6 +152,36 @@ Steam authentication; an offline startup or license failure is reported
 without connecting to the active Steam client. Network isolation also
 prevents Cloud synchronization.
 
+### Vanilla startup control
+
+To compare startup without HYPRLODR, stage a separate one-shot run with
+`--mode vanilla` and omit `--proxy`:
+
+```sh
+python3 tools/re/isolated_proton.py stage \
+  --source-game "$GAME" --proton "$PROTON" \
+  --original-openal "$GAME/OpenAL32_real.dll" \
+  --run-id "vanilla-control-$(date +%Y%m%d-%H%M%S)" --mode vanilla
+```
+
+The stage manifest explicitly says `hyprlodr_present: false`. The staged game
+uses the hash-verified shipped OpenAL library as `OpenAL32.dll`; it contains no
+proxy backup, `mods` directory, HYPRLODR config, or diagnostic input probe.
+The same verified executable, archive, Proton copy, app ID, working directory,
+Xvfb, Bubblewrap namespaces, and supervisor are used. Installed mods, local
+state, `OST`, and prior HYPRLODR captures remain excluded from the disposable
+copy. The preflight rejects any HYPRLODR artifact in that game tree and still
+requires a fresh compatdata prefix and unused one-shot claim.
+
+Because the vanilla copy has no in-process file hook, the supervisor scopes
+Wine logging to `+file,+seh` for this mode. This is the one deliberate
+observation-only difference from instrumented runs; the log is in
+`logs/proton-console.log` and should be searched for the `asset/asset` path.
+It does not add DLLs or route files. No HYPRLODR attach/coverage log is expected
+in vanilla mode. Proton's return code remains distinct from the game's
+unavailable exit status, and `/proc` disappearance alone is not treated as a
+normal game exit.
+
 The process stream includes `/proc/<pid>/comm` so Wine's Windows image name can
 identify `hyperdemon.exe` even when the Linux executable is `wine-preloader`.
 Polling is sampled at 100 ms and cannot prove that a shorter-lived process was

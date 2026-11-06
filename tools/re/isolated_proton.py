@@ -106,12 +106,13 @@ def _validate_proton_tree(source: Path) -> None:
             raise ValueError(f"Proton runtime contains a special file: {path}")
 
 
-def stage(source_game: Path, proton_root: Path, proxy: Path,
+def stage(source_game: Path, proton_root: Path, proxy: Path | None,
           original_openal: Path, run_root: Path, app_id: str = APP_ID,
-          input_probe: Path | None = None) -> dict:
-    """Create a byte-verified, mod-free runtime copy; never mutate source paths."""
+          input_probe: Path | None = None, mode: str = "diagnostic") -> dict:
+    """Create a byte-verified game/runtime copy without mutating source paths."""
     source_game, proton_root = source_game.resolve(), proton_root.resolve()
-    proxy, original_openal = proxy.resolve(), original_openal.resolve()
+    proxy = proxy.resolve() if proxy is not None else None
+    original_openal = original_openal.resolve()
     run_root = run_root.resolve()
     if run_root == SANDBOX or SANDBOX not in run_root.parents:
         raise ValueError(f"run directory must be a new child of {SANDBOX}")
@@ -128,28 +129,42 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
         raise ValueError("source game archive does not match the verified original archive")
     if sha256(original_openal) != EXPECTED_OPENAL:
         raise ValueError("original OpenAL runtime does not match the verified shipped library")
+    if mode not in {"diagnostic", "vanilla"}:
+        raise ValueError(f"unsupported staging mode: {mode}")
+    if mode == "vanilla" and (proxy is not None or input_probe is not None):
+        raise ValueError("vanilla mode cannot include a HYPRLODR proxy or input probe")
     for path, label in ((proton_root / "proton", "Proton launcher"),
-                        (proxy, "HYPRLODR proxy"), (original_openal, "original OpenAL runtime")):
+                        (original_openal, "original OpenAL runtime")):
         if not path.is_file():
             raise ValueError(f"{label} is missing: {path}")
-    identity_path = proxy.parent / "hyprlodr-proxy-build.json"
-    try:
-        proxy_identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError("proxy build identity manifest is missing or malformed") from error
-    revision, clean = current_source_identity()
-    if proxy_identity.get("schema") != 1 or proxy_identity.get("source_revision") != revision or \
-            proxy_identity.get("source_clean") is not True or not clean:
-        raise ValueError("proxy must be built from the current clean committed source")
-    if proxy_identity.get("proxy_sha256") != sha256(proxy):
-        raise ValueError("proxy artifact hash does not match its build identity")
-    required_caps = {"redirect-wait-v1", "build-identity-v1"}
-    if not required_caps.issubset(set(proxy_identity.get("capabilities", []))):
-        raise ValueError("proxy lacks required archive redirect and build identity capabilities")
-    diagnostic_mod = proxy.parent / "mods/z.foundation.dll"
-    if not diagnostic_mod.is_file() or \
-            sha256(diagnostic_mod) != proxy_identity.get("foundation_diagnostic_mod_sha256"):
-        raise ValueError("repository diagnostic mod does not match the clean proxy build identity")
+    proxy_identity = None
+    identity_path = None
+    diagnostic_mod = None
+    revision = None
+    if mode == "diagnostic":
+        if proxy is None:
+            raise ValueError("diagnostic mode requires a HYPRLODR proxy")
+        proxy = proxy.resolve()
+        if not proxy.is_file():
+            raise ValueError(f"HYPRLODR proxy is missing: {proxy}")
+        identity_path = proxy.parent / "hyprlodr-proxy-build.json"
+        try:
+            proxy_identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError("proxy build identity manifest is missing or malformed") from error
+        revision, clean = current_source_identity()
+        if proxy_identity.get("schema") != 1 or proxy_identity.get("source_revision") != revision or \
+                proxy_identity.get("source_clean") is not True or not clean:
+            raise ValueError("proxy must be built from the current clean committed source")
+        if proxy_identity.get("proxy_sha256") != sha256(proxy):
+            raise ValueError("proxy artifact hash does not match its build identity")
+        required_caps = {"redirect-wait-v1", "build-identity-v1"}
+        if not required_caps.issubset(set(proxy_identity.get("capabilities", []))):
+            raise ValueError("proxy lacks required archive redirect and build identity capabilities")
+        diagnostic_mod = proxy.parent / "mods/z.foundation.dll"
+        if not diagnostic_mod.is_file() or \
+                sha256(diagnostic_mod) != proxy_identity.get("foundation_diagnostic_mod_sha256"):
+            raise ValueError("repository diagnostic mod does not match the clean proxy build identity")
     _validate_source_tree(source_game)
     proton_fixups = proton_root / "steampipe_fixups.json"
     proton_stamp = proton_root / "files/steampipe_fixups_mtime"
@@ -162,11 +177,14 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     run_root.mkdir()
     game = run_root / "game"
     shutil.copytree(source_game, game, ignore=_ignore, copy_function=shutil.copy2)
-    (game / "OpenAL32.dll").write_bytes(proxy.read_bytes())
-    shutil.copy2(original_openal, game / "OpenAL32_real.dll")
-    (game / "mods").mkdir(exist_ok=True)
-    shutil.copy2(diagnostic_mod, game / "mods/z.foundation.dll")
-    (game / "hyprlodr-config.json").write_text('{"delay_ms":0}\n', encoding="utf-8")
+    if mode == "diagnostic":
+        (game / "OpenAL32.dll").write_bytes(proxy.read_bytes())
+        shutil.copy2(original_openal, game / "OpenAL32_real.dll")
+        (game / "mods").mkdir(exist_ok=True)
+        shutil.copy2(diagnostic_mod, game / "mods/z.foundation.dll")
+        (game / "hyprlodr-config.json").write_text('{"delay_ms":0}\n', encoding="utf-8")
+    else:
+        shutil.copy2(original_openal, game / "OpenAL32.dll")
     if input_probe:
         probe = input_probe.resolve()
         if not probe.is_file():
@@ -186,31 +204,37 @@ def stage(source_game: Path, proton_root: Path, proxy: Path,
     if sha256(game / "hyperdemon.exe") != exe_hash or \
             sha256(game / "asset/asset") != archive_hash:
         raise RuntimeError("copied executable/archive verification failed")
-    if sha256(game / "OpenAL32.dll") != sha256(proxy):
-        raise RuntimeError("proxy copy verification failed")
-    if sha256(game / "OpenAL32_real.dll") != sha256(original_openal):
-        raise RuntimeError("original OpenAL copy verification failed")
-    meta = {"schema": 1, "app_id": app_id, "source_game": str(source_game),
+    if mode == "diagnostic":
+        if sha256(game / "OpenAL32.dll") != sha256(proxy):
+            raise RuntimeError("proxy copy verification failed")
+        if sha256(game / "OpenAL32_real.dll") != sha256(original_openal):
+            raise RuntimeError("original OpenAL copy verification failed")
+    elif sha256(game / "OpenAL32.dll") != EXPECTED_OPENAL:
+        raise RuntimeError("vanilla OpenAL copy verification failed")
+    meta = {"schema": 1, "mode": mode, "hyprlodr_present": mode == "diagnostic",
+        "app_id": app_id, "source_game": str(source_game),
         "game_copy": str(game), "proton_root": str(copied_proton),
         "source_proton_root": str(proton_root),
         "proton_launcher_sha256": sha256(copied_proton / "proton"),
         "source_proton_launcher_sha256": sha256(proton_root / "proton"),
         "proton_runtime_isolated_copy": True,
-        "proxy_build_manifest": str(identity_path),
         "source_executable_sha256": exe_hash, "source_archive_sha256": archive_hash,
         "source_installed_openal_sha256": sha256(source_game / "OpenAL32.dll"),
         "source_openal_runtime_path": str(original_openal),
         "source_openal_runtime_sha256": sha256(original_openal),
         "copied_executable_sha256": sha256(game / "hyperdemon.exe"),
         "copied_archive_sha256": sha256(game / "asset/asset"),
-        "proxy_sha256": sha256(game / "OpenAL32.dll"),
-        "diagnostic_mod_sha256": sha256(game / "mods/z.foundation.dll"),
-        "diagnostic_mod_id": "z.foundation",
-        "diagnostic_mod_source": "repository sample; host state/capability/log only",
-        "original_openal_sha256": sha256(game / "OpenAL32_real.dll"),
-        "proxy_source_revision": proxy_identity["source_revision"],
+        "staged_openal_sha256": sha256(game / "OpenAL32.dll"),
         "replacement_routing": False, "user_mods_copied": False,
         "excluded_source_entries": sorted(IGNORED_NAMES | RUNTIME_NAMES)}
+    if mode == "diagnostic":
+        meta.update({"proxy_build_manifest": str(identity_path),
+            "proxy_sha256": sha256(game / "OpenAL32.dll"),
+            "diagnostic_mod_sha256": sha256(game / "mods/z.foundation.dll"),
+            "diagnostic_mod_id": "z.foundation",
+            "diagnostic_mod_source": "repository sample; host state/capability/log only",
+            "original_openal_sha256": sha256(game / "OpenAL32_real.dll"),
+            "proxy_source_revision": proxy_identity["source_revision"]})
     (run_root / "stage.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return meta
 
@@ -232,8 +256,13 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
     game = run_root / "game"
     proton = Path(meta["proton_root"])
     source_proton = Path(meta["source_proton_root"])
-    proxy_identity = json.loads(Path(meta["proxy_build_manifest"]).read_text(encoding="utf-8"))
+    mode = meta.get("mode", "diagnostic")
+    if mode not in {"diagnostic", "vanilla"}:
+        raise ValueError("stage manifest has an unknown launch mode")
+    proxy_identity = None
     source_revision, source_clean = current_source_identity()
+    if mode == "diagnostic":
+        proxy_identity = json.loads(Path(meta["proxy_build_manifest"]).read_text(encoding="utf-8"))
     roots = {name: run_root / name for name in
              ("game", "compatdata", "home", "temp", "steam-client", "proton")}
     strict_roots = {name: path for name, path in roots.items() if name != "proton"}
@@ -250,15 +279,8 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
         "game_executable_matches_stage": sha256(game / "hyperdemon.exe") == meta["copied_executable_sha256"],
         "game_archive_matches_verified_original": sha256(game / "asset/asset") == EXPECTED_ARCHIVE and
             meta.get("copied_archive_sha256") == EXPECTED_ARCHIVE,
-        "proxy_matches_build_identity": sha256(game / "OpenAL32.dll") == proxy_identity.get("proxy_sha256") and
-            meta.get("proxy_sha256") == proxy_identity.get("proxy_sha256"),
-        "diagnostic_mod_matches_build_identity":
-            sha256(game / "mods/z.foundation.dll") ==
-            proxy_identity.get("foundation_diagnostic_mod_sha256") ==
-            meta.get("diagnostic_mod_sha256") and meta.get("diagnostic_mod_id") == "z.foundation",
-        "proxy_built_from_current_clean_source": source_clean and
-            proxy_identity.get("source_clean") is True and
-            proxy_identity.get("source_revision") == source_revision == meta.get("proxy_source_revision"),
+        "stage_mode_is_explicit": meta.get("mode") == mode and
+            meta.get("hyprlodr_present") is (mode == "diagnostic"),
         "routing_disabled": meta.get("replacement_routing") is False,
         "proton_readable": (proton / "proton").is_file(),
         "proton_is_disposable_copy": proton.resolve() == roots["proton"].resolve() and
@@ -273,6 +295,29 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
             (run_root / "launch.claimed").read_text(encoding="ascii").splitlines()[0] ==
             f"pid={os.getpid()}"),
         "run_directory_separate": game != source_game}
+    if mode == "diagnostic":
+        checks.update({
+            "proxy_matches_build_identity": sha256(game / "OpenAL32.dll") ==
+                proxy_identity.get("proxy_sha256") and
+                meta.get("proxy_sha256") == proxy_identity.get("proxy_sha256"),
+            "diagnostic_mod_matches_build_identity":
+                sha256(game / "mods/z.foundation.dll") ==
+                proxy_identity.get("foundation_diagnostic_mod_sha256") ==
+                meta.get("diagnostic_mod_sha256") and meta.get("diagnostic_mod_id") == "z.foundation",
+            "proxy_built_from_current_clean_source": source_clean and
+                proxy_identity.get("source_clean") is True and
+                proxy_identity.get("source_revision") == source_revision == meta.get("proxy_source_revision")})
+    else:
+        hyprlodr_artifacts = [path.relative_to(game).as_posix() for path in game.rglob("*")
+                              if path.name == "mods" or path.name.startswith("hyprlodr-") or
+                              path.name == "hyprlodr-config.json" or
+                              path.name == "OpenAL32_real.dll"]
+        checks.update({
+            "vanilla_original_openal_staged": sha256(game / "OpenAL32.dll") == EXPECTED_OPENAL and
+                meta.get("staged_openal_sha256") == EXPECTED_OPENAL,
+            "vanilla_hyprlodr_artifacts_absent": not hyprlodr_artifacts,
+            "vanilla_manifest_declares_absence": meta.get("hyprlodr_present") is False and
+                meta.get("replacement_routing") is False and meta.get("user_mods_copied") is False})
     original_archive_hash = sha256(source_game / "asset/asset")
     checks["source_archive_unchanged"] = original_archive_hash == meta["source_archive_sha256"]
     checks["source_installed_openal_unchanged"] = sha256(source_game / "OpenAL32.dll") == \
@@ -290,12 +335,14 @@ def check_runtime(run_root: Path, source_game: Path, bwrap: str | Path | None = 
         "active_steam_policy": "recorded; inaccessible via isolated home, runtime, mount and network namespaces",
         "cloud": "blocked by no client IPC and no network route",
         "authentication": "not supplied; game may reject offline direct Proton startup",
+        "experiment_mode": mode,
+        "hyprlodr_absent": mode == "vanilla",
         "writable_host_roots": [str(run_root)],
         "game_process_will_be_network_isolated": True}
 
 
 _SUPERVISOR = r'''import json, os, re, select, shutil, signal, subprocess, sys, time
-root, proton, game, run_seconds = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+root, proton, game, run_seconds, run_mode = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5]
 evidence = os.path.join(root, "evidence")
 logs = os.path.join(root, "logs")
 for path in (evidence, logs): os.makedirs(path, exist_ok=True)
@@ -541,7 +588,7 @@ def observe_attach():
             relevant_linux_processes=[p for p in processes.values() if p["game_process"]])
 
 proton_log = open(os.path.join(logs, "proton-console.log"), "wb")
-env["WINEDEBUG"] = "+seh"
+env["WINEDEBUG"] = "+file,+seh" if run_mode == "vanilla" else "+seh"
 proc = subprocess.Popen([proton, "run", os.path.join(game, "hyperdemon.exe")], cwd=game,
     env=env, stdin=subprocess.DEVNULL, stdout=proton_log, stderr=subprocess.STDOUT,
     close_fds=True, start_new_session=True)
@@ -756,7 +803,8 @@ def _launch_claimed(run_root: Path, source_game: Path, duration: int,
         "--bind", str(run_root), "/tmp/hyprlodr",
         "--bind", str(run_root / "home"), user_home_target,
         "--", sys.executable, "-c", _SUPERVISOR,
-        "/tmp/hyprlodr", "/tmp/hyprlodr/proton/proton", "/tmp/hyprlodr/game", str(duration)]
+        "/tmp/hyprlodr", "/tmp/hyprlodr/proton/proton", "/tmp/hyprlodr/game",
+        str(duration), meta.get("mode", "diagnostic")]
     env = {"PATH": "/usr/bin:/bin", "HOME": "/tmp/hyprlodr/home",
         "USER": os.environ.get("USER", current_home.name),
         "LOGNAME": os.environ.get("LOGNAME", current_home.name),
@@ -771,8 +819,13 @@ def _launch_claimed(run_root: Path, source_game: Path, duration: int,
         "STEAM_COMPAT_APP_ID": meta["app_id"],
         "STEAM_COMPAT_INSTALL_PATH": "/tmp/hyprlodr/game",
         "STEAM_COMPAT_TOOL_PATHS": "/tmp/hyprlodr/proton",
-        "HYPRLODR_EARLY_RECORD_HOOK": "1", "HYPRLODR_FIRST_LOAD_DIAGNOSTICS": "1",
-        "PROTON_LOG": "1", "WINEDEBUG": "-all"}
+        "PROTON_LOG": "1",
+        # The control has no in-process file hook. Wine's scoped file channel
+        # provides independent open/close evidence for the original archive.
+        "WINEDEBUG": "+file" if meta.get("mode") == "vanilla" else "-all"}
+    if meta.get("mode") == "diagnostic":
+        env.update({"HYPRLODR_EARLY_RECORD_HOOK": "1",
+                    "HYPRLODR_FIRST_LOAD_DIAGNOSTICS": "1"})
     args.insert(args.index("--"), "--clearenv")
     for key, value in env.items():
         args[args.index("--") : args.index("--")] = ["--setenv", key, value]
@@ -847,8 +900,9 @@ def main(argv: list[str] | None = None) -> int:
     staging = sub.add_parser("stage")
     staging.add_argument("--source-game", type=Path, required=True)
     staging.add_argument("--proton", type=Path, required=True)
-    staging.add_argument("--proxy", type=Path, required=True)
+    staging.add_argument("--proxy", type=Path)
     staging.add_argument("--original-openal", type=Path, required=True)
+    staging.add_argument("--mode", choices=("diagnostic", "vanilla"), default="diagnostic")
     staging.add_argument("--run-id", required=True)
     staging.add_argument("--app-id", default=APP_ID)
     staging.add_argument("--input-probe", type=Path)
@@ -866,7 +920,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "stage":
             run_root = SANDBOX / args.run_id
             result = stage(args.source_game, args.proton, args.proxy,
-                           args.original_openal, run_root, args.app_id, args.input_probe)
+                           args.original_openal, run_root, args.app_id, args.input_probe,
+                           args.mode)
             print(json.dumps(result, indent=2))
         elif args.command == "preflight":
             result = check_runtime(args.run, args.source_game, args.bwrap)
